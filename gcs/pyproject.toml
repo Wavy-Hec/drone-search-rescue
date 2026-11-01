@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drone_gcs"
+version = "0.1.0"
+description = "Ground-control station for the simulated drone survey: link, live mapping, detection, dashboard, report"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Hector" }]
+# The sender side (drone_gcs.link / protocol / geometry / isaac_bridge) needs only numpy, so the base install is
+# safe inside Isaac Sim's Python:  pip install --no-deps -e /home/hector/isaac_ws/projects/drone_gcs
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+# GCS side (conda env 'vision' already has these). Ultralytics is AGPL-3.0, see README.
+gcs = ["opencv-python>=4.8", "pillow>=10", "ultralytics>=8.3"]
+
+[tool.setuptools]
+packages = ["drone_gcs", "drone_gcs.sim"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
