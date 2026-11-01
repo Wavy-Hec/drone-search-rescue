@@ -87,7 +87,12 @@ the forklift, two crates).*
 ```bash
 python scripts/sar_preview.py            # GPU, ~1 min: overview, photo map with GT pins, drone frames, checks
 python scripts/sar_preview.py --no_sim   # CPU, seconds: ground truth + object map
+python scripts/gen_yolo_dataset.py       # GPU, ~7 min: detector dataset, 2118 labelled frames of 44 sites
 ```
+
+The ground station's detector (YOLO26n) is fine-tuned on that dataset. In the 183 test frames along the survey
+path over the demo site it finds every person (55 sightings) without a false alarm; the stock COCO model finds 27.
+Details in the drone_gcs README.
 
 ## Rescue finale: a quadruped walks the route planned on the drone's map
 
