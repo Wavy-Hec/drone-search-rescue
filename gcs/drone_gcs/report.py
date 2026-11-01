@@ -185,7 +185,13 @@ def write_report(
         "evaluation": None
         if evaluation is None
         else {k: v for k, v in evaluation.items() if k not in ("matches", "unmatched_gt", "unmatched_pred")},
-        "messages": {"telemetry": state.counts[TELEMETRY], "scan": state.counts[SCAN], "camera": state.counts[CAMERA], **{f"errors_{k}": v for k, v in state.errors.items()}},
+        "messages": {
+            "telemetry": state.counts[TELEMETRY],
+            "scan": state.counts[SCAN],
+            "camera": state.counts[CAMERA],
+            **{f"errors_{k}": v for k, v in state.errors.items()},
+            **({"ignored_other_mission": dict(state.stale)} if state.stale else {}),
+        },
         "video": None if video_path is None else Path(video_path).name,
         "files": files,
     }

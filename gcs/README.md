@@ -71,7 +71,9 @@ fake drone. With the default `--detector yolo` you get false positives such as "
 * Other fake drone options: `--no-depth` (the GCS then intersects rays with its own map), `--jpeg`,
   `--mount fixed` (camera tilts with the drone), `--area 60 40`, `--spacing 6`, `--speed 5`, `--seed 1`.
   See `--help`.
-* Either side can start first. The link reconnects, and MISSION is re-sent on every reconnect.
+* Either side can start first. The link reconnects, and MISSION (and GT_OBJECTS) are re-sent on every
+  reconnect. A GCS restarted **mid-mission** starts a new, empty map for that mission: earlier data is not
+  replayed (only what was still queued on the sim side while no GCS was listening).
 
 ### Keys
 
@@ -83,6 +85,9 @@ fake drone. With the default `--detector yolo` you get false positives such as "
 | `c` | camera of the next drone (with several drones) |
 | `s` | screenshot of the canvas → `runs/<name>/screenshots/` |
 | `q` / `Esc` | quit (writes the report). Closing the window does the same |
+
+Arrow keys and other non-character keys are ignored. (With OpenCV's Qt backend they arrive as X key codes
+whose low byte is a letter: Left used to read as `q` and quit, Right as `s`.)
 
 HUD (bottom bar):
 
@@ -110,23 +115,32 @@ from drone_gcs.isaac_bridge import IsaacLabStreamer               # duck-typed I
 
 stream = IsaacLabStreamer(Sender(name="isaac-survey"), env_id=0)   # default unix:/run/user/1000/drone_gcs.sock
 stream.mission(area=(-20, 20, -20, 20), resolution=0.25, planned_path=path_xyz, survey_altitude=8.0,
-               name="survey_lawnmower")
+               name="survey_lawnmower")                         # local frame; world=True subtracts origin
+stream.gt_objects([{"class": "car", "pos": [x, y, z]}, ...])    # optional, evaluation only (after mission)
 for step in range(n_steps):
     obs, *_ = env.step(policy(obs))
     t = step * env.unwrapped.step_dt
     stream.telemetry(t, robot, wp_index=k, carrot=carrot_xyz)   # robot = env.unwrapped.scene["robot"]
     stream.scan(t, scanner)                                     # scene["mapping_scanner"] (RayCaster)
-    if step % 2 == 0:
-        stream.camera(t, camera)                                # scene["camera"]: rgb + distance_to_image_plane
+    stream.camera(t, camera)        # scene["camera"]: rgb + distance_to_image_plane; sends new captures only
 stream.end("complete")
 ```
+
+`stream.camera()` sends a frame only when Isaac Lab's capture counter (`camera.frame`) has advanced, so it
+can be called every step whatever the camera's `update_period` (it returns `False` otherwise). Under OVRTX
+`async_rendering` it takes the image's pose from `camera.data.info["rgb"]["capture"]`.
+`IsaacLabStreamer(origin=env.scene.env_origins[i])` subtracts the env origin from everything it reads from
+Isaac Lab; positions you pass to `mission()` / `gt_objects()` are local unless you add `world=True`.
 
 Or call the `Sender` methods directly with numpy arrays, CPU or GPU torch tensors, or Isaac Lab `ProxyArray`s:
 `send_telemetry(t, pos, quat_wxyz, vel, wp_index=, carrot=)`, `send_scan(t, points_Nx3, origin=)`,
 `send_camera(t, rgb, K, pos, quat_wxyz_ros, depth=, jpeg=False)`, `send_gt_objects([...])`, `send_end()`.
 
-* Every `send_*` call copies its data and returns at once. It **never raises**: it returns `False` and logs
-  instead. A background thread does the I/O. When the GCS is slow or absent, the oldest camera frames are dropped.
+* Every `send_*` call copies its data (arrays and extra keyword fields) and returns at once. It **never
+  raises**: it returns `False` and logs instead. A background thread does the I/O, in call order. When the GCS
+  is slow or absent, the oldest camera frames are dropped.
+* Each data message and END carries the current `mission_id`; the GCS ignores ones from another mission. With
+  several drones, use one `mission_id` for all of them (END from any drone ends the mission).
 * **Quaternions are (w, x, y, z) on the wire. Isaac Lab 3.0 gives (x, y, z, w).**
   `drone_gcs.geometry.quat_xyzw_to_wxyz` converts. The camera orientation is the **ROS optical** frame
   (`camera.data.quat_w_ros`). PROTOCOL.md has the conversion from `quat_w_world` and `quat_w_opengl` too.
@@ -159,18 +173,30 @@ Or call the `Sender` methods directly with numpy arrays, CPU or GPU torch tensor
 
 ## Detection and fine-tuning on simulator images
 
-* Default: COCO nano weights (`--weights` to change), `--conf 0.25 --iou 0.45 --imgsz 640 --device auto`.
-  `--classes person,car` keeps only those classes. `--class-map truck=car,bench=` renames or drops classes.
-  The GCS process sets `YOLO_OFFLINE=1` (no update checks or analytics from the GCS). The env-local
+* Default: COCO nano weights (`--weights` to change), `--conf 0.25 --iou 0.45 --imgsz 640 --device cpu`.
+  YOLO runs on the **CPU** by default (about 19 ms per 640×480 frame, plenty for a 5–10 Hz camera): the GPU
+  belongs to Isaac Sim and the RL jobs. `--device cuda:0` opts in; `--device auto` uses the GPU only when
+  `nvidia-smi` shows at least 2 GiB free on it.
+* `--classes person,car` keeps only those classes; a name matches the model's class name or the name after
+  `--class-map` (`--classes car --class-map truck=car` keeps cars and trucks). A name the model does not
+  have is an error if nothing would be left, else a warning. `--class-map truck=car,bench=` renames or drops
+  classes.
+* The GCS process sets `YOLO_OFFLINE=1` (no update checks or analytics from the GCS). The env-local
   `YOLO_CONFIG_DIR` of 'vision' is left as it is.
+* With several drones every camera gets detection: the worker keeps the newest frame per drone and serves
+  the drones in turn.
 * Boxes that touch the image border are partial views. They are shown, but not put on the map
   (`--edge-margin 0` changes that).
 * Fine-tuning workflow (nothing has been trained yet):
   1. Capture RGB + `instance_id_segmentation_fast` (+ its `info` JSON) from an Isaac Lab camera. The
      snippet is in the docstring of `scripts/seg_to_yolo.py`.
   2. `python scripts/seg_to_yolo.py --src <capture> --out ~/isaac_ws/datasets/drone_yolo --classes car,tent,person,tarp`
-     writes the YOLO labels (normalized cx cy w h), drops tiny and heavily truncated boxes, makes
-     train/val splits in blocks of consecutive frames (no near-duplicate leakage), and writes `data.yaml`.
+     writes the YOLO labels (normalized cx cy w h) and `data.yaml`. Objects cut off by the image border keep
+     their visible box (`--max-truncation 0.6` would drop those with under 40 % visible). Tiny instances
+     (and any dropped object of a wanted class) are painted over with the image's mean colour, so the
+     detector is not taught that a visible object is background (`--no-mask-dropped` keeps the pixels).
+     Train/val are split in blocks of consecutive frames (no near-duplicate leakage); small captures use
+     shorter blocks, so val stays near 15 % and train is never empty (e.g. 40 frames → 34 / 6).
   3. `python scripts/train_detector.py --data ~/isaac_ws/datasets/drone_yolo/data.yaml --dry-run` checks it.
      Without `--dry-run` it trains from the nano weights. Defaults for about 2000 images on a 16 GB GPU:
      120 epochs, patience 30, imgsz 640, batch 32, RAM cache, flipud aug. It copies `best.pt` to
@@ -180,34 +206,36 @@ Or call the `Sender` methods directly with numpy arrays, CPU or GPU torch tensor
 ## Tests
 
 ```bash
-./run_tests.sh                      # all 55 tests, ~20 s, CPU only (activates 'vision' itself)
+./run_tests.sh                      # all 77 tests, ~25 s, CPU only (activates 'vision' itself)
 DRONE_GCS_SKIP_E2E=1 ./run_tests.sh # without the end-to-end run
 ```
 
 | Area | What the tests check |
 |---|---|
-| Wire format | Round trips of all dtypes and shapes, JPEG, rejection of bad frames |
-| Link | Ordering. A sender with no GCS never blocks or raises. A GCS that starts late or restarts gets the latched MISSION. A GCS that stops reading makes the sender drop camera frames without blocking the sim loop. TCP. Stale socket cleanup |
-| Geometry | Isaac Lab xyzw → wxyz, and the world/opengl → ROS camera conversion checked against Isaac Lab's own formula. Projection round trips |
-| Mapping | Running statistics vs brute force. Orthomosaic from depth and from the map. Geolocation by depth, map and plane. Tracker merging. Precision and recall |
+| Wire format | Round trips of all dtypes and shapes, JPEG, rejection of bad frames, ProxyArray-like objects converted without touching their implicit-torch bridge |
+| Link | Exact call order with MISSION / GT_OBJECTS, mission_id on data. A mission change while the GCS is absent arrives as MISSION A, A's data, END A, MISSION B. A GCS restarted mid-mission gets the MISSION of the queued data. Extra fields are copied at call time. No gap between taking and writing an item (flush). A sender with no GCS never blocks or raises. A GCS that stops reading makes the sender drop camera frames without blocking the sim loop. TCP. Stale socket cleanup |
+| Geometry | Isaac Lab xyzw → wxyz, and the world/opengl → ROS camera conversion checked against Isaac Lab 3.0's fixed constants and a re-implementation of its matrix formula (no Isaac Lab import). Projection round trips |
+| Mapping | Running statistics vs brute force. Cell centres on the area lattice for any area size and padding. Grid cap for huge missions. Orthomosaic from depth and from the map, self-occlusion depth ignored. Geolocation by depth, map and plane. Tracker merging. Precision and recall |
+| Isaac adapter | Only one env row leaves the GPU. Each capture is sent once (`camera.frame`). Async-rendering capture pose. `world=True` origin handling |
+| App | Arrow keys neither quit nor take screenshots. Data / END of another mission ignored; a new mission clears an old END. Rollover keeps ground truth and drops the old mission's late detections. Every drone gets detection. Video keeps real time through stalls |
 | Fake world | Rays and depth lie on the height field |
-| Detectors | The blob detector finds every object. The worker keeps the newest frame. YOLO wrapper: 2 CPU inferences on Ultralytics' `bus.jpg` |
-| Dataset tools | `seg_to_yolo` on synthetic segmentation gives exact labels. `train_detector --dry-run` |
+| Detectors | The blob detector finds every object. The worker keeps the newest frame. YOLO wrapper: 2 CPU inferences on Ultralytics' `bus.jpg`; class filters validated (typos raise) and matched after `--class-map` |
+| Dataset tools | `seg_to_yolo` on synthetic segmentation gives exact labels, keeps cut-off boxes, paints over tiny ones. Block split gives train data and ~15 % val from 8 to 2000 frames. `train_detector --dry-run` |
 | Sender import | The sender imports without cv2, torch or PIL. **A sender process in env_isaaclab** sends to a receiver in vision, and arrays arrive bit-exact |
 | Dashboard and report | All three layers render. All report files are written |
 | End to end | Fake drone process → socket → headless GCS process. Coverage grows monotonically to over 98 %. Elevation error is under 1 cm RMSE on smooth cells (measured 2.6 mm) and under 5 mm median. All synthetic objects are found with no false positives and a mean horizontal error under 25 cm |
 
-Measured on the 40 × 40 m fake survey (`runs/demo_headless`):
+Measured on the 40 × 40 m fake survey (`runs/demo_headless`; repeated after the fixes with the same results):
 
 | Metric | Value |
 |---|---|
 | Scan coverage | 99.9 % |
 | Photo coverage | 100 % |
 | Objects | 10 / 10 found, precision 1.0, recall 1.0 |
-| Mean horizontal error | 4–5 cm |
+| Mean horizontal error | 4–5 cm (max 6 cm) |
 | Elevation, smooth cells | 2.5 mm RMSE (median error 0.7 mm) |
 | Elevation, all cells | 8 cm RMSE |
-| GCS loop | 14–19 ms per frame (with the fake drone at 8× speed) |
+| GCS loop | 14–30 ms per frame (fake drone at 8× speed; depends on the CPU load from other jobs) |
 | Fake camera render | about 20 ms per frame |
 | YOLO26n inference | about 19 ms on CPU |
 
@@ -225,7 +253,13 @@ lattice on one side only.
   view). For tall objects, z is the top of the object. Horizontal error is the primary metric.
 * The fake world is a stand-in. Walls are rendered from the height field (streaky textures on vertical faces).
   Its job is to exercise the geometry and the pipeline, not to look photoreal.
-* Several drones are supported on the map (`drone_id`). The camera panel shows one drone (`c` cycles).
+* Several drones are supported on the map (`drone_id`), and every drone's camera gets detection. The camera
+  panel shows one drone (`c` cycles). All drones share one mission: one `mission_id`, and END from any
+  drone ends it. No run so far used more than one drone.
+* Depth closer than 0.5 m (`--depth-min`) is treated as the drone itself (legs, propellers) and not mapped.
+* Very large missions: grids above 4 M elevation cells get a coarser resolution (logged), and a large map
+  layer is redrawn at most every few hundred ms instead of on every frame (250 m at 0.25 m: about 18 ms per
+  dashboard frame instead of 60 ms; a 40 m map still updates every frame).
 
 ## License note: Ultralytics is AGPL-3.0
 

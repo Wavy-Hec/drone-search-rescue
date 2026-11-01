@@ -34,6 +34,35 @@ class TestGrid(unittest.TestCase):
         self.assertEqual(GridSpec.from_dict(g.to_dict()), g)
 
 
+class TestMissionGrid(unittest.TestCase):
+    def test_cell_centres_on_the_area_lattice_for_any_area_size(self):
+        # the default padding (15 % of the larger side) is rounded up to whole cells
+        from drone_gcs.state import GCSState
+
+        for side in (33.0, 34.0, 36.0, 37.0, 40.0, 50.0):
+            for res, padding in ((0.25, None), (0.25, 5.1), (0.5, None)):
+                st = GCSState()
+                st.setup_grid((-side / 2, side / 2, -side / 2 + 3, side / 2 + 3), res, padding)
+                xs, ys = st.grid.cell_centers()
+                for c, edge in ((xs, -side / 2), (ys, -side / 2 + 3)):
+                    k = (c - edge) / res
+                    np.testing.assert_allclose(k, np.round(k), atol=1e-6, err_msg=f"{side} m, {res} m, pad {padding}")
+                self.assertGreaterEqual(-side / 2 - st.grid.x_min, (padding or 4.0) - 1e-9)
+
+    def test_huge_mission_gets_a_coarser_grid(self):
+        from drone_gcs.state import GCSConfig, GCSState
+
+        st = GCSState(GCSConfig(max_grid_cells=1_000_000))
+        st.setup_grid((0, 1000, 0, 1000), 0.25)  # ~5000^2 cells at 0.25 m
+        self.assertLessEqual(st.grid.size, 1_000_000)
+        k = st.grid.resolution / 0.25
+        self.assertAlmostEqual(k, round(k))  # a whole multiple: the requested lattice is kept
+        self.assertTrue(any("too large" in e[1] for e in st.events))
+        st2 = GCSState()
+        st2.setup_grid((-20, 20, -20, 20), 0.25)
+        self.assertEqual(st2.grid.resolution, 0.25)
+
+
 class TestElevation(unittest.TestCase):
     def test_running_stats_match_bruteforce(self):
         g = GridSpec.from_bounds(0, 4, 0, 4, 1.0)
@@ -137,6 +166,23 @@ class TestMosaicAndGeolocation(unittest.TestCase):
         r3 = Geolocator(None, 0.0, "center").locate(box, cam, None)
         self.assertEqual(r3["method"], "plane")
         np.testing.assert_allclose(r3["xyz"], obj, atol=0.02)
+
+    def test_depth_of_the_drone_itself_is_ignored(self):
+        # a belly camera that sees its own landing gear (depth ~0.2 m) must not paint it on the ground
+        cam = nadir_cam(0.0, 0.0, 8.0)
+        rgb, depth = self.checker(cam)
+        rgb[:40, :] = (0, 255, 0)  # "landing gear" across the top of the image, 0.2 m away
+        depth[:40, :] = 0.2
+        mos = Orthomosaic(self.grid, "nadir")
+        n, P = mos.add_camera_frame(cam, rgb, depth, None, 0.0)
+        self.assertGreater(n, 1000)
+        green = (mos.rgb[..., 1] > 200) & (mos.rgb[..., 0] < 50)
+        self.assertEqual(int(green.sum()), 0)
+        np.testing.assert_allclose(P[:, 2], 0.0, atol=1e-6)  # only ground points come back
+        # geolocation: a box inside the near patch falls back to the map / ground plane
+        u, _, _ = cam.project([[0.0, 2.0, 0.0]])
+        r = Geolocator(None, 0.0, "center").locate((u[0] - 5, 5, u[0] + 5, 15), cam, depth)
+        self.assertEqual(r["method"], "plane")
 
     def test_ray_map_intersection_on_slope(self):
         g = GridSpec.from_bounds(-20, 20, -20, 20, 0.05)

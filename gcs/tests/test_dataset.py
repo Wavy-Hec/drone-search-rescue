@@ -8,7 +8,15 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from drone_gcs.dataset import ConvertConfig, convert_dataset, frame_labels, instance_boxes, parse_id_mapping, split_keys
+from drone_gcs.dataset import (
+    ConvertConfig,
+    convert_dataset,
+    frame_annotations,
+    frame_labels,
+    instance_boxes,
+    parse_id_mapping,
+    split_keys,
+)
 
 from ._util import ROOT, rmtree, short_tmpdir
 
@@ -42,6 +50,8 @@ EXPECTED = [
     "1 0.350000 0.500000 0.100000 0.200000",  # tent (L-shape): x 30..39, y 20..29
     "1 0.965000 0.800000 0.070000 0.200000",  # tent at the border: x 93..99, y 35..44
 ]
+CUT_CAR = "0 0.030000 0.700000 0.060000 0.200000"  # car cut by the left border: visible box x 0..5, y 30..39
+EXPECTED_DEFAULT = [EXPECTED[0], EXPECTED[1], CUT_CAR, EXPECTED[2]]  # default: cut-off objects keep their visible box
 
 
 class TestSegToYolo(unittest.TestCase):
@@ -57,15 +67,24 @@ class TestSegToYolo(unittest.TestCase):
         boxes, dropped = instance_boxes(seg, parse_id_mapping(INFO), min_area=20, min_side=4)
         self.assertEqual(dropped["tiny_area"], 1)
         self.assertEqual([(b.inst, b.x0, b.y0, b.x1, b.y1) for b in boxes][:2], [(5, 10, 5, 29, 14), (7, 30, 20, 39, 29)])
-        cfg = ConvertConfig(classes=CLASSES)
         class_ids = {c: i for i, c in enumerate(CLASSES)}
         sizes = {"car": (20.0, 10.0), "tent": (10.0, 10.0)}
-        lines, dropped = frame_labels(seg, parse_id_mapping(INFO), class_ids, cfg, sizes)
+        # default: the cut-off car is labelled with its visible box; the tiny person is dropped and painted over
+        cfg = ConvertConfig(classes=CLASSES)
+        lines, dropped, paint = frame_annotations(seg, parse_id_mapping(INFO), class_ids, cfg, sizes)
+        self.assertEqual(lines, EXPECTED_DEFAULT)
+        self.assertEqual(dict(dropped), {"tiny_area": 1, "unknown_class": 1})
+        self.assertEqual(paint, [9])  # the 'bird' (not a wanted class) is background and is not painted
+        # opt-in: drop objects with less than 40 % visible (and paint them over too)
+        cfg = ConvertConfig(classes=CLASSES, max_truncation=0.6)
+        lines, dropped, paint = frame_annotations(seg, parse_id_mapping(INFO), class_ids, cfg, sizes)
         self.assertEqual(lines, EXPECTED)
         self.assertEqual(dict(dropped), {"tiny_area": 1, "truncated": 1, "unknown_class": 1})
+        self.assertEqual(sorted(paint), [9, 11])
+        self.assertEqual(frame_labels(seg, parse_id_mapping(INFO), class_ids, cfg, sizes)[0], EXPECTED)
         # with an unclipped (loose) box for instance 11 showing it is 75 % visible, it is kept
         lines2, _ = frame_labels(seg, parse_id_mapping(INFO), class_ids, cfg, sizes, loose_boxes={11: (-2, 30, 5, 39)})
-        self.assertIn("0 0.030000 0.700000 0.060000 0.200000", lines2)
+        self.assertIn(CUT_CAR, lines2)
 
     def test_convert_dataset_end_to_end(self):
         tmp = Path(short_tmpdir("dgcs_ds"))
@@ -73,20 +92,31 @@ class TestSegToYolo(unittest.TestCase):
             src, out = tmp / "cap", tmp / "yolo"
             src.mkdir()
             rng = np.random.default_rng(0)
+            images = {}
             for k in range(6):
-                cv2.imwrite(str(src / f"rgb_{k:04d}.png"), rng.integers(0, 255, (H, W, 3), dtype=np.uint8))
+                images[k] = rng.integers(0, 255, (H, W, 3), dtype=np.uint8)
+                cv2.imwrite(str(src / f"rgb_{k:04d}.png"), images[k])
                 np.save(src / f"instance_{k:04d}.npy", synthetic_seg()[..., None])  # (H, W, 1) like Isaac Lab
                 (src / f"instance_{k:04d}.json").write_text(json.dumps(INFO))
             cfg = ConvertConfig(classes=CLASSES, val_frac=0.34, split_mode="block", block_size=2)
             stats = convert_dataset(src, out, cfg)
             self.assertEqual(stats["frames"], 6)
             self.assertEqual(stats["images"], {"train": 4, "val": 2})
-            self.assertEqual(stats["dropped"], {"tiny_area": 6, "truncated": 6, "unknown_class": 6})
+            self.assertEqual(stats["dropped"], {"tiny_area": 6, "unknown_class": 6})
+            self.assertEqual(stats["painted_instances"], 6)  # the tiny person, once per frame
+            self.assertEqual(stats["warnings"], [])
             labels = sorted((out / "labels").rglob("*.txt"))
             self.assertEqual(len(labels), 6)
             for p in labels:
-                self.assertEqual(p.read_text().splitlines(), EXPECTED)
+                self.assertEqual(p.read_text().splitlines(), EXPECTED_DEFAULT)
             self.assertEqual(len(list((out / "images" / "val").glob("*.png"))), 2)
+            # the tiny person's pixels are painted with the image mean, everything else is the original image
+            img_path = next((out / "images").rglob("0000.png"))
+            got, orig = cv2.imread(str(img_path)).astype(int), images[0].astype(int)
+            person = synthetic_seg() == 9
+            np.testing.assert_array_equal(got[~person], orig[~person])
+            mean = np.broadcast_to(orig[~person].mean(axis=0), got[person].shape)
+            np.testing.assert_allclose(got[person], mean, atol=1)
             y = (out / "data.yaml").read_text()
             self.assertIn("train: images/train", y)
             self.assertIn("  0: car\n  1: tent\n  2: person", y)
@@ -103,7 +133,7 @@ class TestSegToYolo(unittest.TestCase):
             self.assertEqual(rc, 0, buf.getvalue())
             rep = json.loads(buf.getvalue())
             self.assertEqual(rep["dataset"]["train_images"], 4)
-            self.assertEqual(rep["dataset"]["val_boxes"], 6)
+            self.assertEqual(rep["dataset"]["val_boxes"], 8)
             self.assertEqual(rep["dataset"]["classes"], {"0": "car", "1": "tent", "2": "person"})
             self.assertEqual(rep["train_args"]["imgsz"], 640)
         finally:
@@ -113,6 +143,22 @@ class TestSegToYolo(unittest.TestCase):
         keys = [f"{i:03d}" for i in range(100)]
         s = split_keys(keys, ConvertConfig(val_frac=0.2, split_mode="random"))
         self.assertEqual(sum(v == "val" for v in s.values()), 20)
+
+    def test_block_split_small_and_large_captures(self):
+        # defaults (blocks of up to 50 frames, 15 % val): small captures must still get train data and ~15 % val
+        for n in (8, 20, 40, 49, 60, 120, 333, 2000):
+            for seed in range(5):
+                keys = [f"{i:06d}" for i in range(n)]
+                s = split_keys(keys, ConvertConfig(seed=seed))
+                n_val = sum(v == "val" for v in s.values())
+                self.assertGreater(n - n_val, 0, (n, seed))
+                self.assertGreater(n_val, 0, (n, seed))
+                self.assertLessEqual(abs(n_val / n - 0.15), 0.03, (n, seed, n_val))
+                # val frames come in runs of consecutive frames
+                runs = sum(1 for i in range(n) if s[keys[i]] == "val" and (i == 0 or s[keys[i - 1]] != "val"))
+                self.assertLessEqual(runs, max(1, n_val // 2), (n, seed))
+        s = split_keys([f"{i:06d}" for i in range(2000)], ConvertConfig())
+        self.assertEqual(sum(v == "val" for v in s.values()), 300)  # large captures: 6 blocks of 50
 
 
 if __name__ == "__main__":

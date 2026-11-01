@@ -54,6 +54,25 @@ class TestQueue(unittest.TestCase):
         self.assertIn(P.MISSION, types)
         self.assertNotIn(P.CAMERA, types)
 
+    def test_taken_item_stays_pending_until_done(self):
+        # Sender.flush()/idle() rely on this: no moment where the queue is empty and nothing counts as in flight
+        q = BoundedMessageQueue()
+        a, b = _Item(P.TELEMETRY), _Item(P.END)
+        q.put(a)
+        q.put(b)
+        self.assertIs(q.peek(), a)
+        self.assertIs(q.take(0), a)
+        self.assertEqual((len(q), q.pending()), (1, 2))
+        q.task_done()
+        self.assertIs(q.take(0), b)
+        q.push_front(b)  # failed write: re-queued before task_done
+        q.task_done()
+        self.assertEqual(q.pending(), 1)
+        self.assertIs(q.take(0), b)
+        q.task_done()
+        self.assertEqual(q.pending(), 0)
+        self.assertIsNone(q.take(0))
+
 
 class TestAddress(unittest.TestCase):
     def test_parse(self):
@@ -90,11 +109,13 @@ class TestLink(unittest.TestCase):
             msgs = collect(rx, 7)
             tx.close()
             types = [m.type for m in msgs]
-            self.assertEqual(sorted(types), sorted([P.HELLO, P.MISSION, P.GT_OBJECTS, P.TELEMETRY, P.SCAN, P.CAMERA, P.END]))
-            self.assertEqual(types[:2], [P.HELLO, P.MISSION])  # latched messages jump the data queue
-            data = [t for t in types if t not in (P.HELLO, P.MISSION, P.GT_OBJECTS)]
-            self.assertEqual(data, [P.TELEMETRY, P.SCAN, P.CAMERA, P.END])  # data keeps its order, END last
+            # everything in call order, MISSION and GT_OBJECTS included
+            self.assertEqual(types, [P.HELLO, P.MISSION, P.TELEMETRY, P.SCAN, P.CAMERA, P.GT_OBJECTS, P.END])
             by = {m.type: m for m in msgs}
+            mid = by[P.MISSION].fields["mission_id"]
+            for t in (P.TELEMETRY, P.SCAN, P.CAMERA, P.END):  # data and END carry the mission they belong to
+                self.assertEqual(by[t].fields["mission_id"], mid, t)
+            self.assertNotIn("mission_id", by[P.HELLO].fields)
             np.testing.assert_allclose(by[P.MISSION].arrays["planned_path"][:, 2], 4.0)
             self.assertEqual(by[P.MISSION].fields["area"], {"x_min": 0.0, "x_max": 10.0, "y_min": 0.0, "y_max": 5.0})
             cam = by[P.CAMERA]
@@ -140,6 +161,69 @@ class TestLink(unittest.TestCase):
             self.assertIn(P.MISSION, [m.type for m in msgs])
             self.assertEqual(msgs[1].fields["name"], "late")
         tx.close(0.2)
+
+    def test_mission_change_while_gcs_absent_keeps_call_order(self):
+        # MISSION B used to overwrite A in the latched slot and jump ahead of A's queued data
+        tx = Sender(self.addr, reconnect_max=0.3)
+        tx.send_mission((-10, 10, -10, 10), 0.25, mission_id="A", name="A")
+        for k in range(3):
+            tx.send_telemetry(k, [k, 0, 5], [1, 0, 0, 0])
+        tx.send_end("complete", 3.0, flush_timeout=0.2)  # nobody listening: the flush times out
+        tx.send_mission((-10, 10, -10, 10), 0.25, mission_id="B", name="B")
+        for k in range(2):
+            tx.send_telemetry(10 + k, [k, 1, 5], [1, 0, 0, 0])
+        time.sleep(0.2)
+        with Receiver(self.addr) as rx:
+            msgs = collect(rx, 9, 6)
+        tx.close(0.2)
+        seq = [(m.type, m.fields.get("mission_id")) for m in msgs]
+        A, B, T = "A", "B", P.TELEMETRY
+        self.assertEqual(
+            seq, [(P.HELLO, None), (P.MISSION, A), (T, A), (T, A), (T, A), (P.END, A), (P.MISSION, B), (T, B), (T, B)]
+        )
+
+    def test_gcs_restart_mid_mission_gets_the_mission_of_the_queued_data(self):
+        tx = Sender(self.addr, reconnect_min=0.05, reconnect_max=0.2)
+        with Receiver(self.addr) as rx:
+            self.assertTrue(tx.wait_connected(3))
+            tx.send_mission((0, 10, 0, 10), 0.25, mission_id="A", name="A")
+            tx.send_telemetry(0, [0, 0, 5], [1, 0, 0, 0])
+            self.assertEqual(len(collect(rx, 3)), 3)
+        # GCS gone: the sender notices on its next write (that one message is lost), then queues
+        tx.send_telemetry(0.5, [0, 0, 5], [1, 0, 0, 0])
+        self.assertTrue(wait_for(lambda: not tx.connected, 3))
+        for k in range(1, 4):
+            tx.send_telemetry(k, [k, 0, 5], [1, 0, 0, 0])
+        tx.send_end("complete", 4.0, flush_timeout=0)
+        tx.send_mission((0, 10, 0, 10), 0.25, mission_id="B", name="B")
+        tx.send_telemetry(10, [0, 1, 5], [1, 0, 0, 0])
+        with Receiver(self.addr) as rx2:
+            msgs = collect(rx2, 8, 6)
+        tx.close(0.2)
+        seq = [(m.type, m.fields.get("mission_id"), m.fields.get("t")) for m in msgs]
+        T = P.TELEMETRY
+        self.assertEqual(
+            seq,
+            [(P.HELLO, None, None), (P.MISSION, "A", None), (T, "A", 1.0), (T, "A", 2.0), (T, "A", 3.0),
+             (P.END, "A", 4.0), (P.MISSION, "B", None), (T, "B", 10.0)],
+        )  # fmt: skip
+
+    def test_extra_fields_are_copied_at_call_time(self):
+        # the simulator reuses its buffers; extras used to be serialized later on the sender thread
+        tx = Sender(self.addr)
+        action = np.array([0.1, 0.2, 0.3, 0.4])
+        size = np.array([4.5, 1.8, 1.5])
+        self.assertTrue(tx.send_telemetry(1.0, [0, 0, 5], [1, 0, 0, 0], action=action))
+        self.assertTrue(tx.send_gt_objects([{"class": "car", "pos": [1, 2, 0], "size": size}]))
+        action[:] = 9.0
+        size[:] = 0.0
+        with Receiver(self.addr) as rx:
+            msgs = collect(rx, 3, 5)
+        tx.close(0.2)
+        by = {m.type: m for m in msgs}
+        self.assertEqual(by[P.TELEMETRY].fields["action"], [0.1, 0.2, 0.3, 0.4])
+        self.assertEqual(by[P.GT_OBJECTS].fields["objects"][0]["size"], [4.5, 1.8, 1.5])
+        self.assertFalse(tx.send_telemetry(1.0, [0, 0, 5], [1, 0, 0, 0], bad=object()))  # not JSON: refused now
 
     def test_slow_gcs_drops_old_camera_frames_not_the_sim(self):
         # a listener that accepts but never reads: socket buffers fill up, the sim loop must not block

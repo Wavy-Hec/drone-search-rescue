@@ -16,6 +16,9 @@ from .protocol import CAMERA, END, GT_OBJECTS, HELLO, MISSION, SCAN, TELEMETRY, 
 
 log = logging.getLogger("drone_gcs.state")
 
+MISSION_SCOPED = frozenset({TELEMETRY, SCAN, CAMERA, END})
+"""Message types the Sender stamps with the current ``mission_id``."""
+
 
 @dataclass
 class GCSConfig:
@@ -26,8 +29,10 @@ class GCSConfig:
     min_hits: int = 2  # tracker: detections needed to confirm an object
     det_ref: str = "auto"  # geolocation reference pixel: auto | center | bottom
     edge_margin: float = 3.0  # boxes this close to the image border are partial views: shown, not mapped [px]
+    depth_min_range: float = 0.5  # depth closer than this is the drone itself (legs, props): not mapped [m]
     auto_grid_size: float = 120.0  # map size [m] when data arrives before any MISSION
     auto_grid_resolution: float = 0.5
+    max_grid_cells: int = 4_000_000  # elevation cells (32 B each); larger missions get a coarser resolution
     max_photo_cells: int = 16_000_000
 
 
@@ -123,6 +128,7 @@ class GCSState:
         self.trajectory: list[tuple] = []  # rows for trajectory.csv
         self.senders: dict[int, dict] = {}
         self.missions_seen = 0
+        self.stale: collections.Counter = collections.Counter()  # mission_id -> ignored messages of other missions
         self._cov_cache = (None, 0.0, 0.0)
 
     # ------------------------------------------------------------------ helpers
@@ -160,9 +166,16 @@ class GCSState:
         if padding is None:  # room for the turns outside the survey area
             padding = max(4.0, 0.15 * max(x1 - x0, y1 - y0))
         self.area = (x0, x1, y0, y1)
-        # Cell *centres* sit on the lattice x0 - padding + k * resolution. Survey paths and ray grids usually
-        # live on round numbers too, so rays land in the middle of cells instead of on cell edges (where small
-        # lateral wobble would flip them between neighbouring cells and bias the per-cell sampling).
+        requested = float(resolution)
+        resolution = self._capped_resolution(x1 - x0, y1 - y0, float(padding), requested)
+        if resolution != requested:
+            cap = self.cfg.max_grid_cells
+            self.event(f"map too large at {requested:g} m: using {resolution:g} m cells (max {cap:,} cells)")
+        # Cell *centres* sit on the lattice x0 + k * resolution: the padding is rounded up to whole cells. Survey
+        # paths and ray grids usually live on round numbers too, so rays land in the middle of cells instead of
+        # on cell edges (where small lateral wobble would flip them between neighbouring cells and bias the
+        # per-cell sampling).
+        padding = math.ceil(max(0.0, float(padding)) / resolution - 1e-9) * resolution
         h = 0.5 * resolution
         self.grid = GridSpec.from_bounds(x0 - padding - h, x1 + padding + h, y0 - padding - h, y1 + padding + h, resolution)
         k = max(1, int(self.cfg.photo_subdiv))
@@ -175,7 +188,23 @@ class GCSState:
         self.area_mask_photo = self.photo_grid.area_mask(self.area)
         self.elevation = ElevationMap(self.grid)
         self.mosaic = Orthomosaic(self.photo_grid, self.cfg.photo_mode)
-        self.geolocator = Geolocator(self.elevation, self.ground_z, self.cfg.det_ref)
+        self.geolocator = Geolocator(
+            self.elevation, self.ground_z, self.cfg.det_ref, min_range=self.cfg.depth_min_range
+        )
+
+    def _capped_resolution(self, w: float, h: float, padding: float, resolution: float) -> float:
+        """``resolution``, or the smallest whole multiple of it that keeps the grid under ``max_grid_cells``
+        (a multiple keeps the cell lattice of the requested resolution)."""
+        limit = max(1, int(self.cfg.max_grid_cells))
+        k = 1
+        while k < 1024:
+            r = resolution * k
+            p = math.ceil(padding / r - 1e-9) * r
+            cells = (math.ceil((w + 2 * p) / r - 1e-9) + 1) * (math.ceil((h + 2 * p) / r - 1e-9) + 1)
+            if cells <= limit:
+                break
+            k += 1
+        return resolution * k
 
     def _ensure_grid(self, x: float, y: float) -> None:
         if self.grid is not None:
@@ -186,8 +215,22 @@ class GCSState:
         self.event(f"no MISSION yet: auto map {2 * h:.0f} m around ({x:.1f}, {y:.1f})")
 
     # ------------------------------------------------------------------ apply
+    def is_stale(self, msg: Message) -> bool:
+        """Data or END stamped with a ``mission_id`` other than the current MISSION's (left over from an
+        earlier mission, e.g. another drone's stream still catching up)."""
+        if msg.type not in MISSION_SCOPED or self.mission is None:
+            return False
+        mid = msg.fields.get("mission_id")
+        return mid is not None and str(mid) != str(self.mission.get("mission_id"))
+
     def apply(self, msg: Message):
         """Apply one message. Returns a :class:`CameraFrame` for CAMERA messages (to feed the detector)."""
+        if self.is_stale(msg):
+            mid = str(msg.fields.get("mission_id"))
+            self.stale[mid] += 1
+            if self.stale[mid] == 1:
+                self.event(f"ignoring {msg.type} of mission '{mid}' (current: '{self.mission.get('mission_id')}')")
+            return None
         self.counts[msg.type] += 1
         try:
             if msg.type == TELEMETRY:
@@ -224,6 +267,11 @@ class GCSState:
         mid = f.get("mission_id")
         if self.mission is not None and mid == self.mission.get("mission_id"):
             return  # the same mission re-sent after a reconnect
+        # A new mission in this state (the app archives a previous mission that has data before calling us):
+        # an END seen so far belonged to the previous mission, and so did its sim clock.
+        self.ended, self.end_reason, self.end_wall = False, "", None
+        if not self.has_data:
+            self.t_first = self.t_now = None
         self.missions_seen += 1
         self.mission = dict(f)
         if msg.drone_id is not None:
@@ -296,7 +344,7 @@ class GCSState:
         self._touch_time(msg.t)
         self._ensure_grid(cam.t[0], cam.t[1])
         ground = self.ground_level()
-        n, P = self.mosaic.add_camera_frame(cam, rgb, depth, self.elevation, ground)
+        n, P = self.mosaic.add_camera_frame(cam, rgb, depth, self.elevation, ground, min_range=self.cfg.depth_min_range)
         if self.cfg.depth_elevation and depth is not None and len(P):
             self.elevation.add_points(P, None, msg.t)
         d = self.drone(msg.drone_id)

@@ -7,11 +7,13 @@ The GCS listens; the simulator connects (and keeps reconnecting). Addresses:
 * ``tcp://127.0.0.1:47800``, ``127.0.0.1:47800`` or ``:47800``: TCP
 * environment variable ``DRONE_GCS_ADDR`` overrides the default on both ends.
 
-``Sender`` is built for a simulation loop: every ``send_*`` call validates and copies its arrays, puts them in
-a bounded queue and returns at once. A background thread encodes and writes them. When the GCS is slow or
-absent the oldest data messages are dropped (CAMERA keeps only the 2 newest by default); MISSION / GT_OBJECTS /
-END are never dropped, and MISSION / GT_OBJECTS are re-sent after every reconnect. ``send_*`` never raises:
-it returns ``False`` and logs (rate limited) instead.
+``Sender`` is built for a simulation loop: every ``send_*`` call validates and copies its arrays and fields,
+puts them in a bounded queue and returns at once. A background thread encodes and writes them in call order.
+When the GCS is slow or absent the oldest data messages are dropped (CAMERA keeps only the 2 newest by
+default); MISSION / GT_OBJECTS / END are never dropped. After every (re)connect the Sender first re-sends the
+MISSION / GT_OBJECTS that the next queued message belongs to, and every data message and END carries the
+``mission_id`` of the MISSION sent before it. ``send_*`` never raises: it returns ``False`` and logs (rate
+limited) instead.
 """
 
 from __future__ import annotations
@@ -45,6 +47,7 @@ from .protocol import (
     ProtocolError,
     decode_message,
     encode_frame,
+    jsonable,
     parse_prefix,
     to_numpy,
 )
@@ -123,7 +126,9 @@ class BoundedMessageQueue:
     """FIFO with a size limit per message type and an optional total byte budget.
 
     Items need ``.type`` and ``.nbytes`` attributes. When a type exceeds its limit its *oldest* item is dropped;
-    types in ``never_drop`` are unbounded. ``pop`` returns items in global insertion order.
+    types in ``never_drop`` are unbounded. ``pop`` returns items in global insertion order. ``take`` is ``pop``
+    for a consumer that reports completion with ``task_done``: ``pending()`` counts queued items plus taken but
+    unfinished ones, so "nothing left to send" has no gap between the pop and the write.
     """
 
     def __init__(
@@ -140,8 +145,10 @@ class BoundedMessageQueue:
         self._qs: dict[str, collections.deque] = {}
         self._cond = threading.Condition()
         self._order = itertools.count()
+        self._front = itertools.count(-1, -1)  # push_front: each re-queued item goes ahead of everything
         self._n = 0
         self._bytes = 0
+        self._unfinished = 0  # taken with take(), task_done() not yet called
         self.dropped: collections.Counter = collections.Counter()
 
     def __len__(self) -> int:
@@ -189,16 +196,20 @@ class BoundedMessageQueue:
         """Put ``item`` back at the head (used to retry a control message after a failed send)."""
         with self._cond:
             q = self._qs.setdefault(item.type, collections.deque())
-            q.appendleft((-1, item))
+            q.appendleft((next(self._front), item))
             self._n += 1
             self._bytes += int(getattr(item, "nbytes", 0) or 0)
             self._cond.notify_all()
 
-    def _pop_locked(self):
+    def _head_type_locked(self) -> str | None:
         best_t, best = None, None
         for t, q in self._qs.items():
             if q and (best is None or q[0][0] < best):
                 best_t, best = t, q[0][0]
+        return best_t
+
+    def _pop_locked(self):
+        best_t = self._head_type_locked()
         if best_t is None:
             return None
         _, item = self._qs[best_t].popleft()
@@ -206,12 +217,38 @@ class BoundedMessageQueue:
         self._bytes -= int(getattr(item, "nbytes", 0) or 0)
         return item
 
+    def peek(self):
+        """The item ``pop`` would return next (not removed), or ``None``."""
+        with self._cond:
+            t = self._head_type_locked()
+            return None if t is None else self._qs[t][0][1]
+
     def pop(self, timeout: float | None = None):
         """Oldest item, waiting up to ``timeout`` seconds; ``None`` if still empty."""
         with self._cond:
             if self._n == 0 and timeout != 0:
                 self._cond.wait(timeout)
             return self._pop_locked() if self._n else None
+
+    def take(self, timeout: float | None = None):
+        """Like :meth:`pop`, but the item counts in :meth:`pending` until :meth:`task_done` is called."""
+        with self._cond:
+            if self._n == 0 and timeout != 0:
+                self._cond.wait(timeout)
+            if not self._n:
+                return None
+            self._unfinished += 1
+            return self._pop_locked()
+
+    def task_done(self) -> None:
+        with self._cond:
+            self._unfinished = max(0, self._unfinished - 1)
+            self._cond.notify_all()
+
+    def pending(self) -> int:
+        """Queued items plus items taken with :meth:`take` and not yet marked done."""
+        with self._cond:
+            return self._n + self._unfinished
 
     def drain(self, max_items: int | None = None) -> list:
         """Pop everything (or up to ``max_items``) without waiting."""
@@ -233,7 +270,7 @@ class BoundedMessageQueue:
 
 
 class _Item:
-    __slots__ = ("type", "fields", "arrays", "drone_id", "encodings", "jpeg_quality", "nbytes")
+    __slots__ = ("type", "fields", "arrays", "drone_id", "encodings", "jpeg_quality", "nbytes", "order", "ctx")
 
     def __init__(self, mtype, fields, arrays, drone_id, encodings=None, jpeg_quality=90):
         self.type = mtype
@@ -243,6 +280,8 @@ class _Item:
         self.encodings = encodings or {}
         self.jpeg_quality = jpeg_quality
         self.nbytes = sum(int(a.nbytes) for a in self.arrays.values()) + 256
+        self.order = -1  # enqueue order (Sender)
+        self.ctx: dict = {}  # latched MISSION / GT_OBJECTS in force when this item was queued
 
 
 # ---------------------------------------------------------------------------------------------------- helpers
@@ -318,14 +357,16 @@ class Sender:
             default_limit=256,
             max_bytes=max_queue_bytes,
         )
-        self._latched: dict[tuple[str, int], tuple[int, _Item]] = {}
-        self._latched_dirty: set[tuple[str, int]] = set()
-        self._latched_order = itertools.count()
+        # Latched state: {(MISSION | GT_OBJECTS, drone_id): item}. Replaced (never mutated) on every MISSION /
+        # GT_OBJECTS, so each queued item can keep a reference to the state it was sent under (item.ctx).
+        self._ctx: dict[tuple[str, int], _Item] = {}
+        self._mission_id: str | None = None  # stamped into data messages and END
+        self._item_order = itertools.count()
         self._lock = threading.Lock()
         self._sock: socket.socket | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self._in_flight = False
+        self._busy = False  # connecting / handshake in progress
         self._closed = False
         self._seq = itertools.count()
         self._t0 = time.time()
@@ -356,8 +397,8 @@ class Sender:
         return self.connected
 
     def idle(self) -> bool:
-        """Connected and nothing left to send."""
-        return self.connected and len(self._queue) == 0 and not self._in_flight and not self._latched_dirty
+        """Connected and nothing left to send (queued or being written)."""
+        return self.connected and not self._busy and self._queue.pending() == 0
 
     def flush(self, timeout: float = 2.0) -> bool:
         """Wait until everything queued has been written (or ``timeout``). Never raises."""
@@ -419,10 +460,13 @@ class Sender:
             return self._fail(f"send({msg_type})", e)
 
     def _submit(self, msg_type, fields, arrays, drone_id=None, encodings=None, jpeg_quality=None) -> bool:
-        """Queue already-copied arrays (internal: the typed ``send_*`` methods copy once themselves)."""
+        """Queue already-copied arrays (internal: the typed ``send_*`` methods copy once themselves).
+
+        ``fields`` is converted to plain JSON values here, on the caller's thread: extra keyword fields may be
+        arrays or tensors the simulator overwrites on its next step."""
         item = _Item(
             str(msg_type),
-            dict(fields or {}),
+            jsonable(dict(fields or {})),
             arrays,
             self.drone_id if drone_id is None else drone_id,
             encodings,
@@ -460,7 +504,7 @@ class Sender:
                 raise ValueError("resolution must be > 0")
             arrays = {}
             if planned_path is not None:
-                p = np.asarray(to_numpy(planned_path), dtype=np.float64)
+                p = _owned(planned_path, np.float64)  # kept for re-sending after reconnects: must be a copy
                 if p.ndim != 2 or p.shape[1] not in (2, 3):
                     raise ValueError(f"planned_path must be (N, 2) or (N, 3), got {p.shape}")
                 if p.shape[1] == 2:
@@ -646,25 +690,23 @@ class Sender:
         return False
 
     def _enqueue(self, item: _Item) -> bool:
+        """Everything goes through the one FIFO, in call order. MISSION / GT_OBJECTS also become the latched
+        state that is re-sent after a reconnect; other messages are stamped with the current ``mission_id``."""
         if self._closed:
             return False
-        if item.type in LATCHED_TYPES:
-            key = (item.type, item.drone_id)
-            with self._lock:
-                self._latched[key] = (next(self._latched_order), item)
-                self._latched_dirty.add(key)
-            self._queue.wake()
-            return True
-        self._queue.put(item)
+        with self._lock:  # ctx snapshot and queue position must agree (send_* may be called from several threads)
+            item.order = next(self._item_order)
+            if item.type in LATCHED_TYPES:
+                ctx = dict(self._ctx)
+                ctx[(item.type, item.drone_id)] = item
+                self._ctx = ctx
+                if item.type == MISSION and item.fields.get("mission_id") is not None:
+                    self._mission_id = str(item.fields["mission_id"])
+            elif self._mission_id is not None:
+                item.fields.setdefault("mission_id", self._mission_id)
+            item.ctx = self._ctx
+            self._queue.put(item)
         return True
-
-    def _next_dirty_latched(self) -> _Item | None:
-        with self._lock:
-            if not self._latched_dirty:
-                return None
-            key = min(self._latched_dirty, key=lambda k: self._latched[k][0])
-            self._latched_dirty.discard(key)
-            return self._latched[key][1]
 
     def _connect(self) -> bool:
         s = None
@@ -750,11 +792,19 @@ class Sender:
             self.drone_id,
         )
         self._write(hello)
+        # A new GCS knows nothing yet: tell it the MISSION / GT_OBJECTS that the next queued message was sent
+        # under (not necessarily the newest ones: older data may still be queued). A latched item that is itself
+        # at the head of the queue is sent from the queue, in order.
+        head = self._queue.peek()
         with self._lock:
-            latched = sorted(self._latched.values(), key=lambda p: p[0])
-            self._latched_dirty.clear()
-        for _, item in latched:
-            self._write(item)
+            ctx = head.ctx if head is not None else self._ctx
+        for item in sorted(ctx.values(), key=lambda it: it.order):
+            if item is head:
+                continue
+            try:
+                self._write(item)
+            except (ProtocolError, TypeError, ValueError) as e:
+                self._fail(f"encode {item.type}", e)
 
     def _run(self) -> None:
         backoff = self._reconnect_min
@@ -762,35 +812,33 @@ class Sender:
             item = None
             try:
                 if self._sock is None:
+                    self._busy = True  # flush() must not see "idle" between connect and the end of the handshake
                     if not self._connect():
+                        self._busy = False
                         self._stop.wait(backoff)
                         backoff = min(self._reconnect_max, backoff * 1.6)
                         continue
                     backoff = self._reconnect_min
                     self._handshake()
-                item = self._next_dirty_latched()
+                    self._busy = False
+                item = self._queue.take(timeout=0.1)
                 if item is None:
-                    item = self._queue.pop(timeout=0.1)
-                    if item is None:
-                        continue
-                    latched = self._next_dirty_latched()  # a MISSION set while we waited goes first
-                    if latched is not None:
-                        self._queue.push_front(item)
-                        item = latched
-                self._in_flight = True
+                    continue
                 self._write(item)
             except (ProtocolError, TypeError, ValueError) as e:
                 self._fail(f"encode {getattr(item, 'type', '?')}", e)  # bad data: drop it, keep the link
             except OSError as e:
                 self.last_error = f"send: {e}"
-                if item is not None and item.type in CONTROL_TYPES and item.type not in LATCHED_TYPES:
-                    self._queue.push_front(item)  # END must not be lost
+                if item is not None and item.type in CONTROL_TYPES:
+                    self._queue.push_front(item)  # MISSION / GT_OBJECTS / END must not be lost
                 self._disconnect()
                 self._stop.wait(self._reconnect_min)  # no busy loop if the GCS accepts and drops at once
             except Exception as e:  # noqa: BLE001
                 self._fail("sender thread", e)
             finally:
-                self._in_flight = False
+                self._busy = False
+                if item is not None:
+                    self._queue.task_done()  # after a push_front, so pending() never drops to 0 in between
         self._disconnect(quiet=True)
 
 

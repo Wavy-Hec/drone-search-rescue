@@ -180,6 +180,9 @@ class MapView:
 class MapRenderer:
     """Renders the map layers and overlays into a region of an image."""
 
+    REBUILD_FACTOR = 3.0  # a changed base layer is rebuilt at most every REBUILD_FACTOR x its build time ...
+    REBUILD_MAX_S = 0.5  # ... but at least every REBUILD_MAX_S seconds (0 = rebuild on every change)
+
     def __init__(self, text: TextRenderer):
         self.text = text
         self._range: tuple[float, float] | None = None
@@ -251,11 +254,19 @@ class MapRenderer:
         return img
 
     def base(self, state: GCSState, layer: str, stat: str, w: int, h: int) -> tuple[np.ndarray, tuple | None]:
-        """Layer image resized to (w, h), north up; cached per map version."""
+        """Layer image resized to (w, h), north up; cached per map version.
+
+        When only the map data changed, the layer is rebuilt at most every ``3 x`` its own build time (capped at
+        0.5 s): a 40 m map (~6 ms) still updates on every dashboard frame, a 250 m one (~60 ms) about 5x/s
+        instead of slowing the whole loop down."""
         ver = (layer, stat, w, h, state.elevation.version, state.mosaic.version)
         hit = self._base_cache.get(layer)
-        if hit is not None and hit[0] == ver:
-            return hit[1], hit[2]
+        if hit is not None:
+            if hit[0] == ver:
+                return hit[1], hit[2]
+            if hit[0][:4] == ver[:4] and time.monotonic() - hit[3] < hit[4]:
+                return hit[1], hit[2]
+        t_build = time.monotonic()
         rng = None
         if layer == "photo":
             img = self.photo_bgr(state)
@@ -266,7 +277,8 @@ class MapRenderer:
             img, rng = self.elevation_bgr(state, stat)
             interp = cv2.INTER_NEAREST if w >= img.shape[1] else cv2.INTER_AREA
         out = cv2.resize(np.ascontiguousarray(img[::-1]), (w, h), interpolation=interp)
-        self._base_cache[layer] = (ver, out, rng)
+        now = time.monotonic()
+        self._base_cache[layer] = (ver, out, rng, now, min(self.REBUILD_MAX_S, self.REBUILD_FACTOR * (now - t_build)))
         return out, rng
 
     # ------------------------------------------------------------------ full map

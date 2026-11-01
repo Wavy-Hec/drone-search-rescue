@@ -92,6 +92,45 @@ class TestProtocol(unittest.TestCase):
         np.testing.assert_array_equal(P.to_numpy(FakeProxy(a)), a)
         np.testing.assert_array_equal(P.to_numpy([[0, 1, 2], [3, 4, 5]]), a)
 
+    def test_to_numpy_uses_proxyarray_torch_view_explicitly(self):
+        # Like isaaclab.utils.warp.ProxyArray: .torch/.warp properties plus a __getattr__ deprecation bridge
+        # that forwards everything else to .torch (and warns once per process). to_numpy must not touch it.
+        class Tensor:
+            def __init__(self, a):
+                self.a = a
+
+            def detach(self):
+                return self
+
+            def cpu(self):
+                return self
+
+            def numpy(self):
+                return self.a
+
+        implicit = []
+
+        class ProxyLike:
+            def __init__(self, a):
+                self._t = Tensor(a)
+
+            @property
+            def torch(self):
+                return self._t
+
+            @property
+            def warp(self):
+                return None
+
+            def __getattr__(self, name):
+                implicit.append(name)
+                return getattr(self._t, name)
+
+        a = np.arange(6).reshape(2, 3)
+        np.testing.assert_array_equal(P.to_numpy(ProxyLike(a)), a)
+        self.assertTrue(P.is_proxy_array(ProxyLike(a)))
+        self.assertEqual(implicit, [])
+
 
 if __name__ == "__main__":
     unittest.main()

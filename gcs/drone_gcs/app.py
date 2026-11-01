@@ -36,7 +36,7 @@ class AppConfig:
     size: tuple[int, int] = (1600, 900)
     detector: str = "yolo"
     weights: str | None = None
-    device: str = "auto"
+    device: str = "cpu"  # the GPU belongs to the simulator / RL jobs; "auto" or "cuda:0" to opt in
     conf: float = 0.25
     iou: float = 0.45
     imgsz: int = 640
@@ -58,19 +58,24 @@ class AppConfig:
 
 class VideoRecorder:
     """cv2.VideoWriter (mp4v) at a fixed fps; on close, optionally re-encodes to H.264 with system ffmpeg
-    (browser/Obsidian friendly). Frames are written in real time: a late tick repeats the last frame."""
+    (browser/Obsidian friendly). Frames are written in real time: a late tick repeats the last frame, for
+    stalls up to ``max_catchup_s`` (longer gaps, e.g. a suspended machine, are cut and logged)."""
 
-    def __init__(self, path: Path, fps: float, size: tuple[int, int], transcode: bool = True):
+    def __init__(
+        self, path: Path, fps: float, size: tuple[int, int], transcode: bool = True, max_catchup_s: float = 5.0
+    ):
         self.path = Path(path)
         self.tmp = self.path.with_name(self.path.stem + "_mp4v.mp4")
         self.fps = float(fps)
         self.size = size
         self.transcode = transcode
+        self.max_catchup = max(1, round(max_catchup_s * self.fps))
         self.writer = cv2.VideoWriter(str(self.tmp), cv2.VideoWriter.fourcc(*"mp4v"), self.fps, size)
         if not self.writer.isOpened():
             raise RuntimeError(f"cannot open a video writer for {self.tmp}")
         self.frames = 0
         self.t0: float | None = None
+        self.lost_s = 0.0  # wall time cut out of the video by over-long stalls
 
     @property
     def seconds(self) -> float:
@@ -79,8 +84,15 @@ class VideoRecorder:
     def write(self, img: np.ndarray, now: float) -> None:
         if self.t0 is None:
             self.t0 = now
-        due = int((now - self.t0) * self.fps) + 1
-        n = int(np.clip(due - self.frames, 1, 10))
+        due = int((now - self.t0 - self.lost_s) * self.fps) + 1
+        n = max(1, due - self.frames)
+        if n > self.max_catchup:
+            gap = (n - self.max_catchup) / self.fps
+            self.lost_s += gap
+            log.warning("dashboard stalled for %.1f s: %.1f s left out of the video", n / self.fps, gap)
+            n = self.max_catchup
+        elif n > self.fps:
+            log.info("dashboard stalled for %.1f s (video repeats the last frame)", n / self.fps)
         for _ in range(n):
             self.writer.write(img)
         self.frames += n
@@ -105,6 +117,21 @@ class VideoRecorder:
                 log.warning("ffmpeg transcode failed: %s", e)
         self.tmp.replace(self.path)
         return self.path
+
+
+def decode_key(key: int) -> str | None:
+    """Shortcut character of a ``cv2.waitKeyEx`` code, ``"esc"``, or ``None``.
+
+    Qt builds of OpenCV (this one) return X keysyms for non-character keys (Left = 0xFF51, whose low byte is
+    'Q'); GTK builds add the modifier state in bits 16+. So: keep the low 16 bits and accept only Latin-1."""
+    if key is None or key < 0:
+        return None
+    k = key & 0xFFFF
+    if k == 27:
+        return "esc"
+    if k > 0xFF or k < 32:
+        return None  # arrows, function keys, Return, ...
+    return chr(k).lower()
 
 
 def resolve_run_dir(out_dir: Path, name: str | None) -> Path:
@@ -144,6 +171,7 @@ class GCSApp:
         self.loop_ms = 0.0
         self.t_start = time.monotonic()
         self.reports: list[Path] = []
+        self.gen = 0  # mission generation: detector results of an archived mission are discarded
 
     # ------------------------------------------------------------------ setup
     def _init_detector(self) -> None:
@@ -222,11 +250,11 @@ class GCSApp:
         return p
 
     def handle_key(self, key: int, canvas: np.ndarray) -> None:
-        if key < 0:
+        k = decode_key(key)
+        if k is None:
             return
-        k = chr(key & 0xFF).lower() if 0 <= (key & 0xFF) < 128 else ""
-        if k == "q" or (key & 0xFF) == 27:
-            self.quit_reason = "user (q)"
+        if k in ("q", "esc"):
+            self.quit_reason = f"user ({k})"
         elif k == "m":
             i = LAYERS.index(self.ui["layer"])
             self.ui["layer"] = LAYERS[(i + 1) % len(LAYERS)]
@@ -241,8 +269,17 @@ class GCSApp:
         elif k == "s":
             self.screenshot(canvas, "shot")
 
+    def _apply_detector_results(self) -> None:
+        """Finished detections of the current mission's frames go to the tracker; older ones are dropped."""
+        if self.worker is None:
+            return
+        for (gen, frame), dets, ms in self.worker.poll():
+            if gen == self.gen and frame.drone_id in self.state.drones:
+                self.state.apply_detections(frame, dets, ms)
+
     def _rollover(self) -> None:
         """A new MISSION (different mission_id) arrived: archive the current one and start fresh."""
+        self._apply_detector_results()  # what finished so far still belongs to the old mission
         old = self.state
         sub = self.run_dir / f"mission{old.missions_seen}_{(old.mission or {}).get('name', 'survey')}"
         try:
@@ -253,6 +290,11 @@ class GCSApp:
             log.exception("could not archive the previous mission")
         self.state = GCSState(self.cfg.gcs)
         self.state.missions_seen = old.missions_seen
+        # GT_OBJECTS is latched on the sim side: it stays in force until the sim sends a new one (a GCS that
+        # connects now would get the same one), so it carries over. So does what we know about the senders.
+        self.state.gt_objects = old.gt_objects
+        self.state.senders = dict(old.senders)
+        self.gen += 1
         self.ui["active_drone"] = None
 
     # ------------------------------------------------------------------ main loop
@@ -294,12 +336,8 @@ class GCSApp:
                         st = self.state
                     frame = st.apply(msg)
                     if frame is not None and self.worker is not None:
-                        if self.ui["active_drone"] in (None, frame.drone_id) or len(st.drones) == 1:
-                            self.worker.submit(frame.rgb, frame)
-                if self.worker is not None:
-                    for frame, dets, ms in self.worker.poll():
-                        if frame.drone_id in st.drones:
-                            st.apply_detections(frame, dets, ms)
+                        self.worker.submit(frame.rgb, (self.gen, frame), key=frame.drone_id)  # every drone
+                self._apply_detector_results()
                 if self.ui["active_drone"] is None and st.drones:
                     self.ui["active_drone"] = min(st.drones)
                 canvas = self.dashboard.render(st, self.ui_dict())
@@ -340,10 +378,7 @@ class GCSApp:
     def finish(self) -> dict | None:
         log.info("stopping: %s", self.quit_reason)
         if self.worker is not None:
-            # results that finished in the meantime still count
-            for frame, dets, ms in self.worker.poll():
-                if frame.drone_id in self.state.drones:
-                    self.state.apply_detections(frame, dets, ms)
+            self._apply_detector_results()  # results that finished in the meantime still count
             self.worker.close()
         self.receiver.close()
         if self.window is not None:

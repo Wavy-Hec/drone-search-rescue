@@ -43,7 +43,16 @@ def main(argv=None) -> int:
     p.add_argument("--prim-rules", default=None, help="prim-path substring -> class, e.g. 'Car=car,Tent=tent'")
     p.add_argument("--min-area", type=int, default=20, help="min visible pixels per instance")
     p.add_argument("--min-side", type=int, default=4, help="min box width/height [px]")
-    p.add_argument("--max-truncation", type=float, default=0.6, help="drop border boxes truncated by more than this")
+    p.add_argument(
+        "--max-truncation", type=float, default=1.0,
+        help="drop border boxes truncated by more than this fraction "
+             "(default 1.0: label every cut-off object by its visible box)",
+    )  # fmt: skip
+    p.add_argument(
+        "--no-mask-dropped", action="store_true",
+        help="keep the pixels of dropped (tiny / too truncated) objects; by default they are painted with the "
+             "image mean so the detector is not trained to call them background",
+    )  # fmt: skip
     p.add_argument("--val-frac", type=float, default=0.15)
     p.add_argument("--split-mode", choices=("block", "random"), default="block", help="block = contiguous chunks to val")
     p.add_argument("--block-size", type=int, default=50, help="frames per block in block mode")
@@ -56,6 +65,7 @@ def main(argv=None) -> int:
         min_area=a.min_area,
         min_side=a.min_side,
         max_truncation=a.max_truncation,
+        mask_dropped=not a.no_mask_dropped,
         val_frac=a.val_frac,
         split_mode=a.split_mode,
         block_size=a.block_size,
@@ -66,7 +76,8 @@ def main(argv=None) -> int:
     )
     mapping = json.loads(Path(a.mapping).read_text()) if a.mapping else None
     stats = convert_dataset(a.src, a.out, cfg, mapping)
-    print(json.dumps({k: stats[k] for k in ("classes", "frames", "images", "boxes", "per_class", "dropped")}, indent=2))
+    keys = ("classes", "frames", "images", "boxes", "per_class", "dropped", "painted_instances", "split", "warnings")
+    print(json.dumps({k: stats[k] for k in keys}, indent=2))
     print(f"data.yaml: {Path(a.out) / 'data.yaml'}")
     return 0
 

@@ -5,7 +5,12 @@
 * :class:`ColorBlobDetector` - stand-in for the fake world (saturated colour blobs -> boxes). COCO YOLO does
   not know the synthetic shapes, so the end-to-end tests use this one.
 * :class:`DetectorWorker` - runs any detector in a background thread; ``submit()`` keeps only the newest
-  pending frame (older ones are dropped), ``poll()`` returns finished results with the inference time.
+  pending frame per drone (older ones are dropped), drones are served in turn, and ``poll()`` returns
+  finished results with the inference time.
+
+YOLO runs on the CPU by default: the GPU belongs to the simulator and the RL jobs (yolo26n takes ~20 ms per
+640x480 frame on the CPU, plenty for a 5-10 Hz camera). ``device="auto"`` uses ``cuda:0`` only when
+``nvidia-smi`` reports at least 2 GiB free on it.
 
 Boxes are ``(x1, y1, x2, y2)`` in continuous pixel coordinates of the input image (pixel ``u`` spans
 ``[u, u+1)``), the convention used by Ultralytics.
@@ -14,7 +19,10 @@ Boxes are ``(x1, y1, x2, y2)`` in continuous pixel coordinates of the input imag
 from __future__ import annotations
 
 import collections
+import logging
 import os
+import shutil
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
@@ -22,7 +30,9 @@ from pathlib import Path
 
 import numpy as np
 
+log = logging.getLogger("drone_gcs.detector")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+AUTO_GPU_MIN_FREE_MIB = 2048
 DEFAULT_WEIGHTS = os.environ.get("DRONE_GCS_WEIGHTS", "/home/hector/isaac_ws/assets/models/yolo26n.pt")
 FINETUNED_WEIGHTS = PROJECT_ROOT / "models" / "detector.pt"  # written by scripts/train_detector.py
 
@@ -52,6 +62,38 @@ def _parse_class_map(class_map) -> dict:
     return out
 
 
+def gpu_free_mib(index: int = 0) -> int | None:
+    """Free memory of GPU ``index`` from ``nvidia-smi`` (no CUDA context is created); ``None`` if unknown."""
+    if not shutil.which("nvidia-smi"):
+        return None
+    try:
+        r = subprocess.run(
+            ["nvidia-smi", "-i", str(index), "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10, check=False,
+        )  # fmt: skip
+        return int(r.stdout.strip().splitlines()[0]) if r.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired, ValueError, IndexError):
+        return None
+
+
+def resolve_device(device: str) -> tuple[str, str]:
+    """``(device, note)``. ``"auto"`` -> ``cuda:0`` only if torch sees a GPU and it has >= 2 GiB free, else cpu."""
+    if device != "auto":
+        return device, ""
+    try:
+        import torch  # noqa: PLC0415
+
+        has_cuda = torch.cuda.is_available()  # no memory is allocated by this check
+    except ImportError:
+        has_cuda = False
+    if not has_cuda:
+        return "cpu", "auto: no CUDA device"
+    free = gpu_free_mib(0)
+    if free is None or free < AUTO_GPU_MIN_FREE_MIB:
+        return "cpu", f"auto: GPU busy ({'unknown' if free is None else f'{free} MiB'} free)"
+    return "cuda:0", f"auto: {free} MiB free on the GPU"
+
+
 class YoloDetector:
     """Ultralytics YOLO wrapper. ``rgb`` input (the GCS works in RGB); converts to BGR for Ultralytics."""
 
@@ -60,7 +102,7 @@ class YoloDetector:
     def __init__(
         self,
         weights: str | os.PathLike | None = None,
-        device: str = "auto",
+        device: str = "cpu",
         conf: float = 0.25,
         iou: float = 0.45,
         imgsz: int = 640,
@@ -78,24 +120,48 @@ class YoloDetector:
             raise FileNotFoundError(f"YOLO weights not found: {self.weights}")
         self.model = YOLO(self.weights, task="detect")
         self.names = {int(k): str(v) for k, v in dict(self.model.names).items()}
-        if device == "auto":
-            try:
-                import torch  # noqa: PLC0415
-
-                device = "cuda:0" if torch.cuda.is_available() else "cpu"
-            except ImportError:
-                device = "cpu"
-        self.device = device
+        self.device, note = resolve_device(str(device))
+        if note:
+            log.info("YOLO device %s (%s)", self.device, note)
         self.conf, self.iou, self.imgsz, self.max_det = float(conf), float(iou), int(imgsz), int(max_det)
-        self.half = bool(half) and str(device).startswith("cuda")
+        self.half = bool(half) and str(self.device).startswith("cuda")
         self.class_map = _parse_class_map(class_map)
-        self.class_ids = None
-        if classes:
-            wanted = {c.strip() for c in (classes.split(",") if isinstance(classes, str) else classes)}
-            self.class_ids = [i for i, n in self.names.items() if n in wanted]
+        self.class_ids, self.ignored_classes = self._class_filter(classes)
+
+    def _class_filter(self, classes) -> tuple[list[int] | None, list[str]]:
+        """Model class ids to keep: a wanted name matches a class by its model name or by its name after
+        ``class_map`` (``--classes car --class-map truck=car`` keeps cars and trucks; ``--classes person
+        --class-map person=human`` keeps persons, reported as "human"). Raises ``ValueError`` when nothing
+        would be left (a typo would otherwise silently remove every detection); unknown names next to valid
+        ones are logged and ignored."""
+        if not classes:
+            return None, []
+        parts = classes.split(",") if isinstance(classes, str) else list(classes)
+        wanted = {str(c).strip() for c in parts if str(c).strip()}
+        if not wanted:
+            return None, []
+        mapped = {i: self.class_map.get(n, n) for i, n in self.names.items()}
+        ids = sorted(i for i, n in self.names.items() if mapped[i] is not None and (n in wanted or mapped[i] in wanted))
+        known = set(self.names.values()) | {m for m in mapped.values() if m is not None}
+        missing = sorted(wanted - known)
+        if not ids or missing:
+            have = ", ".join(sorted(known))
+            if missing:
+                what = f"has no class {', '.join(repr(m) for m in missing)}"
+            else:
+                what = "keeps no class (all dropped by --class-map)"
+            msg = f"--classes {','.join(sorted(wanted))}: {Path(self.weights).name} {what}. Classes: {have}"
+            if not ids:
+                raise ValueError(msg)
+            log.warning("%s; ignoring %s", msg, ", ".join(missing))
+        return ids, missing
 
     def describe(self) -> str:
-        return f"YOLO {Path(self.weights).name} on {self.device} (conf {self.conf:.2f}, iou {self.iou:.2f}, {self.imgsz}px)"
+        s = f"YOLO {Path(self.weights).name} on {self.device}"
+        s += f" (conf {self.conf:.2f}, iou {self.iou:.2f}, {self.imgsz}px)"
+        if self.ignored_classes:
+            s += f", unknown classes ignored: {','.join(self.ignored_classes)}"
+        return s
 
     def warmup(self, shape=(480, 640)) -> None:
         self.detect(np.zeros((shape[0], shape[1], 3), np.uint8))
@@ -224,11 +290,12 @@ def make_detector(kind: str = "yolo", **kw):
 
 
 class DetectorWorker:
-    """Runs ``detector.detect`` in a daemon thread. Only the newest submitted frame waits; older ones drop."""
+    """Runs ``detector.detect`` in a daemon thread. Per ``key`` (drone) only the newest submitted frame waits
+    (older ones drop); keys are served in turn, so every drone's camera gets detection."""
 
     def __init__(self, detector, name: str = "drone_gcs-detector"):
         self.detector = detector
-        self._pending = None
+        self._pending: dict = {}  # key -> (rgb, context); insertion order = service order
         self._cond = threading.Condition()
         self._results: collections.deque = collections.deque(maxlen=64)
         self._stop = False
@@ -244,13 +311,14 @@ class DetectorWorker:
 
     @property
     def busy(self) -> bool:
-        return self._busy or self._pending is not None
+        return self._busy or bool(self._pending)
 
-    def submit(self, rgb: np.ndarray, context=None) -> None:
+    def submit(self, rgb: np.ndarray, context=None, key=0) -> None:
+        """Queue a frame for ``key`` (e.g. the drone id), replacing that key's older pending frame."""
         with self._cond:
-            if self._pending is not None:
+            if key in self._pending:
                 self.n_dropped += 1
-            self._pending = (rgb, context)
+            self._pending[key] = (rgb, context)  # a replaced key keeps its place in the round
             self.n_submitted += 1
             self._cond.notify()
 
@@ -270,12 +338,12 @@ class DetectorWorker:
     def _run(self) -> None:
         while True:
             with self._cond:
-                while self._pending is None and not self._stop:
+                while not self._pending and not self._stop:
                     self._cond.wait(0.25)
                 if self._stop:
                     return
-                rgb, ctx = self._pending
-                self._pending = None
+                key = next(iter(self._pending))  # the key waiting longest; it re-enters at the back on submit
+                rgb, ctx = self._pending.pop(key)
                 self._busy = True
             t0 = time.perf_counter()
             try:

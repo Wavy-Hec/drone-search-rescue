@@ -7,7 +7,7 @@ g show ground truth, c next drone camera, s screenshot, q / Esc quit.
 
 Examples::
 
-    python scripts/gcs.py                                  # window + mp4, YOLO (COCO nano weights)
+    python scripts/gcs.py                                  # window + mp4, YOLO (COCO nano weights) on the CPU
     python scripts/gcs.py --detector blob --name demo      # colour-blob stand-in for the fake world
     python scripts/gcs.py --headless --detector blob       # record only, exit after END
     python scripts/gcs.py --addr tcp://127.0.0.1:47800     # TCP instead of the default UNIX socket
@@ -38,7 +38,11 @@ def main(argv=None) -> int:
     p.add_argument("--size", type=parse_size, default=(1600, 900), help="canvas size WxH (default 1600x900)")
     p.add_argument("--detector", choices=("yolo", "blob", "none"), default="yolo", help="detector (default yolo)")
     p.add_argument("--weights", default=None, help="YOLO weights (default ~/isaac_ws/assets/models/yolo26n.pt)")
-    p.add_argument("--device", default="auto", help="YOLO device: auto | cpu | cuda:0")
+    p.add_argument(
+        "--device", default="cpu",
+        help="YOLO device: cpu (default: the GPU belongs to the sim and the RL jobs) | cuda:0 | "
+             "auto (cuda:0 only if nvidia-smi shows >= 2 GiB free)",
+    )  # fmt: skip
     p.add_argument("--conf", type=float, default=0.25, help="YOLO confidence threshold")
     p.add_argument("--iou", type=float, default=0.45, help="YOLO NMS IoU threshold")
     p.add_argument("--imgsz", type=int, default=640, help="YOLO inference size")
@@ -52,6 +56,9 @@ def main(argv=None) -> int:
     p.add_argument("--min-hits", type=int, default=2, help="detections needed to confirm an object")
     p.add_argument("--det-ref", choices=("auto", "center", "bottom"), default="auto", help="geolocation reference pixel")
     p.add_argument("--edge-margin", type=float, default=3.0, help="boxes within N px of the image border are not mapped (0 = map all)")
+    p.add_argument(
+        "--depth-min", type=float, default=0.5, help="ignore depth closer than this (the drone's own legs/props) [m]"
+    )
     exit_g = p.add_mutually_exclusive_group()
     exit_g.add_argument("--exit-on-end", dest="exit_on_end", action="store_true", default=None, help="quit after END (default when headless)")
     exit_g.add_argument("--stay", dest="exit_on_end", action="store_false", help="keep running after END")
@@ -97,6 +104,7 @@ def main(argv=None) -> int:
             min_hits=a.min_hits,
             det_ref=a.det_ref,
             edge_margin=a.edge_margin,
+            depth_min_range=a.depth_min,
         ),
     )
     return GCSApp(cfg).run()

@@ -342,19 +342,22 @@ class Orthomosaic:
         stride: int | None = None,
         max_range: float = 1000.0,
         min_quality: float = 0.25,
+        min_range: float = 0.5,
     ) -> tuple[int, np.ndarray]:
         """Back-project a (sub-sampled) camera frame into the mosaic.
 
         ``depth`` (H, W) is the distance to the image plane [m]; without it the pixel rays are intersected
-        with ``elevation`` (plane ``ground_z`` where unknown). ``stride=None`` picks the pixel step from the
+        with ``elevation`` (plane ``ground_z`` where unknown). Depth closer than ``min_range`` is the vehicle
+        itself (landing gear, propellers) and is ignored. ``stride=None`` picks the pixel step from the
         ground sample distance so that samples are about half a mosaic cell apart.
         Returns ``(samples written, world points (M, 3) of the valid samples)``.
         """
         H, W = rgb.shape[:2]
+        min_range = max(0.0, float(min_range))
         if stride is None:
             if depth is not None:
                 c = depth[H // 2 - 2 : H // 2 + 3, W // 2 - 2 : W // 2 + 3]
-                c = c[np.isfinite(c) & (c > 0)]
+                c = c[np.isfinite(c) & (c > min_range)]
                 rng = float(np.median(c)) if c.size else float("nan")
             else:
                 rng = float("nan")
@@ -371,7 +374,7 @@ class Orthomosaic:
         rays = cam.rays(u, v)
         if depth is not None:
             d = np.asarray(depth, dtype=np.float64)[v, u]
-            ok = np.isfinite(d) & (d > 0) & (d < max_range)
+            ok = np.isfinite(d) & (d > min_range) & (d > 0) & (d < max_range)
             P = cam.t + np.where(ok, d, 0.0)[:, None] * rays
         else:
             P, ok = intersect_rays_with_map(cam.t, rays, elevation, ground_z)
@@ -401,6 +404,7 @@ class Geolocator:
         nadir_threshold_deg: float = 35.0,
         depth_window: float = 0.3,
         max_range: float = 1000.0,
+        min_range: float = 0.5,
     ):
         if ref not in ("auto", "center", "bottom"):
             raise ValueError(f"unknown reference point {ref!r}")
@@ -410,6 +414,7 @@ class Geolocator:
         self.nadir_threshold_deg = float(nadir_threshold_deg)
         self.depth_window = float(depth_window)
         self.max_range = float(max_range)
+        self.min_range = max(0.0, float(min_range))  # nearer depth = the vehicle itself: use the map instead
 
     def locate(self, box, cam: PinholeCamera, depth: np.ndarray | None = None) -> dict:
         """Returns ``{"xyz": (3,), "ok": bool, "method": "depth"|"map"|"plane", "ref": ..., "pixel": (u, v)}``."""
@@ -433,7 +438,7 @@ class Geolocator:
             r0i, r1i = int(max(0, math.floor(r0))), int(min(H, math.ceil(r1)))
             if c1 > c0 and r1i > r0i:
                 win = np.asarray(depth[r0i:r1i, c0:c1], dtype=np.float64)
-                win = win[np.isfinite(win) & (win > 0) & (win < self.max_range)]
+                win = win[np.isfinite(win) & (win > self.min_range) & (win > 0) & (win < self.max_range)]
                 if win.size:
                     d = float(np.median(win))
                     out.update(xyz=cam.backproject([u_idx], [v_idx], [d])[0], ok=True, method="depth", depth=d)

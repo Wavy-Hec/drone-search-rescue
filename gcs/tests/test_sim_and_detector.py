@@ -153,6 +153,18 @@ class TestDetectors(unittest.TestCase):
             self.assertTrue(0 <= x1 < x2 <= rgb.shape[1] and 0 <= y1 < y2 <= rgb.shape[0])
         det2 = YoloDetector(device="cpu", conf=0.4, classes="person", class_map="person=human")
         self.assertEqual({d.cls for d in det2.detect(rgb)}, {"human"})
+        # class filters are checked against the model, and also match names after --class-map
+        ids = {n: i for i, n in det2.names.items()}
+        det3 = YoloDetector(device="cpu", classes="car", class_map="truck=car")
+        self.assertEqual(det3.class_ids, sorted([ids["car"], ids["truck"]]))
+        with self.assertRaises(ValueError) as cm:
+            YoloDetector(device="cpu", classes="persn")  # a typo used to silently remove every detection
+        self.assertIn("persn", str(cm.exception))
+        with self.assertRaises(ValueError):
+            YoloDetector(device="cpu", classes="bench", class_map="bench=")  # nothing would be left
+        det4 = YoloDetector(device="cpu", classes="person,tarp")  # one unknown next to a valid one: warned, ignored
+        self.assertEqual((det4.class_ids, det4.ignored_classes), ([ids["person"]], ["tarp"]))
+        self.assertEqual(YoloDetector().device, "cpu")  # the default never touches the GPU
 
 
 if __name__ == "__main__":

@@ -87,6 +87,16 @@ def jsonable(obj: Any) -> Any:
     raise TypeError(f"not JSON serializable: {type(obj).__name__}")
 
 
+def is_proxy_array(x: Any) -> bool:
+    """``isaaclab.utils.warp.ProxyArray`` (or a look-alike with ``.torch`` / ``.warp`` properties).
+
+    Checked on the *class*: a ProxyArray forwards unknown attributes to its torch view (a deprecation bridge
+    that warns once per process), so ``hasattr(x, "detach")`` on the instance would be True and would use up
+    Isaac Lab's one-time warning meant for the user's own code."""
+    t = type(x)
+    return hasattr(t, "torch") and hasattr(t, "warp")
+
+
 def to_numpy(x: Any) -> np.ndarray:
     """Array view of numpy arrays, lists, torch tensors (any device), warp arrays or Isaac Lab ProxyArrays.
 
@@ -94,7 +104,7 @@ def to_numpy(x: Any) -> np.ndarray:
     """
     if isinstance(x, np.ndarray):
         return x
-    if hasattr(x, "torch") and not hasattr(x, "detach"):  # isaaclab.utils.warp.ProxyArray
+    if is_proxy_array(x) or (hasattr(x, "torch") and not hasattr(x, "detach")):  # (or another torch-view wrapper)
         x = x.torch
     if hasattr(x, "detach") and hasattr(x, "cpu"):  # torch.Tensor
         return x.detach().cpu().numpy()

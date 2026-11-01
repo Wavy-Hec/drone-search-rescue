@@ -36,7 +36,20 @@ class TestRotations(unittest.TestCase):
         np.testing.assert_allclose(G.quat_xyzw_to_wxyz(q), [0.9, 0.1, 0.2, 0.3])
         np.testing.assert_allclose(G.quat_wxyz_to_xyzw(G.quat_xyzw_to_wxyz(q)), q)
 
+    def test_matches_isaaclab_3_warp_constants(self):
+        # isaaclab/utils/warp/warp_math.py (Isaac Lab 3.0): q_out = q_in * q_const, constants in (x, y, z, w):
+        #   ("world", "ros"): (-0.5, 0.5, -0.5, 0.5)     ("opengl", "ros"): (1, 0, 0, 0)
+        world_to_ros = G.quat_xyzw_to_wxyz(np.array([-0.5, 0.5, -0.5, 0.5]))
+        opengl_to_ros = G.quat_xyzw_to_wxyz(np.array([1.0, 0.0, 0.0, 0.0]))
+        rng = np.random.default_rng(3)
+        for _ in range(10):
+            q = G.quat_normalize(rng.normal(size=4))
+            for conv, c in (("world", world_to_ros), ("opengl", opengl_to_ros)):
+                expected = G.quat_to_matrix(G.quat_multiply(q, c))
+                np.testing.assert_allclose(G.quat_to_matrix(G.camera_quat_to_ros(q, conv)), expected, atol=1e-12)
+
     def test_isaac_world_convention_to_ros_matches_isaaclab_formula(self):
+        # Re-implementation (no Isaac Lab import) of the 2.x matrix formula behind
         # isaaclab.utils.math.convert_camera_frame_orientation_convention("world" -> "ros"):
         # R_gl = R_world @ R_X(pi/2) R_Y(-pi/2); R_ros = R_gl with columns 1 and 2 negated
         rng = np.random.default_rng(1)
