@@ -12,14 +12,23 @@ matches no recorded camera config, so it is not reusable and this task must be r
 
 Design (3.0 APIs):
 
-* Camera: :class:`~isaaclab.sensors.CameraCfg` (``TiledCameraCfg`` is now a deprecated alias) on the trunk with the
-  2.x mount pose. The offset quaternion is converted from 2.x (w, x, y, z) = (0.66446, 0.24184, -0.24184, -0.66446)
-  to the 3.0 (x, y, z, w) order. The camera sits ~1.42 m above flat ground, 0.25 m behind the trunk origin, pitched
-  50 deg down, 60 x 47 deg field of view.
-* Far clip raised from 1.0 m to :data:`DEPTH_MAX_RANGE` (4 m): from 1.42 m height the closest ground ray (bottom image
-  edge, 73.4 deg down) is ~1.48 m away and the top edge ~3.2 m, so the 2.x far clip saw no ground at all.
+* Camera: :class:`~isaaclab.sensors.CameraCfg` (``TiledCameraCfg`` is now a deprecated alias) on the front face of
+  the trunk (:data:`DEPTH_CAMERA_POS`) with the 2.x orientation: looking forward, pitched 50 deg down, 60 x 46.8 deg
+  field of view. The 2.x mount (0.7 m above and 0.25 m behind the trunk origin) is not kept: from there the robot's
+  own visual meshes filled a third of the image, and the nearest visible ground was 1.26 m ahead of the trunk origin
+  on the centre line and 0.89 m in the foot tracks. At the default standing pose (trunk origin 0.451 m above flat
+  ground) the front-face camera is 0.53 m above the ground, no pixel sees the robot, and flat ground is visible from
+  0.63 m to ~1.5 m ahead of the trunk origin (``scripts/depth_camera_study.py``; PORT_NOTES.md section 8).
+* The offset quaternion is the 2.x (w, x, y, z) = (0.66446, 0.24184, -0.24184, -0.66446) in the 3.0 (x, y, z, w) order.
+* Far clip raised from 1.0 m to :data:`DEPTH_MAX_RANGE` (4 m). Flat ground is 0.56-1.32 m away along the pixel rays of
+  this mount, so the 2.x 1.0 m clip would blank the top sixth of the image; 4 m leaves headroom for downhill terrain
+  and a pitched-up trunk. (With the 2.x mount every ground pixel was beyond 1.0 m.)
 * Image: ``mdp.image_depth`` (``mdp.image`` was removed) in its own ``depth`` observation group, channel-first
   ``(N, 1, 48, 64)``, normalized to [0, 1] by the far clip; pixels without a hit read as far (1.0).
+* Update rate: ``update_period=0.0``. Sensors update lazily (``InteractiveSceneCfg.lazy_sensor_update=True``), so the
+  camera renders when the observation reads it, i.e. once per policy step, whatever the period. A positive period
+  would only add a device-to-host sync per read and, with float32 sensor timestamps, skip every other pose refresh
+  late in long episodes.
 * Policy: rsl-rl ``CNNModel`` actor on ``policy`` (48 proprio) + ``depth``; MLP critic on ``policy`` + a noise-free
   ``privileged`` height scan (asymmetric actor-critic). The actor never sees the height scan.
 * Renderer: Newton Warp by default (kit-less Warp ray tracer, documented pairing with Isaac Sim PhysX, much lighter
@@ -56,6 +65,14 @@ DEPTH_MAX_RANGE = 4.0
 DEPTH_NUM_ENVS = 1024
 """Default number of environments for the depth task (the 2.x commands also trained with 1024)."""
 
+DEPTH_CAMERA_POS = (0.47, 0.0, 0.08)
+"""Camera position in the trunk frame [m]: centre of the trunk's front face, 1.1 cm ahead of its visual mesh, which
+ends at x = 0.459 m (2.x patch: (-0.25, 0.0, 0.7))."""
+
+DEPTH_CAMERA_ROT = (0.24184, -0.24184, -0.66446, 0.66446)
+"""Camera orientation (x, y, z, w) w.r.t. the trunk, OpenGL convention: forward, pitched 50 deg down. Same as the 2.x
+patch, whose (w, x, y, z) value was (0.66446, 0.24184, -0.24184, -0.66446)."""
+
 
 @configclass
 class DepthCameraRendererCfg(PresetCfg):
@@ -76,14 +93,13 @@ class CustomQuadDepthSceneCfg(MySceneCfg):
 
     depth_camera: CameraCfg = CameraCfg(
         prim_path="{ENV_REGEX_NS}/Robot/trunk/depth_camera",
+        # lazy sensor updates render the camera when the observation reads it (once per policy step); a positive
+        # period would add a host sync per read (camera.py `_env_mask_has_any`) and skip pose refreshes once the
+        # float32 sensor timestamps grow past ~16 s
+        update_period=0.0,
         # the camera rides on the trunk, so non-Kit renderers need its pose refreshed on every capture
         update_latest_camera_pose=True,
-        offset=CameraCfg.OffsetCfg(
-            pos=(-0.25, 0.0, 0.7),
-            # 2.x (w, x, y, z) = (0.66446, 0.24184, -0.24184, -0.66446) -> 3.0 (x, y, z, w)
-            rot=(0.24184, -0.24184, -0.66446, 0.66446),
-            convention="opengl",
-        ),
+        offset=CameraCfg.OffsetCfg(pos=DEPTH_CAMERA_POS, rot=DEPTH_CAMERA_ROT, convention="opengl"),
         data_types=["distance_to_camera"],
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=18.14756,
@@ -155,5 +171,3 @@ class CustomQuadRoughDepthEnvCfg(CustomQuadRoughEnvCfg):
 
         # the actor sees proprioception + depth only; the height scan feeds the privileged critic group
         self.observations.policy.height_scan = None
-        # render once per policy step (the 2.x patch used update_period=0.0, i.e. every 5 ms physics step)
-        self.scene.depth_camera.update_period = self.decimation * self.sim.dt

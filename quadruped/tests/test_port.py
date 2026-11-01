@@ -10,6 +10,7 @@ Everything here runs on the CPU without launching Isaac Sim; the simulation-leve
 
 import importlib.util
 import math
+import sys
 from pathlib import Path
 
 import pytest
@@ -44,11 +45,19 @@ def _resolve(task_id, overrides=(), play_mode=False):
     return resolve_task_config(task_id, "rsl_rl_cfg_entry_point", play_mode=play_mode, overrides=list(overrides))
 
 
-def _converter():
-    spec = importlib.util.spec_from_file_location("convert_rslrl_checkpoint", PROJECT / "scripts/convert_rslrl_checkpoint.py")
+def _script(name: str):
+    """Import ``scripts/<name>.py`` as a module."""
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, PROJECT / "scripts" / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module  # dataclasses in the scripts resolve their module through sys.modules
     spec.loader.exec_module(module)
     return module
+
+
+def _converter():
+    return _script("convert_rslrl_checkpoint")
 
 
 def _is_lfs_pointer(path: Path) -> bool:
@@ -79,9 +88,10 @@ def test_play_mode_matches_2x_play_classes(task_id):
 
 
 def test_rough_policy_layout_matches_checkpoint():
+    from pxr import Usd, UsdPhysics
+
     from isaaclab.managers import ObservationTermCfg
     from isaaclab.sensors.ray_caster.patterns import grid_pattern
-    from pxr import Usd, UsdPhysics
 
     env_cfg, agent_cfg = _resolve(ROUGH)
     group = env_cfg.observations.policy
@@ -105,7 +115,11 @@ def test_rough_policy_layout_matches_checkpoint():
 def test_events_and_actuator_keep_2x_semantics():
     env_cfg, _ = _resolve(ROUGH)
     mass = env_cfg.events.add_base_mass.params
-    assert (mass["mass_distribution_params"], mass["operation"], mass["distribution"]) == ((-1.0, 3.0), "add", "uniform")
+    assert (mass["mass_distribution_params"], mass["operation"], mass["distribution"]) == (
+        (-1.0, 3.0),
+        "add",
+        "uniform",
+    )
     motor = env_cfg.scene.robot.actuators["base_legs"]
     assert (motor.actuator_effort_limit, motor.joint_effort_limit, motor.saturation_effort) == (45.0, 45.0, 45.0)
     assert (motor.actuator_velocity_limit, motor.stiffness, motor.damping) == (21.0, 60.0, 1.5)
@@ -118,12 +132,14 @@ def test_depth_task_layout():
 
     env_cfg, agent_cfg = _resolve(DEPTH, ["physics=isaacsim_physx"])
     camera = env_cfg.scene.depth_camera
-    # 2.x offset (w, x, y, z) -> 3.0 (x, y, z, w)
+    # 2.x orientation (w, x, y, z) -> 3.0 (x, y, z, w), mounted on the trunk's front face instead of the 2.x mast
     w, x, y, z = (0.66446, 0.24184, -0.24184, -0.66446)
-    assert camera.offset.rot == (x, y, z, w)
+    assert camera.offset.rot == (x, y, z, w) and camera.offset.convention == "opengl"
+    assert camera.offset.pos == (0.47, 0.0, 0.08)
     forward = quat_apply(torch.tensor([camera.offset.rot]), torch.tensor([[0.0, 0.0, -1.0]]))[0]  # OpenGL looks -Z
     assert math.degrees(math.asin(-forward[2].item())) == pytest.approx(50.0, abs=0.1) and forward[0] > 0
-    assert camera.update_period == pytest.approx(env_cfg.decimation * env_cfg.sim.dt)
+    # lazy sensor updates render on read (once per policy step); a positive period only adds host syncs
+    assert camera.update_period == 0.0 and env_cfg.scene.lazy_sensor_update
     assert type(camera.renderer_cfg).__name__ == "NewtonWarpRendererCfg"
     term = env_cfg.observations.depth.depth_image
     assert term.params["channel_first"] and term.params["data_type"] == "distance_to_camera"
@@ -148,7 +164,11 @@ def test_depth_cnn_model_builds():
     agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, check_rsl_rl_version())
     cam = env_cfg.scene.depth_camera
     obs = TensorDict(
-        {"policy": torch.zeros(2, 48), "depth": torch.zeros(2, 1, cam.height, cam.width), "privileged": torch.zeros(2, 187)},
+        {
+            "policy": torch.zeros(2, 48),
+            "depth": torch.zeros(2, 1, cam.height, cam.width),
+            "privileged": torch.zeros(2, 187),
+        },
         batch_size=[2],
     )
     actor_cfg = to_dict(agent_cfg.actor)
@@ -172,7 +192,9 @@ def test_convert_synthetic_checkpoint(tmp_path):
         sd[f"{net}_obs_normalizer._var"] = torch.rand(1, 235) + 0.5
         sd[f"{net}_obs_normalizer._std"] = sd[f"{net}_obs_normalizer._var"].sqrt()
         sd[f"{net}_obs_normalizer.count"] = torch.tensor(1000)
-    new, info = conv.convert_checkpoint({"model_state_dict": sd, "optimizer_state_dict": None, "iter": 7, "infos": None})
+    new, info = conv.convert_checkpoint(
+        {"model_state_dict": sd, "optimizer_state_dict": None, "iter": 7, "infos": None}
+    )
     assert info["actor"]["obs_normalizer"] and info["num_actions"] == 12
     assert set(new["actor_state_dict"]) == {"distribution.std_param"} | {
         f"mlp.{i}.{k}" for i in (0, 2, 4, 6) for k in ("weight", "bias")
@@ -204,3 +226,163 @@ def test_converted_checkpoint_matches_original():
     assert report["obs_dim"] == 235 and report["num_actions"] == 12
     assert report["loaded_iteration"] == report["checkpoint_iteration"] == 13900
     assert max(v for k, v in report.items() if k.startswith("max_abs_diff")) == 0.0
+
+
+def test_depth_runner_uses_camera_schedule():
+    """CNN actor: fixed learning rate and 8 mini-batches (3.0 camera-actor settings); rough/flat PPO unchanged."""
+    _, rough = _resolve(ROUGH)
+    _, flat = _resolve(FLAT)
+    _, depth = _resolve(DEPTH)
+    for agent in (rough, flat):
+        algo = agent.algorithm
+        assert (algo.schedule, algo.learning_rate, algo.num_mini_batches) == ("adaptive", 1.0e-3, 4)
+    algo = depth.algorithm
+    assert (algo.schedule, algo.learning_rate, algo.num_mini_batches) == ("fixed", 7.0e-5, 8)
+    for field in ("value_loss_coef", "entropy_coef", "clip_param", "num_learning_epochs", "gamma", "lam", "desired_kl"):
+        assert getattr(algo, field) == getattr(rough.algorithm, field), field
+    assert depth.check_for_nan  # turned off only after a NaN-free smoke run (agent.check_for_nan=false)
+    _, overridden = _resolve(DEPTH, ["agent.check_for_nan=false"])
+    assert overridden.check_for_nan is False
+
+
+def test_depth_camera_mount_sees_no_robot():
+    """Ray-cast the configured 64x48 camera against the robot's own meshes at the default pose (no Kit)."""
+    study = _script("depth_camera_study")
+    camera, usd_path, joint_pos = study.configured_setup()
+    triangles, standing_height = study.posed_robot_triangles(usd_path, joint_pos)
+    assert standing_height == pytest.approx(0.451, abs=0.005)  # trunk origin above flat ground, default pose
+    spawn = camera.spawn
+    results = {}
+    for name, (pos, rot) in {"configured": (camera.offset.pos, camera.offset.rot), "2.x": study.MOUNT_2X}.items():
+        origin, dirs = study.camera_rays(
+            pos,
+            rot,
+            camera.width,
+            camera.height,
+            spawn.focal_length,
+            spawn.horizontal_aperture,
+            spawn.vertical_aperture,
+        )
+        for kind in study.GEOMETRY_KINDS:
+            results[name, kind] = study.study_mount(
+                origin, dirs, triangles, kind, standing_height, spawn.clipping_range[1]
+            )
+    for kind in study.GEOMETRY_KINDS:
+        configured = results["configured", kind]
+        assert configured["robot_pct"] == 0.0, kind
+        assert configured["nearest_ground_centre"] < 0.7 and configured["beyond_far_clip_pct"] == 0.0
+        assert results["2.x", kind]["robot_pct"] > 25.0  # the old mast mount sees its own trunk and legs
+    # the pitch helper reproduces the 2.x quaternion
+    assert study.pitch_down_quat(50.0) == pytest.approx(study.MOUNT_2X[1], abs=2e-4)
+
+
+def _joint_log(names: list[str], table_names: list[str] | None = None) -> str:
+    """Console log lines as Isaac Lab 3.0 writes them (joint_actions.py:70-73, PhysX articulation.py:4284-4317)."""
+    import io
+    import logging
+
+    from prettytable import PrettyTable
+
+    table = PrettyTable()
+    table.title = "Simulation Joint Information (Prim path: /World/envs/env_.*/Robot)"
+    table.field_names = ["Index", "Name", "Stiffness", "Damping", "Armature", "Static Friction", "Dynamic Friction"]
+    table.align["Name"] = "l"
+    for i, name in enumerate(table_names or names):
+        table.add_row([i, name, "0.000", "0.000", "0.000", "0.000", "0.000"])
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("[INFO]: %(message)s"))  # the Kit launcher's Isaac Lab INFO handler
+    logger = logging.getLogger("test_port.joint_log")
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+    try:
+        logger.info("Simulation parameters for joints in /World/envs/env_.*/Robot:\n" + table.get_string())
+        logger.info(f"Resolved joint names for the action term JointPositionAction: {names} [ProxyArray(...)]")
+    finally:
+        logger.removeHandler(handler)
+    return "[Info] [omni.kit] startup noise\n" + stream.getvalue()
+
+
+def test_check_joint_order(tmp_path):
+    check = _script("check_joint_order")
+    expected = check.expected_joint_order(check.DEFAULT_USD)
+    legs = ("FL", "FR", "RL", "RR")
+    assert expected == [f"{leg}_{part}_joint" for part in ("hip", "thigh", "calf") for leg in legs]
+
+    log = tmp_path / "ok.log"
+    log.write_text(_joint_log(expected))
+    found = check.parse_log(log.read_text())
+    assert found == {"action term JointPositionAction": expected, "articulation /World/envs/env_.*/Robot": expected}
+    assert check.main([str(log)]) == 0
+
+    depth_first = [f"{leg}_{part}_joint" for leg in legs for part in ("hip", "thigh", "calf")]  # e.g. Newton's order
+    log.write_text(_joint_log(depth_first))
+    assert check.main([str(log)]) == 1
+    log.write_text("no records\n")
+    assert check.main([str(log)]) == 2
+
+
+def test_convert_log_std_checkpoint(tmp_path):
+    """A log-std checkpoint converts to ``distribution.log_std_param`` and says which agent cfg it needs."""
+    from rsl_rl.models import MLPModel
+    from tensordict import TensorDict
+
+    conv = _converter()
+    torch.manual_seed(1)
+    sd = {"log_std": torch.log(torch.rand(12) * 0.5 + 0.1)}
+    for net, out in (("actor", 12), ("critic", 1)):
+        dims = [48, 64, 64, out]
+        for i in range(3):
+            sd[f"{net}.{2 * i}.weight"] = torch.randn(dims[i + 1], dims[i]) * 0.1
+            sd[f"{net}.{2 * i}.bias"] = torch.randn(dims[i + 1]) * 0.1
+    old = {"model_state_dict": sd, "optimizer_state_dict": None, "iter": 3, "infos": None}
+    new, info = conv.convert_checkpoint(old)
+    assert info["std_type"] == "log" and "std_type='log'" in info["agent_cfg_hint"]
+    assert "distribution.log_std_param" in new["actor_state_dict"]
+
+    obs = TensorDict({"policy": torch.randn(16, 48)}, batch_size=[16])
+    dist = {"class_name": "GaussianDistribution", "init_std": 1.0, "std_type": "log"}
+    actor = MLPModel(obs, {"actor": ["policy"]}, "actor", 12, [64, 64], "elu", distribution_cfg=dist)
+    actor.load_state_dict(new["actor_state_dict"], strict=True)
+    actor.eval()
+    with torch.inference_mode():
+        assert torch.allclose(actor(obs), conv.old_forward(sd, "actor", obs["policy"]), atol=1e-6)
+        actor.distribution.update(actor(obs))
+        assert torch.allclose(actor.distribution.std[0], sd["log_std"].exp(), atol=1e-6)
+
+    # the default (scalar-std) agent cfg is refused up front, with the hint instead of a strict-load key error
+    old_path, new_path = tmp_path / "old.pt", tmp_path / "new.pt"
+    torch.save(old, old_path)
+    conv.save_checkpoint(new, new_path, force=False)
+    with pytest.raises(ValueError, match="std_type='log'"):
+        conv.verify(old_path, new_path, conv.DEFAULT_AGENT_CFG, 8, 0)
+
+
+def test_parity_with_2x_sources():
+    """Static 2.x config (2.3.2 base + Hector's overrides) vs the instantiated 3.0 cfg; needs the 2.x folders."""
+    parity = _script("check_obs_parity")
+    if not (parity.DEFAULT_OLD_LAB / ".git").exists() or not (parity.DEFAULT_OLD_TASK / "rough_env_cfg.py").is_file():
+        pytest.skip("the 2.x sources (~/IsaacLab, ~/quadruped_rough_terrain) are not on this machine")
+    if not CHECKPOINT_2X.is_file() or _is_lfs_pointer(CHECKPOINT_2X):
+        pytest.skip(f"{CHECKPOINT_2X.name} is missing or an un-smudged Git LFS pointer (run `git lfs pull`)")
+    assert parity.main([]) == 0
+
+    from quadruped_lab.tasks.locomotion.config.custom_quad.rough_env_cfg import CustomQuadRoughEnvCfg
+
+    old = parity.load_old_sources(parity.DEFAULT_OLD_LAB, parity.DEFAULT_OLD_TASK)
+    assert not old["skipped"]
+    comparer = parity.compare_with_2x(old["state"], CustomQuadRoughEnvCfg(), old["defaults"])
+    assert not comparer.problems and comparer.checked > 200
+    # negative control: changed 3.0 values are reported, including a parameter the 2.x config leaves at its default
+    cfg = CustomQuadRoughEnvCfg()
+    cfg.rewards.dof_acc_l2.weight = -1.0e-6
+    cfg.events.add_base_mass.params["recompute_inertia"] = False
+    cfg.scene.terrain.terrain_generator.sub_terrains["boxes"].grid_height_range = (0.05, 0.2)
+    problems = "\n".join(parity.compare_with_2x(old["state"], cfg, old["defaults"]).problems)
+    for path in (
+        "rewards.dof_acc_l2.weight",
+        "add_base_mass.params['recompute_inertia']",
+        "['boxes'].grid_height_range",
+    ):
+        assert path in problems, path

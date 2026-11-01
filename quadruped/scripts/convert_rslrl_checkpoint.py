@@ -48,11 +48,24 @@ from pathlib import Path
 
 import torch
 
-DEFAULT_AGENT_CFG = "quadruped_lab.tasks.locomotion.config.custom_quad.agents.rsl_rl_ppo_cfg:CustomQuadRoughPPORunnerCfg"
+DEFAULT_AGENT_CFG = (
+    "quadruped_lab.tasks.locomotion.config.custom_quad.agents.rsl_rl_ppo_cfg:CustomQuadRoughPPORunnerCfg"
+)
 """Agent config whose actor/critic must match the checkpoint (the rough height-scan runner)."""
 
 _MLP_KEY = re.compile(r"^(actor|critic)\.(\d+)\.(weight|bias)$")
 _NORMALIZER_KEY = re.compile(r"^(actor|critic)_obs_normalizer\.(_mean|_var|_std|count)$")
+
+STD_TYPE_HINTS = {
+    "scalar": None,
+    "log": (
+        "the checkpoint stores log_std, converted to 'distribution.log_std_param': the agent cfg must use "
+        "actor=RslRlMLPModelCfg(..., distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=1.0, "
+        "std_type='log')); with the default std_type='scalar' rsl-rl expects 'distribution.std_param' and strict "
+        "loading fails with an unexpected-key error (rsl_rl/modules/distribution.py:165-168)"
+    ),
+}
+"""What the agent config must look like for each std parameterization of the old checkpoint."""
 
 
 class CheckpointFormatError(RuntimeError):
@@ -97,6 +110,7 @@ def describe_old_model(model_state_dict: dict[str, torch.Tensor]) -> dict:
     info["num_actions"] = int(info["std"].numel())
     if info["actor"]["output_dim"] != info["num_actions"]:
         raise CheckpointFormatError("actor output size does not match the std size")
+    info["agent_cfg_hint"] = STD_TYPE_HINTS[info["std_type"]]
     return info
 
 
@@ -190,7 +204,9 @@ def old_forward(model_state_dict: dict[str, torch.Tensor], net: str, obs: torch.
         x = (x - mean) / (std + 1e-2)  # EmpiricalNormalization(eps=1e-2).forward
     layers = _mlp_layers(model_state_dict, net)
     for n, idx in enumerate(layers):
-        x = torch.nn.functional.linear(x, model_state_dict[f"{net}.{idx}.weight"], model_state_dict[f"{net}.{idx}.bias"])
+        x = torch.nn.functional.linear(
+            x, model_state_dict[f"{net}.{idx}.weight"], model_state_dict[f"{net}.{idx}.bias"]
+        )
         if n < len(layers) - 1:
             x = torch.nn.functional.elu(x)
     return x
@@ -235,6 +251,12 @@ def verify(old_path: Path, new_path: Path, agent_cfg_spec: str, num_samples: int
     groups = sorted({g for gs in agent_cfg.obs_groups.values() for g in gs})
     if groups != ["policy"]:
         raise ValueError(f"verification expects an MLP agent on the 'policy' group only, got obs_groups={groups}")
+    cfg_std_type = getattr(agent_cfg.actor.distribution_cfg, "std_type", "scalar")
+    if cfg_std_type != info["std_type"]:
+        raise ValueError(
+            f"agent cfg {agent_cfg_spec} uses std_type={cfg_std_type!r} but the checkpoint has std_type="
+            f"{info['std_type']!r}: {info['agent_cfg_hint'] or 'use the default scalar GaussianDistributionCfg'}"
+        )
 
     generator = torch.Generator().manual_seed(seed)
     obs = torch.randn(num_samples, obs_dim, generator=generator)
@@ -314,6 +336,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"[convert] actor keys:  {list(new['actor_state_dict'])}")
         print(f"[convert] critic keys: {list(new['critic_state_dict'])}")
+        if info["agent_cfg_hint"]:
+            print(f"[convert] NOTE: {info['agent_cfg_hint']}")
 
     if args.verify or args.verify_only:
         report = verify(args.input, args.output, args.agent_cfg, args.num_samples, args.seed)
