@@ -94,6 +94,61 @@ The ground station's detector (YOLO26n) is fine-tuned on that dataset. In the 18
 path over the demo site it finds every person (55 sightings) without a false alarm; the stock COCO model finds 27.
 Details in the drone_gcs README.
 
+## Live mission: Isaac Sim to the ground station
+
+`scripts/sar_mission.py` flies the whole search-and-rescue mission and streams it, while it flies, to the ground
+station of the sibling project `drone_gcs`: the drone takes off from its landing pad, flies a lawnmower over the
+site, comes back and lands on the pad. The ground station builds the height map and the photo map as the drone
+uncovers the site, runs its YOLO detector on the camera frames, pins every find on the map and writes the mission
+report when the drone has landed. Two terminals, ground station first (it waits for the drone):
+
+```bash
+# terminal 1: the ground station (window + recording), conda env 'vision'
+source ~/anaconda3/etc/profile.d/conda.sh && conda activate vision
+cd ~/isaac_ws/projects/drone_gcs
+python scripts/gcs.py --name sar_live
+
+# terminal 2: the mission, with an Isaac Sim window that follows the drone, conda env 'env_isaaclab'
+source ~/anaconda3/etc/profile.d/conda.sh && conda activate env_isaaclab
+cd ~/isaac_ws/projects/drone_lab
+python scripts/sar_mission.py --viz kit --checkpoint \
+    ~/isaac_ws/IsaacLab/logs/rsl_rl/arl_robot_1_track_position_state_based/2026-11-01_14-45-20_demo_drone_track/exported/policy.pt
+```
+
+**Flight plan** (`src/drone_lab/sar/mission.py`, which also has the math):
+
+| | |
+|---|---|
+| Height | 7.5 m: the highest terrain (3.5 m) + 4 m. The camera is 7.4 m above the ground: 1.54 cm per pixel, a lying person is 26-29 px wide |
+| Camera footprint | 9.9 m across the flight line x 7.4 m along it (640 x 480 px, f = 480 px) |
+| Line spacing | 5 m, 8 lines: the camera swaths overlap by 49 %; over the highest hill (camera 3.9 m above it) the swath is still 5.2 m wide, so the photo map has no gaps. The 5 m ray grid of the mapping scanner tiles the area exactly, on the 0.25 m map lattice |
+| Speed | carrot 1.5 m/s, flown about 1.25 m/s. Frames every 0.1 s are 0.13 m apart (98 % forward overlap): each point stays in view about 6 s per pass |
+| Path | 428 m: climb 7 m, transit 3 m, survey 375 m, return 36 m, descent and touchdown 7.5 m; about 6 minutes of flight |
+| Take-off and landing | the drone starts hovering 0.5 m over the pad; at the end the carrot sinks to 5 cm over the pad, lower than the drone's body allows, and at the first contact the motors stop |
+
+**What goes over the link** every 0.1 s step: TELEMETRY (pose, velocity, waypoint, carrot, mission phase), SCAN
+(the 441 ray hits) and CAMERA (640 x 480 RGB, distance-to-image-plane depth, K and the ROS-optical camera pose):
+2.15 MB per frame, about 22 MB per second of flight (45 MB/s on the local UNIX socket when a headless run goes at
+2x real time). Once at the start: MISSION (area, map grid, planned path, landing pad) and, for the scorecard only,
+GT_OBJECTS (the site's ground truth) and GT_TERRAIN (the true terrain height). At the end: END with the closest
+approach to obstacles. The sender copies the data and returns at once (0.9 ms per step); a background thread
+writes it, and a slow or missing ground station only costs dropped frames, never a stalled simulation.
+
+Options: `--seed` (site), `--spacing`, `--altitude`, `--speed`, `--max_time` (sim seconds), `--video` and
+`--view chase|overview` (records `runs/<out>/mission.mp4`, real time by default), `--markers` (the carrot and path
+markers; off by default because the drone camera sees the ones below it at take-off and landing, and the detector
+may pin them), `--gt_boxes` (adds the objects' boxes from the instance segmentation to every frame, for the ground
+station's `--detector gt`), `--jpeg`, `--camera_every N`, `--gcs <address>`, `--no_gcs`. Outputs in `runs/<out>/` (default `sar_mission_seed<seed>`): `mission.json` (plan,
+outcome, closest approach, loop and link timing, GPU memory), `trajectory.csv`, `ground_truth.json`.
+
+**Result** (seed 0, the full mission, headless, the ground station with the fine-tuned detector): the drone lands
+on its pad after 6 min 16 s and 428 m. The ground station scanned 100 % of the area and photographed 99.8 %,
+found all 9 people and all 39 objects with 3 false alarms (all on one standing person), with pins 6 cm from the
+truth on average; its height map is within 4 mm of the true terrain where the ground has no step (0.10 m RMSE
+with the block walls). Closest approach to an obstacle: 2.4 m, the crown of a tree. The simulation runs at 17-21
+steps per second headless (1.7-2.1x real time) and the link costs it 0.9 ms per step. Comparison with the stock
+COCO detector, the geometry check with perfect boxes and the loop rates: the drone_gcs README (Results).
+
 ## Rescue finale: a quadruped walks the route planned on the drone's map
 
 After the survey, a ground robot goes to a person the drone found. A Unitree Go2, driven by Isaac Lab's
@@ -146,7 +201,8 @@ src/drone_lab/
   video.py          headless MP4 capture from a Kit visualizer, shared by the GPU scripts    (numpy only)
   reference.py      reference trajectories for the tracking task                            (torch only)
   register.py       task-registration callback for the isaaclab CLI without pip install
-  sar/              search-and-rescue site: assets, seeded scenario + ground truth, camera, spawner, labels
+  sar/              search-and-rescue site: assets, seeded scenario + ground truth, camera, spawner, labels,
+                    mission plan
   teaming/          rescue finale: traversability, A* planner, pure-pursuit follower, drone-map inputs, figures
   tasks/
     physics.py      physics preset (Isaac Sim PhysX)
@@ -161,6 +217,7 @@ scripts/
   synthetic_survey.py CPU: full pipeline with a kinematic stand-in for the policy
   eval_trajectory.py  GPU: evaluate a trajectory-tracking policy (reference vs flown, RMSE)
   sar_preview.py    GPU: render the SAR site (overview, photo map, drone frames) and check its scale and labels
+  sar_mission.py    GPU: the search-and-rescue mission, streamed live to the drone_gcs ground station
   gen_yolo_dataset.py GPU: render the detector dataset (RGB + instance segmentation over many seeded sites)
   rescue_finale.py  rescue finale: plan on the drone's map (CPU), walk it with the Go2 (GPU), follow-cam video
 tests/              CPU tests (run_cpu_tests.py or pytest)

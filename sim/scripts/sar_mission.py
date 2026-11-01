@@ -4,7 +4,8 @@ The trained tracking policy takes off from the landing pad, flies a lawnmower su
 ``DroneLab-SAR-ARL-Robot-1-v0``, comes back and lands on the pad. Every policy step (10 Hz) it streams through
 ``drone_gcs.link.Sender`` (non-blocking: a slow or absent ground station only costs dropped frames):
 
-* MISSION (area, map grid, planned path, landing pad) and GT_OBJECTS (the site's ground truth, evaluation only),
+* MISSION (area, map grid, planned path, landing pad) and, for the scorecard only, GT_OBJECTS (the site's ground
+  truth) and GT_TERRAIN (the true terrain height),
 * TELEMETRY (pose, velocity, waypoint, carrot, mission phase), SCAN (ray hits of the mapping scanner),
 * CAMERA (RGB, distance to the image plane, K and the ROS-optical pose of the downward camera),
 * END (landed / crashed / timeout, with the closest approach to obstacles).
