@@ -187,6 +187,13 @@ def test_depth_task_layout():
     assert camera.update_period == 0.0 and env_cfg.scene.lazy_sensor_update
     assert type(camera.renderer_cfg).__name__ == "NewtonWarpRendererCfg"
     term = env_cfg.observations.depth.depth_image
+    # image_depth plus a pose refresh from the camera's parent link before every read: on Isaac Sim PhysX + Newton
+    # Warp the camera otherwise renders from its spawn pose for the whole run (GPU check 2026-11-01)
+    from isaaclab_tasks.core.velocity import mdp
+
+    assert term.func.__name__ == "body_mounted_image_depth" and issubclass(term.func, mdp.image_depth)
+    assert term.params["asset_cfg"].name == "robot" and term.params["asset_cfg"].body_names == "trunk"
+    assert camera.prim_path.split("/")[-2] == term.params["asset_cfg"].body_names and camera.update_latest_camera_pose
     assert term.params["channel_first"] and term.params["data_type"] == "distance_to_camera"
     assert term.params["max_depth"] == camera.spawn.clipping_range[1]
     assert env_cfg.observations.policy.height_scan is None

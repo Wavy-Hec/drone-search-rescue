@@ -29,15 +29,26 @@ Design (3.0 APIs):
   camera renders when the observation reads it, i.e. once per policy step, whatever the period. A positive period
   would only add a device-to-host sync per read and, with float32 sensor timestamps, skip every other pose refresh
   late in long episodes.
+* Camera pose: the observation term :class:`body_mounted_image_depth` writes the trunk pose composed with the mount
+  offset into the camera right before each read. Without it, the Newton Warp renderer on Isaac Sim PhysX renders
+  from the camera's spawn pose for the whole run (GPU check 2026-11-01): ``update_latest_camera_pose`` re-reads the
+  camera prim's Fabric world matrix, and only the Kit RTX path keeps that matrix in step with the trunk.
 * Policy: rsl-rl ``CNNModel`` actor on ``policy`` (48 proprio) + ``depth``; MLP critic on ``policy`` + a noise-free
   ``privileged`` height scan (asymmetric actor-critic). The actor never sees the height scan.
 * Renderer: Newton Warp by default (kit-less Warp ray tracer, documented pairing with Isaac Sim PhysX, much lighter
   than RTX for depth-only images). ``renderer=isaacsim_rtx`` switches to the legacy Isaac RTX renderer inside Kit.
   OVRTX is not offered: it cannot share a process with Kit (Isaac Sim PhysX) and its runtime is not installed.
-* Size: 64x48 pixels and 1024 envs by default (see PORT_NOTES.md for the 16 GB memory budget).
+* Size: 64x48 pixels and 1024 envs by default (see PORT_NOTES.md for the 16 GB memory budget). Measured on the
+  RTX 5080 (2026-11-01, 1024 envs, training): 5.5 GB with Newton Warp, 7.3 GB with RTX; the camera render takes
+  4-5 ms (Warp) vs 17.5 ms (RTX) of a 70-110 ms env step, most of which is PhysX.
 """
 
+from typing import TYPE_CHECKING
+
+import torch
+
 import isaaclab.sim as sim_utils
+import isaaclab.utils.math as math_utils
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
@@ -52,6 +63,9 @@ from isaaclab_tasks.core.velocity.velocity_env_cfg import MySceneCfg, Observatio
 from isaaclab_tasks.utils import PresetCfg
 
 from .rough_env_cfg import CustomQuadRoughEnvCfg
+
+if TYPE_CHECKING:
+    from isaaclab.envs import ManagerBasedEnv
 
 DEPTH_CAMERA_WIDTH = 64
 """Depth image width [px] (2.x patch: 320)."""
@@ -87,6 +101,103 @@ class DepthCameraRendererCfg(PresetCfg):
     default: NewtonWarpRendererCfg = NewtonWarpRendererCfg(depth_clipping_behavior="max")
 
 
+_DEFAULT_CAMERA_CFG = SceneEntityCfg("tiled_camera")
+"""Default ``sensor_cfg`` of :class:`body_mounted_image_depth`, as in ``mdp.image_depth`` (the task sets its own)."""
+
+_DEFAULT_ROBOT_CFG = SceneEntityCfg("robot")
+"""Default ``asset_cfg`` of :class:`body_mounted_image_depth` (the task sets its own)."""
+
+
+class body_mounted_image_depth(mdp.image_depth):
+    """:class:`mdp.image_depth` for a camera rigidly mounted on a robot link; refreshes the camera pose first.
+
+    Isaac Lab 3.0 with Isaac Sim PhysX and a non-Kit renderer (Newton Warp): :class:`~isaaclab.sensors.Camera` reads
+    its pose from the camera prim's Fabric world matrix (``FabricFrameView``), and ``update_latest_camera_pose`` only
+    re-reads that matrix. Only the Kit RTX path keeps it in step with the parent link: it enables
+    ``/physics/fabricUpdateTransformations`` (``isaaclab/sensors/camera/camera.py``) and runs the Fabric hierarchy
+    update before rendering (``isaaclab_physx/renderers/fabric.py``). In a headless Newton Warp run nothing moves
+    the child camera prim, so the camera renders from its spawn pose for the whole run. GPU probe, 2026-11-01:
+    camera displacement exactly 0 over 150 policy steps, while the trunk walked 3.4 m away and turned 136 deg;
+    the robot then walked into its own camera's view.
+
+    Before every read this term composes the link pose (``body_link_pose_w``, which brings the articulation
+    kinematics up to date after resets) with the camera's configured offset and writes it with
+    :meth:`~isaaclab.sensors.Camera.set_world_poses`. The renderer then draws from the current pose (measured: camera
+    pose = trunk pose x offset to 4e-6 m; >= 99.998 % of the pixels match a terrain-only ray cast within 3 cm or lie
+    beyond the far clip in both, also right after resets; the rest are the robot's own legs).
+    The term is active only for Isaac Sim PhysX with a non-Kit renderer. The RTX images already follow the trunk
+    (measured), and in a control test a pose written this way did not reach the RTX image. Newton physics computes
+    the camera pose from the body state (``NewtonSiteFrameView``; measured error 1e-7 m).
+
+    Extra parameter (besides those of :class:`mdp.image_depth`):
+
+    * ``asset_cfg``: the articulation and the single body the camera prim is attached to.
+    """
+
+    def __init__(self, cfg: ObsTerm, env: "ManagerBasedEnv"):
+        super().__init__(cfg, env)
+        from isaaclab_physx.physics import PhysxCfg  # runtime import: keeps the cfg module light
+
+        self._camera = env.scene.sensors[cfg.params["sensor_cfg"].name]
+        asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
+        self._asset = env.scene[asset_cfg.name]
+        body_ids = asset_cfg.body_ids
+        if isinstance(body_ids, slice) or len(body_ids) != 1:
+            raise ValueError(f"body_mounted_image_depth needs exactly one body, got {asset_cfg.body_names!r}.")
+        self._body_id = int(body_ids[0])
+        renderer_type = getattr(self._camera.cfg.renderer_cfg, "renderer_type", None)
+        # Kit RTX ("default" / "isaac_rtx", see isaaclab/app/sim_launcher.py `_is_kit_camera`) keeps the pose current
+        self.refresh_pose = isinstance(env.cfg.sim.physics, PhysxCfg) and renderer_type not in (
+            None,
+            "default",
+            "isaac_rtx",
+        )
+        offset = self._camera.cfg.offset
+        rot = math_utils.convert_camera_frame_orientation_convention(
+            torch.tensor([offset.rot], dtype=torch.float32), origin=offset.convention, target="opengl"
+        )
+        self._offset_rot = math_utils.normalize(rot).to(env.device).expand(env.num_envs, 4).contiguous()
+        self._offset_pos = torch.tensor([offset.pos], dtype=torch.float32, device=env.device)
+        body_name = self._asset.body_names[self._body_id]
+        print(
+            f"[INFO] {self._camera.cfg.prim_path}: pose refresh from '{body_name}' "
+            f"{'on' if self.refresh_pose else 'off'} (physics {type(env.cfg.sim.physics).__name__}, "
+            f"renderer {renderer_type})"
+        )
+
+    def __call__(
+        self,
+        env: "ManagerBasedEnv",
+        sensor_cfg: SceneEntityCfg = _DEFAULT_CAMERA_CFG,
+        data_type: str = "distance_to_image_plane",
+        convert_perspective_to_orthogonal: bool = False,
+        normalize: bool = True,
+        invalid_value: float = 0.0,
+        max_depth: float | None = None,
+        tanh_scale: float | None = None,
+        channel_first: bool = False,
+        frame_stack: int = 1,
+        asset_cfg: SceneEntityCfg = _DEFAULT_ROBOT_CFG,
+    ) -> torch.Tensor:
+        if self.refresh_pose:
+            link_pose = self._asset.data.body_link_pose_w.torch[:, self._body_id]
+            link_quat = link_pose[:, 3:7]
+            pos = link_pose[:, :3] + math_utils.quat_apply(link_quat, self._offset_pos)
+            self._camera.set_world_poses(pos, math_utils.quat_mul(link_quat, self._offset_rot), convention="opengl")
+        return super().__call__(
+            env,
+            sensor_cfg,
+            data_type,
+            convert_perspective_to_orthogonal,
+            normalize,
+            invalid_value,
+            max_depth,
+            tanh_scale,
+            channel_first,
+            frame_stack,
+        )
+
+
 @configclass
 class CustomQuadDepthSceneCfg(MySceneCfg):
     """Velocity-task scene plus the trunk-mounted depth camera."""
@@ -97,7 +208,8 @@ class CustomQuadDepthSceneCfg(MySceneCfg):
         # period would add a host sync per read (camera.py `_env_mask_has_any`) and skip pose refreshes once the
         # float32 sensor timestamps grow past ~16 s
         update_period=0.0,
-        # the camera rides on the trunk, so non-Kit renderers need its pose refreshed on every capture
+        # the camera rides on the trunk: re-read its pose on every capture. On Isaac Sim PhysX + Newton Warp that
+        # read alone returns the spawn pose; `body_mounted_image_depth` writes the current pose first
         update_latest_camera_pose=True,
         offset=CameraCfg.OffsetCfg(pos=DEPTH_CAMERA_POS, rot=DEPTH_CAMERA_ROT, convention="opengl"),
         data_types=["distance_to_camera"],
@@ -122,7 +234,8 @@ class CustomQuadDepthObservationsCfg(ObservationsCfg):
         """Depth image for the CNN actor, shape ``(N, 1, H, W)``."""
 
         depth_image = ObsTerm(
-            func=mdp.image_depth,
+            # mdp.image_depth plus a camera pose refresh from the trunk (frozen spawn pose otherwise, see the class)
+            func=body_mounted_image_depth,
             params={
                 "sensor_cfg": SceneEntityCfg("depth_camera"),
                 "data_type": "distance_to_camera",
@@ -130,6 +243,7 @@ class CustomQuadDepthObservationsCfg(ObservationsCfg):
                 "max_depth": DEPTH_MAX_RANGE,
                 "invalid_value": DEPTH_MAX_RANGE,
                 "channel_first": True,
+                "asset_cfg": SceneEntityCfg("robot", body_names="trunk"),
             },
             # 2.x: +-0.02 on metric depth (= +-2 cm); the image is now normalized by 4 m, so +-0.005 keeps 2 cm
             noise=Unoise(n_min=-0.005, n_max=0.005),
