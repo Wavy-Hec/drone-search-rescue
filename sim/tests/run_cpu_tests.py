@@ -29,6 +29,9 @@ MODULES = (
     "test_env_cfgs",
     "test_registration",
     "test_survey_map_offline",
+    "test_sar_labels",
+    "test_sar_scenario",
+    "test_sar_env_cfg",
 )
 
 

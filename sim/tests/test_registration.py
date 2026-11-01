@@ -5,6 +5,13 @@ from __future__ import annotations
 from _runner import main_for, require
 
 EXPECTED = {
+    "DroneLab-SAR-ARL-Robot-1-v0": {
+        "entry_point": "isaaclab.envs:ManagerBasedRLEnv",
+        "env_cfg_entry_point": "drone_lab.tasks.sar.config.arl_robot_1.sar_env_cfg:SarEnvCfg",
+        # flown by the survey task's policy, so it shares the survey runner config
+        "rsl_rl_cfg_entry_point": "drone_lab.tasks.survey.config.arl_robot_1.agents.rsl_rl_ppo_cfg:SurveyPPORunnerCfg",
+        "default_agent": "rsl_rl",
+    },
     "DroneLab-Survey-ARL-Robot-1-v0": {
         "entry_point": "isaaclab.envs:ManagerBasedRLEnv",
         "env_cfg_entry_point": "drone_lab.tasks.survey.config.arl_robot_1.survey_env_cfg:SurveyEnvCfg",
