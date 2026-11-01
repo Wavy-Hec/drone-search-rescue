@@ -360,9 +360,14 @@ def main():
                         ok = np.all(np.isfinite(h), axis=1)
                         hits_log.append(np.column_stack([np.full(ok.sum(), t), e_col[ok], h[ok]]).astype(np.float32))
                 if writer is not None and step % max(1, args_cli.video_stride) == 0:
-                    frame = capture_frame(base.sim, viz)
-                    if frame is not None and frame.any():
-                        writer.append_data(frame)
+                    try:
+                        frame = capture_frame(base.sim, viz)
+                        if frame is not None and frame.any():
+                            writer.append_data(frame)
+                    except Exception as exc:  # a video problem must not cost the survey
+                        print(f"[survey_map] WARNING: video capture failed ({exc}); continuing without video.")
+                        writer.close()
+                        writer = None
                 # a drone is finished once its carrot reached the end and it is close to the last point
                 close = torch.linalg.norm(robot.data.root_pos_w.torch - end_points, dim=-1) < 0.5
                 finished |= active & term.done & close

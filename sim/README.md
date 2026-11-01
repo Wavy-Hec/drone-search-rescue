@@ -75,7 +75,7 @@ isaaclab train --rl_library rsl_rl --task IsaacContrib-TrackPositionNoObstacles-
 
 # 2. Export it (writes exported/policy.pt + policy.onnx next to the checkpoint). Play keeps looping
 #    until Ctrl+C; the export happens first, so a timeout is enough. (--video would need moviepy<2.)
-timeout --signal=INT 240 isaaclab play --rl_library rsl_rl \
+timeout --signal=INT 600 isaaclab play --rl_library rsl_rl \
     --task IsaacContrib-TrackPositionNoObstacles-ARL-Robot-1 --num_envs 16 --checkpoint latest
 RUN=$(ls -td logs/rsl_rl/arl_robot_1_track_position_state_based/*/ | head -1)
 ls $RUN/exported        # policy.pt  policy.onnx
@@ -195,3 +195,7 @@ CUDA_VISIBLE_DEVICES= python tests/run_cpu_tests.py                             
 * The built-in tracking task gives the `flat_orientation_l2` penalty a positive weight (+1.0); the new
   trajectory task uses -1.0.
 * The synthetic runs use a point-mass stand-in for the policy, so their tracking numbers are not the policy's.
+* A survey stops for a drone when it crashes (contact with anything, flipping, or falling below the terrain).
+  If the contact check ever fires without a real collision, disable it for a run with the Hydra token
+  `env.terminations.collision=null`.
+* `survey_map.py` also accepts the raw training checkpoint (`model_*.pt`), so step 2 (export) is optional.

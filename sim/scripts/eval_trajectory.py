@@ -141,11 +141,16 @@ def main():
                 ref_v = term.ref_vel_w[0].cpu().numpy()
                 rows.append([float(term.t[0]), *pos, *ref, *vel, *ref_v])
                 if writer is not None:
-                    if not base.sim.is_rendering:
-                        base.sim.forward()
-                    frame = viz.render_rgb_array()
-                    if frame is not None and frame.any():
-                        writer.append_data(np.ascontiguousarray(frame[:, :, :3]))
+                    try:
+                        if not base.sim.is_rendering:
+                            base.sim.forward()
+                        frame = viz.render_rgb_array()
+                        if frame is not None and frame.any():
+                            writer.append_data(np.ascontiguousarray(frame[:, :, :3]))
+                    except Exception as exc:  # never lose the evaluation because of the video
+                        print(f"[eval_trajectory] WARNING: video capture failed ({exc}); continuing without video.")
+                        writer.close()
+                        writer = None
         if writer is not None:
             writer.close()
         env.close()
