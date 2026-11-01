@@ -66,7 +66,9 @@ class TestSegToYolo(unittest.TestCase):
         seg = synthetic_seg()
         boxes, dropped = instance_boxes(seg, parse_id_mapping(INFO), min_area=20, min_side=4)
         self.assertEqual(dropped["tiny_area"], 1)
-        self.assertEqual([(b.inst, b.x0, b.y0, b.x1, b.y1) for b in boxes][:2], [(5, 10, 5, 29, 14), (7, 30, 20, 39, 29)])
+        self.assertEqual(
+            [(b.inst, b.x0, b.y0, b.x1, b.y1) for b in boxes][:2], [(5, 10, 5, 29, 14), (7, 30, 20, 39, 29)]
+        )
         class_ids = {c: i for i, c in enumerate(CLASSES)}
         sizes = {"car": (20.0, 10.0), "tent": (10.0, 10.0)}
         # default: the cut-off car is labelled with its visible box; the tiny person is dropped and painted over
@@ -136,6 +138,37 @@ class TestSegToYolo(unittest.TestCase):
             self.assertEqual(rep["dataset"]["val_boxes"], 8)
             self.assertEqual(rep["dataset"]["classes"], {"0": "car", "1": "tent", "2": "person"})
             self.assertEqual(rep["train_args"]["imgsz"], 640)
+        finally:
+            rmtree(tmp)
+
+    def test_split_capture_and_unclipped_boxes(self):
+        # train/ val/ test/ folders are the splits; bboxUnclipped (full box of a cut-off object) sets its visible share
+        tmp = Path(short_tmpdir("dgcs_split"))
+        try:
+            src, out = tmp / "cap", tmp / "yolo"
+            counts = {"train": 3, "val": 2, "test": 1}
+            for split, n in counts.items():
+                (src / split).mkdir(parents=True)
+                # the cut-off car (id 11, 6 px visible): 6 of 8 px in train / test, 6 of 20 px in val
+                full_box = [-14, 30, 5, 39] if split == "val" else [-2, 30, 5, 39]
+                for k in range(n):
+                    key = f"{split}_{k}"
+                    cv2.imwrite(str(src / split / f"rgb_{key}.png"), np.full((H, W, 3), 90, np.uint8))
+                    cv2.imwrite(str(src / split / f"instance_{key}.png"), synthetic_seg().astype(np.uint16))
+                    info = {**INFO, "bboxUnclipped": {"11": full_box}}
+                    (src / split / f"instance_{key}.json").write_text(json.dumps(info))
+            stats = convert_dataset(src, out, ConvertConfig(classes=CLASSES, max_truncation=0.6))
+            self.assertEqual(stats["images"], counts)
+            self.assertEqual(stats["split"]["mode"], "folders")
+            self.assertEqual(stats["warnings"], [])
+            self.assertEqual(stats["dropped"], {"tiny_area": 6, "unknown_class": 6, "truncated": 2})
+            self.assertEqual(stats["painted_instances"], 8)
+            self.assertIn("val: images/val\ntest: images/test\n", (out / "data.yaml").read_text())
+            for split in counts:
+                labels = sorted((out / "labels" / split).glob("*.txt"))
+                self.assertEqual(len(labels), counts[split])
+                for p in labels:
+                    self.assertEqual(p.read_text().splitlines(), EXPECTED if split == "val" else EXPECTED_DEFAULT)
         finally:
             rmtree(tmp)
 

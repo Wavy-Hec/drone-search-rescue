@@ -4,6 +4,8 @@ Input layouts (one directory, ``<k>`` = frame key, e.g. ``000123`` or ``env0_000
 
 * flat:    ``rgb_<k>.png|jpg|npy``, ``instance_<k>.npy|png`` and optionally ``instance_<k>.json``
 * subdirs: ``rgb/<k>.png|jpg|npy``, ``instance/<k>.npy|png`` and optionally ``instance/<k>.json``
+* split:   ``train/``, ``val/`` and optionally ``test/``, each a capture in one of the layouts above; the folders
+  are the splits (e.g. scenes held out for val / test), so no frame changes split
 
 ``instance`` is an integer (H, W) or (H, W, 1) array of instance ids (Isaac Lab ``instance_id_segmentation_fast``
 with ``colorize_instance_id_segmentation=False``, or ``instance_segmentation``). The JSON is that
@@ -13,13 +15,16 @@ files when ids are stable. Prim paths are turned into classes with ``prim_rules`
 
 Labels: one ``<class> <cx> <cy> <w> <h>`` line per instance, normalised to [0, 1], box = the tight box of the
 visible mask. Objects cut off by the image border are labelled with their visible box (usual YOLO practice;
-``max_truncation < 1`` drops the ones with too little left, visible fraction estimated from the loose box if
-given, else from the median full size of the class). Tiny instances (area / side) are dropped. A dropped
-instance of a wanted class is painted over with the image's mean colour (``mask_dropped``), so the detector
-is not trained to call a visible object background. Instances of other classes are background and stay.
+``max_truncation < 1`` drops the ones with too little left). The visible fraction comes from the object's full
+box when the frame JSON has one (``bboxUnclipped``: {id: [x0, y0, x1, y1]}, inclusive pixels that may lie past
+the image edge, e.g. from a render with a wider margin), else from the median full size of the class. Tiny
+instances (area / side) are dropped. A dropped instance of a wanted class is painted over with the image's mean
+colour (``mask_dropped``), so the detector is not trained to call a visible object background. Instances of
+other classes are background and stay.
 
-Split: blocks of consecutive frames go to val (no near-duplicate leakage). Blocks are shrunk for small
-captures so that the val share stays close to ``val_frac`` and train is never empty.
+Split: the folders of a split capture, else blocks of consecutive frames go to val (no near-duplicate
+leakage). Blocks are shrunk for small captures so that the val share stays close to ``val_frac`` and train is
+never empty.
 """
 
 from __future__ import annotations
@@ -40,6 +45,9 @@ log = logging.getLogger("drone_gcs.dataset")
 IGNORE_LABELS = frozenset({"", "background", "unlabelled", "unlabeled", "unknown", "none"})
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".npy")
 SEG_EXTS = (".npy", ".png")
+SPLITS = ("train", "val", "test")
+UNCLIPPED_KEY = "bboxUnclipped"
+"""Key of the full (unclipped) boxes of cut-off instances in a frame's JSON."""
 
 
 @dataclass
@@ -131,7 +139,7 @@ def instance_boxes(
     dropped: Counter = Counter()
     boxes = []
     ids, counts = np.unique(seg, return_counts=True)
-    for i, n in zip(ids.tolist(), counts.tolist()):
+    for i, n in zip(ids.tolist(), counts.tolist(), strict=True):
         cls = id_to_class.get(int(i))
         if cls is None:
             continue
@@ -251,6 +259,7 @@ class Frame:
     rgb: Path
     seg: Path
     info: Path | None
+    split: str | None = None  # set for the frames of a split capture (its folder)
 
 
 def find_frames(src: str | Path) -> list[Frame]:
@@ -272,10 +281,34 @@ def find_frames(src: str | Path) -> list[Frame]:
     return frames
 
 
+def find_split_frames(src: str | Path) -> list[Frame]:
+    """Frames of a split capture (``train/``, ``val/``, ``test/`` folders, each a capture); [] for other layouts."""
+    frames = []
+    for split in SPLITS:
+        if (Path(src) / split).is_dir():
+            for fr in find_frames(Path(src) / split):
+                fr.split = split
+                frames.append(fr)
+    return frames
+
+
+def unclipped_boxes(info: dict) -> dict[int, tuple[int, int, int, int]]:
+    """``{instance_id: (x0, y0, x1, y1)}`` full boxes of the cut-off instances in a frame's JSON (may be empty)."""
+    raw = info.get(UNCLIPPED_KEY) if isinstance(info, dict) else None
+    out = {}
+    for k, box in (raw or {}).items():
+        try:
+            x0, y0, x1, y1 = (int(v) for v in box)
+            out[int(k)] = (x0, y0, x1, y1)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def load_image(p: Path) -> np.ndarray:
     if p.suffix.lower() == ".npy":
         return np.load(p)
-    import cv2  # noqa: PLC0415
+    import cv2
 
     img = cv2.imread(str(p), cv2.IMREAD_UNCHANGED)
     if img is None:
@@ -293,7 +326,7 @@ def load_seg(p: Path) -> np.ndarray:
 def effective_block_size(n_frames: int, cfg: ConvertConfig) -> int:
     """Block length for the block split: at most ``cfg.block_size``, and no longer than the val target split
     into equal blocks, so a small capture gets a val share near ``val_frac`` instead of one oversized block."""
-    n_val = int(round(cfg.val_frac * n_frames))
+    n_val = round(cfg.val_frac * n_frames)
     bs = max(1, int(cfg.block_size))
     if n_val <= 0:
         return bs
@@ -305,7 +338,7 @@ def split_keys(keys: list[str], cfg: ConvertConfig) -> dict[str, str]:
     """``{key: "train" | "val"}``. Block mode keeps runs of consecutive frames together."""
     rng = random.Random(cfg.seed)
     out = {}
-    n_val = int(round(cfg.val_frac * len(keys)))
+    n_val = round(cfg.val_frac * len(keys))
     if cfg.split_mode == "random":
         idx = list(range(len(keys)))
         rng.shuffle(idx)
@@ -336,20 +369,21 @@ def split_keys(keys: list[str], cfg: ConvertConfig) -> dict[str, str]:
     return out
 
 
-def convert_dataset(src: str | Path, out: str | Path, cfg: ConvertConfig | None = None, mapping: dict | None = None) -> dict:
-    """Convert a capture directory into ``out/{images,labels}/{train,val}`` + ``data.yaml``; returns stats."""
+def convert_dataset(
+    src: str | Path, out: str | Path, cfg: ConvertConfig | None = None, mapping: dict | None = None
+) -> dict:
+    """Convert a capture into ``out/{images,labels}/{train,val[,test]}`` + ``data.yaml``; returns stats."""
     cfg = cfg or ConvertConfig()
     src, out = Path(src), Path(out)
-    frames = find_frames(src)
+    frames = find_split_frames(src) or find_frames(src)
     if not frames:
-        raise FileNotFoundError(f"no rgb_*/instance_* (or rgb/ + instance/) frames in {src}")
+        raise FileNotFoundError(f"no rgb_*/instance_* (or rgb/ + instance/, or train/ + val/) frames in {src}")
     global_map = parse_id_mapping(mapping, cfg.prim_rules) if mapping else {}
 
-    def id_map(fr: Frame) -> dict[int, str]:
-        m = dict(global_map)
-        if fr.info is not None:
-            m.update(parse_id_mapping(json.loads(fr.info.read_text()), cfg.prim_rules))
-        return m
+    def frame_info(fr: Frame) -> tuple[dict[int, str], dict[int, tuple[int, int, int, int]]]:
+        """Instance id -> class, and the full boxes of the cut-off instances."""
+        info = json.loads(fr.info.read_text()) if fr.info is not None else {}
+        return {**global_map, **parse_id_mapping(info, cfg.prim_rules)}, unclipped_boxes(info)
 
     # pass 1: class list and median size of fully visible boxes per class
     sizes: dict[str, list] = defaultdict(list)
@@ -357,7 +391,7 @@ def convert_dataset(src: str | Path, out: str | Path, cfg: ConvertConfig | None 
     for fr in frames:
         seg = load_seg(fr.seg)
         H, W = seg.shape
-        boxes, _ = instance_boxes(seg, id_map(fr), cfg.min_area, cfg.min_side)
+        boxes, _ = instance_boxes(seg, frame_info(fr)[0], cfg.min_area, cfg.min_side)
         for b in boxes:
             seen.add(b.cls)
             tx, ty = touches_border(b, W, H)
@@ -368,30 +402,39 @@ def convert_dataset(src: str | Path, out: str | Path, cfg: ConvertConfig | None 
     class_sizes = {c: tuple(np.median(np.array(v), axis=0)) for c, v in sizes.items() if v}
 
     # pass 2: write
-    keys = [f.key for f in frames]
-    splits = split_keys(keys, cfg)
+    split_capture = frames[0].split is not None
+    if split_capture:
+        assigned = [fr.split for fr in frames]
+    else:
+        by_key = split_keys([f.key for f in frames], cfg)
+        assigned = [by_key[fr.key] for fr in frames]
+    used = [sp for sp in SPLITS if sp != "test" or "test" in assigned]
     for sub in ("images", "labels"):
-        for sp in ("train", "val"):
+        for sp in used:
             (out / sub / sp).mkdir(parents=True, exist_ok=True)
     stats = {
-        "frames": len(frames), "images": Counter(), "boxes": Counter(), "per_class": defaultdict(Counter),
-        "dropped": Counter(), "painted_instances": 0,
-    }  # fmt: skip
-    for fr in frames:
+        "frames": len(frames),
+        "images": Counter(),
+        "boxes": Counter(),
+        "per_class": defaultdict(Counter),
+        "dropped": Counter(),
+        "painted_instances": 0,
+    }
+    for fr, sp in zip(frames, assigned, strict=True):
         seg = load_seg(fr.seg)
-        lines, dropped, mask_ids = frame_annotations(seg, id_map(fr), class_ids, cfg, class_sizes)
+        id_to_class, unclipped = frame_info(fr)
+        lines, dropped, mask_ids = frame_annotations(seg, id_to_class, class_ids, cfg, class_sizes, unclipped)
         stats["dropped"].update(dropped)
         if not lines and cfg.skip_empty:
             stats["dropped"]["empty_frame"] += 1
             continue
-        sp = splits[fr.key]
         stem = f"{fr.key}"
         paint = cfg.mask_dropped and bool(mask_ids)
         suffix = fr.rgb.suffix.lower()
         if cfg.image_format == "copy" and suffix != ".npy" and not paint:
             shutil.copyfile(fr.rgb, out / "images" / sp / f"{stem}{suffix}")
         else:
-            import cv2  # noqa: PLC0415
+            import cv2
 
             img = load_image(fr.rgb)
             if suffix == ".npy":  # numpy captures are RGB(A)
@@ -411,19 +454,22 @@ def convert_dataset(src: str | Path, out: str | Path, cfg: ConvertConfig | None 
         for ln in lines:
             stats["per_class"][sp][classes[int(ln.split()[0])]] += 1
     names = "\n".join(f"  {i}: {c}" for i, c in enumerate(classes))
+    split_lines = "".join(f"{sp}: images/{sp}\n" for sp in used)
     (out / "data.yaml").write_text(
-        f"# written by drone_gcs seg_to_yolo\npath: {out.resolve()}\ntrain: images/train\nval: images/val\nnames:\n{names}\n"
+        f"# written by drone_gcs seg_to_yolo\npath: {out.resolve()}\n{split_lines}names:\n{names}\n"
     )
     n_img = sum(stats["images"].values())
     val_share = stats["images"]["val"] / n_img if n_img else 0.0
     warnings = []
-    bs = effective_block_size(len(keys), cfg) if cfg.split_mode == "block" else None
+    bs = effective_block_size(len(frames), cfg) if cfg.split_mode == "block" and not split_capture else None
     if bs is not None and bs < cfg.block_size:
         warnings.append(f"small capture: val blocks of {bs} frames instead of {cfg.block_size}")
-    if n_img and abs(val_share - cfg.val_frac) > 0.05:
+    if n_img and not split_capture and abs(val_share - cfg.val_frac) > 0.05:
         warnings.append(f"val share {val_share:.0%} differs from val_frac {cfg.val_frac:.0%}")
     if n_img and not stats["images"]["train"]:
         warnings.append("no training images")
+    if n_img and split_capture and not stats["images"]["val"]:
+        warnings.append("no validation images")
     for w in warnings:
         log.warning("seg_to_yolo: %s", w)
     result = {
@@ -436,10 +482,14 @@ def convert_dataset(src: str | Path, out: str | Path, cfg: ConvertConfig | None 
         "per_class": {k: dict(v) for k, v in stats["per_class"].items()},
         "dropped": dict(stats["dropped"]),
         "painted_instances": stats["painted_instances"],
-        "split": {"mode": cfg.split_mode, "block_size": bs, "val_share": round(val_share, 4)},
+        "split": {
+            "mode": "folders" if split_capture else cfg.split_mode,
+            "block_size": bs,
+            "val_share": round(val_share, 4),
+        },
         "warnings": warnings,
         "class_median_size_px": {k: [round(float(x), 1) for x in v] for k, v in class_sizes.items()},
-        "config": {k: v for k, v in cfg.__dict__.items()},
+        "config": dict(cfg.__dict__),
     }
     (out / "dataset_stats.json").write_text(json.dumps(result, indent=2))
     return result
