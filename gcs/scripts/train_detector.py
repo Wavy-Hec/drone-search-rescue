@@ -2,7 +2,8 @@
 """Fine-tune the YOLO detector on simulator images (dataset from scripts/seg_to_yolo.py).
 
 Starts from the COCO nano weights, trains with defaults sized for ~2000 images on a 16 GB GPU, copies the best
-checkpoint to ``models/detector.pt`` (tracked with Git LFS) and writes ``models/detector_metrics.json``.
+checkpoint to ``--out`` (default ``models/detector.pt``, tracked with Git LFS) and writes the training summary
+next to it as ``<out name>_metrics.json`` (default ``models/detector_metrics.json``).
 The GCS then uses it with ``python scripts/gcs.py --weights models/detector.pt``.
 
 Defaults and why:
@@ -110,8 +111,8 @@ def main(argv=None) -> int:
     p.add_argument("--name", default=f"detector_{time.strftime('%Y%m%d_%H%M%S')}")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", default=str(PROJECT_ROOT / "models" / "detector.pt"), help="where best.pt is copied")
-    p.add_argument("--offline", action="store_true", help="set YOLO_OFFLINE=1 (no downloads/analytics; plots may lack fonts)")
-    p.add_argument("--dry-run", action="store_true", help="check the dataset and print the training config, do not train")
+    p.add_argument("--offline", action="store_true", help="set YOLO_OFFLINE=1 (no update checks or analytics)")
+    p.add_argument("--dry-run", action="store_true", help="check the dataset, print the training config and stop")
     a = p.parse_args(argv)
 
     data = Path(a.data).expanduser()
@@ -137,7 +138,7 @@ def main(argv=None) -> int:
         problems.append("no training images")
     if n_val == 0:
         problems.append("no validation images")
-    if not Path(a.model).exists():
+    if not Path(a.model).expanduser().exists():
         problems.append(f"model weights {a.model} not found")
     report["problems"] = problems
     print(json.dumps(report, indent=2))
@@ -152,11 +153,11 @@ def main(argv=None) -> int:
     from ultralytics import YOLO  # noqa: PLC0415
 
     t0 = time.time()
-    model = YOLO(a.model)
+    model = YOLO(str(Path(a.model).expanduser()))
     results = model.train(**train_args)
     trainer = model.trainer
     best = Path(trainer.best)
-    out = Path(a.out)
+    out = Path(a.out).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(best, out)
     metrics = {k: float(v) for k, v in getattr(results, "results_dict", {}).items()}
@@ -178,8 +179,9 @@ def main(argv=None) -> int:
         "per_class": per_class,
         **report,
     }
-    (out.parent / "detector_metrics.json").write_text(json.dumps(summary, indent=2))
-    print(f"best weights -> {out}\nmetrics -> {out.parent / 'detector_metrics.json'}")
+    metrics_path = out.with_name(f"{out.stem}_metrics.json")
+    metrics_path.write_text(json.dumps(summary, indent=2))
+    print(f"best weights -> {out}\nmetrics -> {metrics_path}")
     return 0
 
 
