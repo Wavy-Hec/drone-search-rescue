@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MODEL = "/home/hector/isaac_ws/assets/models/yolo26n.pt"
+DEFAULT_MODEL = os.path.expanduser("~/isaac_ws/assets/models/yolo26n.pt")
 
 
 def read_data_yaml(path: Path) -> dict:

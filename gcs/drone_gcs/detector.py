@@ -33,7 +33,7 @@ import numpy as np
 log = logging.getLogger("drone_gcs.detector")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 AUTO_GPU_MIN_FREE_MIB = 2048
-DEFAULT_WEIGHTS = os.environ.get("DRONE_GCS_WEIGHTS", "/home/hector/isaac_ws/assets/models/yolo26n.pt")
+DEFAULT_WEIGHTS = os.environ.get("DRONE_GCS_WEIGHTS", os.path.expanduser("~/isaac_ws/assets/models/yolo26n.pt"))
 FINETUNED_WEIGHTS = PROJECT_ROOT / "models" / "detector.pt"  # written by scripts/train_detector.py
 
 

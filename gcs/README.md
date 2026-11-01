@@ -108,8 +108,8 @@ HUD (bottom bar):
 The sender only needs the standard library and numpy, so it imports inside Isaac Sim's Python:
 
 ```python
-import sys
-sys.path.insert(0, "~/isaac_ws/projects/drone_gcs")   # or: pip install --no-deps -e <this repo>
+import os, sys
+sys.path.insert(0, os.path.expanduser("~/isaac_ws/projects/drone_gcs"))   # or: pip install --no-deps -e <this repo>
 from drone_gcs.link import Sender
 from drone_gcs.isaac_bridge import IsaacLabStreamer               # duck-typed Isaac Lab 3.0 adapter
 
@@ -148,7 +148,7 @@ Or call the `Sender` methods directly with numpy arrays, CPU or GPU torch tensor
 * TCP instead of the UNIX socket (for example from a container): `Sender("tcp://127.0.0.1:47800")` with
   `python scripts/gcs.py --addr tcp://0.0.0.0:47800`, or set `DRONE_GCS_ADDR` on both sides.
 * Import check (it passes, see the tests):
-  `conda activate env_isaaclab && python -c "import sys; sys.path.insert(0, '~/isaac_ws/projects/drone_gcs'); from drone_gcs.link import Sender"`.
+  `conda activate env_isaaclab && python -c "import os, sys; sys.path.insert(0, os.path.expanduser('~/isaac_ws/projects/drone_gcs')); from drone_gcs.link import Sender"`.
   `pip install --no-deps -e .` also works (base dependency: numpy only). It was **not** done, to leave
   env_isaaclab untouched.
 

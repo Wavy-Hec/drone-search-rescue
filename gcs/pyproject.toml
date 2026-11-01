@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Hector" }]
 # The sender side (drone_gcs.link / protocol / geometry / isaac_bridge) needs only numpy, so the base install is
-# safe inside Isaac Sim's Python:  pip install --no-deps -e /home/hector/isaac_ws/projects/drone_gcs
+# safe inside Isaac Sim's Python (run it in this folder):  pip install --no-deps -e .
 dependencies = ["numpy>=1.24"]
 
 [project.optional-dependencies]

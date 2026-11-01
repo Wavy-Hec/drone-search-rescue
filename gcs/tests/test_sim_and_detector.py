@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from drone_gcs.detector import ColorBlobDetector, Detection, DetectorWorker
+from drone_gcs.detector import DEFAULT_WEIGHTS, ColorBlobDetector, Detection, DetectorWorker
 from drone_gcs.geometry import C_BODY_TO_NADIR_CAM, PinholeCamera, intrinsics_from_fov, quat_from_euler, quat_to_matrix
 from drone_gcs.mapping import GridSpec
 from drone_gcs.sim.fake_world import FakeWorld
@@ -131,7 +131,7 @@ class TestDetectors(unittest.TestCase):
         self.assertGreater(wk.n_dropped, 0)
         self.assertGreater(res[0][2], 40)  # inference ms reported
 
-    @unittest.skipUnless(os.path.exists("/home/hector/isaac_ws/assets/models/yolo26n.pt"), "YOLO weights not found")
+    @unittest.skipUnless(os.path.exists(DEFAULT_WEIGHTS), "YOLO weights not found")
     def test_yolo_wrapper_on_cpu(self):
         try:
             import ultralytics  # noqa: F401
