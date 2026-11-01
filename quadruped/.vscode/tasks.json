@@ -2,9 +2,11 @@
     "version": "2.0.0",
     "tasks": [
         {
+            // This project lives in the conda env `env_isaaclab` (pip --no-deps -e install), not a uv venv:
+            // `uv run` here would try to build a separate .venv. Writes .vscode/settings.json + pyrightconfig.json.
             "label": "setup_python_env",
             "type": "shell",
-            "command": "uv run isaaclab --editor",
+            "command": "bash -c 'source ~/anaconda3/etc/profile.d/conda.sh && conda activate env_isaaclab && isaaclab --editor'",
             "problemMatcher": []
         }
     ]

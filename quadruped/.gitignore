@@ -15,3 +15,6 @@ wandb/
 .vscode/settings.json
 .vscode/launch.json
 pyrightconfig.json
+
+# `isaaclab play` writes exported/policy.pt + policy.onnx (and videos/) next to the loaded checkpoint
+checkpoints_2x/exported/

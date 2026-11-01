@@ -5,10 +5,112 @@
             "name": "Python: Current File",
             "type": "debugpy",
             "request": "launch",
-            // Use the interpreter recorded by `isaaclab --editor`; VS Code skips wrapper scripts such as python.sh
             "python": "${config:python.defaultInterpreterPath}",
             "program": "${file}",
             "console": "integratedTerminal"
         },
+        {
+            "name": "Train Isaac-Velocity-Rough-Custom-Quad-v0 (rsl_rl, PhysX)",
+            "type": "debugpy",
+            "request": "launch",
+            "python": "${config:python.defaultInterpreterPath}",
+            "module": "isaaclab",
+            "args": [
+                "train",
+                "--rl_library",
+                "rsl_rl",
+                "--task",
+                "Isaac-Velocity-Rough-Custom-Quad-v0",
+                "--num_envs",
+                "1024",
+                "physics=isaacsim_physx"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Play converted 2.x checkpoint on Isaac-Velocity-Rough-Custom-Quad-v0 (PhysX, Kit viewer)",
+            "type": "debugpy",
+            "request": "launch",
+            "python": "${config:python.defaultInterpreterPath}",
+            "module": "isaaclab",
+            "args": [
+                "play",
+                "--rl_library",
+                "rsl_rl",
+                "--task",
+                "Isaac-Velocity-Rough-Custom-Quad-v0",
+                "--num_envs",
+                "32",
+                "--checkpoint",
+                "${workspaceFolder}/checkpoints_2x/height_scanner_model_rslrl5.pt",
+                "--viz",
+                "kit",
+                "physics=isaacsim_physx"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Train Isaac-Velocity-Flat-Custom-Quad-v0 (rsl_rl, PhysX)",
+            "type": "debugpy",
+            "request": "launch",
+            "python": "${config:python.defaultInterpreterPath}",
+            "module": "isaaclab",
+            "args": [
+                "train",
+                "--rl_library",
+                "rsl_rl",
+                "--task",
+                "Isaac-Velocity-Flat-Custom-Quad-v0",
+                "--num_envs",
+                "1024",
+                "physics=isaacsim_physx"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Train Isaac-Velocity-Rough-Depth-Custom-Quad-v0 (EXPERIMENTAL, rsl_rl CNN, PhysX)",
+            "type": "debugpy",
+            "request": "launch",
+            "python": "${config:python.defaultInterpreterPath}",
+            "module": "isaaclab",
+            "args": [
+                "train",
+                "--rl_library",
+                "rsl_rl",
+                "--task",
+                "Isaac-Velocity-Rough-Depth-Custom-Quad-v0",
+                "--num_envs",
+                "1024",
+                "physics=isaacsim_physx"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Play latest Isaac-Velocity-Rough-Depth-Custom-Quad-v0 (EXPERIMENTAL, PhysX, Kit viewer)",
+            "type": "debugpy",
+            "request": "launch",
+            "python": "${config:python.defaultInterpreterPath}",
+            "module": "isaaclab",
+            "args": [
+                "play",
+                "--rl_library",
+                "rsl_rl",
+                "--task",
+                "Isaac-Velocity-Rough-Depth-Custom-Quad-v0",
+                "--num_envs",
+                "16",
+                "--checkpoint",
+                "latest",
+                "--viz",
+                "kit",
+                "physics=isaacsim_physx"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        }
     ]
 }
