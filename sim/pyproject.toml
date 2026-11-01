@@ -10,7 +10,7 @@ build-backend = "uv_build"
 [project]
 name = "drone_lab"
 version = "0.1.0"
-description = "Isaac Lab environments for drone_lab."
+description = "Drone survey mapping and trajectory tracking with Isaac Lab 3.0 (ARL-Robot-1)."
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [
