@@ -5,6 +5,14 @@ from __future__ import annotations
 from _runner import main_for, require
 
 EXPECTED = {
+    "DroneLab-Rescue-Go2-v0": {
+        "entry_point": "isaaclab.envs:ManagerBasedRLEnv",
+        "env_cfg_entry_point": "drone_lab.tasks.rescue.config.go2.rescue_env_cfg:RescueGo2EnvCfg",
+        "rsl_rl_cfg_entry_point": (
+            "isaaclab_tasks.core.velocity.config.go2.agents.rsl_rl_ppo_cfg:UnitreeGo2RoughPPORunnerCfg"
+        ),
+        "default_agent": "rsl_rl",
+    },
     "DroneLab-SAR-ARL-Robot-1-v0": {
         "entry_point": "isaaclab.envs:ManagerBasedRLEnv",
         "env_cfg_entry_point": "drone_lab.tasks.sar.config.arl_robot_1.sar_env_cfg:SarEnvCfg",

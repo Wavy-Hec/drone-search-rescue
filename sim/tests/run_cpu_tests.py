@@ -32,6 +32,11 @@ MODULES = (
     "test_sar_labels",
     "test_sar_scenario",
     "test_sar_env_cfg",
+    "test_teaming_traversability",
+    "test_teaming_planner",
+    "test_teaming_follower",
+    "test_teaming_inputs",
+    "test_teaming_task",
 )
 
 
