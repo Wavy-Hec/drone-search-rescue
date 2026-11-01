@@ -5,9 +5,10 @@ procedural 40 m x 40 m area, scans the ground with a downward ray-cast "lidar", 
 **elevation map** that is compared against the true terrain. You get a map of the area, the planned and flown
 trajectories, error maps, a 3D view, altitude/speed plots, and optionally a video.
 
-![Synthetic preview of the survey map](docs/images/synthetic_map_with_trajectory.png)
+![The ARL drone flying the survey in Isaac Sim, chase camera](docs/images/isaac_chase_view.jpg)
 
-*Figure: CPU-only preview of the pipeline (the drone here is a simple kinematic stand-in, not the RL policy).*
+*Isaac Sim, chase camera: the RL-controlled quadrotor follows the red carrot along the planned path (cyan dots);
+the yellow dots are its mapping rays hitting the ground. Frame from `survey_map.py --video --camera chase --show_rays`.*
 
 ## How it works (in plain words)
 
@@ -34,6 +35,35 @@ trajectories, error maps, a 3D view, altitude/speed plots, and optionally a vide
    same rays, independent of where the rays landed in each cell), path length, cross-track error between plan
    and flight, and the drone-carrot distance.
 
+## Results in Isaac Sim (2026-11-01)
+
+Flown with the built-in tracking policy after 1300 training iterations (`exported/policy.pt` of the
+`demo_drone_track` run) on Isaac Sim PhysX, RTX 5080. The run folders are in `runs/` (git-ignored).
+
+![Elevation map and flight path of the full survey](docs/images/isaac_map_with_trajectory.png)
+
+| Run | Flight | Coverage | Map RMSE (cells without a step) | Cross-track RMS / max |
+|---|---|---|---|---|
+| lawnmower, 1 drone, `--speed 1` | 456 m path in 457 s, no crash | 100 % | 0.075 m (0.010 m) | 3.0 / 5.3 cm |
+| lawnmower, 1 drone, `--speed 1.5` | 456 m path in 392 s, no crash | 100 % | 0.080 m (0.012 m) | 4.0 / 7.6 cm |
+| lawnmower, 3 drones, `--speed 1.5` | 176 m each in 151 s, no crash | 100 % | 0.110 m (0.025 m) | 3.8 / 7.8 cm |
+
+* **Map error** sits on the edges of steps and walls (a 0.25 m cell across a 2 m wall is ambiguous). The 88 % of
+  the cells with no step inside are mapped to about 1 cm. The drone never came closer than 4.7 m to the ground.
+* **How the policy follows the carrot:** about 0.75 s behind it (0.75 m at 1 m/s). It never saw a moving target in
+  training and only saw offsets up to 1 m, so it tops out near 1.3 m/s however fast the carrot goes (commanded
+  1.5 / 2 / 3 m/s gives 1.16 / 1.23 / 1.31 m/s). `--speed 1.5` is the sweet spot: 14 % faster, smoother, same map.
+  On +x legs (flying nose first) it flies about 0.2 m high with a small speed ripple every 2 s; on -x legs it stays
+  within 1 cm. Training `DroneLab-TrackTrajectory-ARL-Robot-1-v0` on moving targets is the real fix.
+* **Simulation speed** (sim time / wall time, RTX 5080): about 5-8x real time without video (2.6 GB of GPU
+  memory), 2.3x with the headless video camera (4.9 GB), 1.6-2x with the live window (`--viz kit`, 5.1 GB). Video
+  and window runs also need 13-16 GB of RAM while Kit starts. A large training job on the same GPU slows a survey
+  to about 0.5x, so give a live demo the GPU to itself.
+* **Showcase clip:** `runs/lawnmower_v2_chase/survey.mp4`, the `--speed 1.5` survey with the chase camera and ray
+  hits. The videos are 3x time-lapses (one frame per 0.1 s, written at 30 fps): 131 s of video for a 392 s flight.
+* **Start:** right after the spawn the drone dips about 15 cm and recovers within a second, so it first hovers
+  `--settle` seconds (default 1.5) at the start of the path; the video starts after the hover.
+
 ## Layout
 
 ```
@@ -59,7 +89,7 @@ scripts/
   synthetic_survey.py CPU: full pipeline with a kinematic stand-in for the policy
   eval_trajectory.py  GPU: evaluate a trajectory-tracking policy (reference vs flown, RMSE)
 tests/              CPU tests (run_cpu_tests.py or pytest)
-docs/images/        preview figures from the CPU pipeline
+docs/images/        Isaac Sim survey figures (isaac_*) and CPU-pipeline previews (synthetic_*, area_preview)
 ```
 
 ## GPU phase: train, export, survey, plot
@@ -103,7 +133,9 @@ python scripts/survey_map.py --checkpoint ${RUN}exported/policy.pt --pattern spi
 python scripts/survey_map.py --checkpoint ${RUN}exported/policy.pt --num_envs 3 --speed 1.5 --out three_drones
 python scripts/survey_map.py --checkpoint ${RUN}exported/policy.pt --video --camera chase --show_rays --out chase
 python scripts/survey_map.py --checkpoint ${RUN}model_1499.pt --sensor lidar --out lidar   # raw checkpoint works too
-python scripts/survey_map.py --checkpoint ${RUN}exported/policy.pt --viz kit               # watch it live
+python scripts/survey_map.py --checkpoint ${RUN}exported/policy.pt --viz kit               # watch it live (wide view)
+python scripts/survey_map.py --checkpoint ${RUN}exported/policy.pt --viz kit --video --camera chase --show_rays \
+    --speed 1.5 --out live_chase           # live window that follows the drone, and records the clip
 python scripts/survey_map.py --checkpoint ${RUN}exported/policy.pt --print_config          # check, no simulator
 ```
 
@@ -112,7 +144,8 @@ the survey altitude, or x,y,z absolute; implies `--pattern waypoints`, and combi
 is an error), `--altitude` (clearance above the highest terrain point, default 4 m), `--spacing` (default 4 m;
 keep it below the 5 m footprint), `--speed` (default 1 m/s), `--max_lead` (default 1 m), `--turn round|square`,
 `--direction x|y`, `--num_envs N` (drones split the area into strips), `--sensor grid|lidar`, `--map_resolution`
-(keep it a multiple of the 0.25 m ray spacing), `--reducer median|mean|max|min`, `--max_time`, `--video`,
+(keep it a multiple of the 0.25 m ray spacing), `--reducer median|mean|max|min`, `--max_time`, `--settle`
+(seconds of hover at the start before the carrot moves, default 1.5), `--video`,
 `--camera overview|chase`, `--video_fps` (default 30: one frame per 0.1 s step, so a 3x time-lapse; 10 plays in
 real time), `--show_rays`, `--seed`, `--out`. Trailing `key=value` tokens are Hydra overrides of the task config,
 e.g. `env.commands.survey_target.turn=square`.
@@ -160,7 +193,7 @@ over time with the RMSE), `trajectory_eval.csv` and `eval_summary.json`; with `-
 | `hits.npy` | subsampled ray hits, world frame: time, drone, x, y, z |
 | `map_meta.json`, `summary.json`, `summary.txt` | grid and area, all metrics (map error vs the cell-mean truth, away from steps, and sensor-only vs the truth under the same rays), short text summary; `interrupted` is set for a partial run (Ctrl+C or an error) |
 | `map_with_trajectory.png`, `map_error.png`, `map_3d.png`, `altitude_profile.png` | figures; cells without ray hits are outlined |
-| `survey.mp4` | video (with `--video`): one frame per 0.1 s policy step written at `--video_fps` 30, i.e. a 3x time-lapse (`--video_fps 10` for real time) |
+| `survey.mp4` | video (with `--video`): one frame per 0.1 s policy step written at `--video_fps` 30, i.e. a 3x time-lapse (`--video_fps 10` for real time); it starts after the `--settle` hover |
 
 ## CPU tools (no GPU needed)
 
@@ -168,7 +201,7 @@ over time with the RMSE), `trajectory_eval.csv` and `eval_summary.json`; with `-
 conda activate env_isaaclab           # or the isaac terminal
 CUDA_VISIBLE_DEVICES= python scripts/preview_area.py --pattern lawnmower           # runs/preview_lawnmower/
 CUDA_VISIBLE_DEVICES= python scripts/synthetic_survey.py --out synthetic_lawnmower  # whole pipeline, ~4 s
-CUDA_VISIBLE_DEVICES= python tests/run_cpu_tests.py                                 # 49 tests
+CUDA_VISIBLE_DEVICES= python tests/run_cpu_tests.py                                 # 51 tests
 ~/anaconda3/bin/python -m pytest tests                                             # numpy-only subset
 ```
 
@@ -186,11 +219,13 @@ CUDA_VISIBLE_DEVICES= python tests/run_cpu_tests.py                             
   (the default: 40 m area, 4 m spacing), every row of rays crosses the middle of its cells. Other spacings or
   drone counts (e.g. 3 drones: lines 3.33 m apart) put the rows elsewhere inside the cells, which costs about
   1-2 cm of RMSE away from steps on this terrain; the summary's "map error (sensor)" line stays independent of
-  that.
+  that. With the default area, 2 or 5 drones keep the 4 m lines; 4 drones do not (each 10 m strip gets 3 lines
+  3.33 m apart).
 * **Sensor:** `--sensor lidar` (downward cone, 1152 rays) or edit `MAPPING_GRID` in
   `tasks/survey/config/arl_robot_1/survey_env_cfg.py`.
-* **Speed:** the carrot waits whenever the drone lags more than `max_lead`; if the drone cannot keep up, the
-  survey just takes longer. Raise `--speed` gradually and watch `altitude_profile.png` (speed and carrot panels).
+* **Speed:** the carrot slows down as the drone falls behind and never gets more than `max_lead` ahead; if the
+  drone cannot keep up, the survey just takes longer. With the current policy, commands above about 1.3 m/s only
+  keep the carrot at the lead limit (see Results). Watch `altitude_profile.png` (speed and carrot panels).
 
 ## Notes and limits
 
@@ -201,8 +236,8 @@ CUDA_VISIBLE_DEVICES= python tests/run_cpu_tests.py                             
   PhysX and Newton backends.
 * **Video:** Isaac Lab's built-in `--video` needs `moviepy<2`, which env_isaaclab does not have; `survey_map.py`
   and `eval_trajectory.py` grab frames from a headless Kit camera and write MP4 with imageio-ffmpeg instead.
-* **Generalisation:** the policy never saw a moving target in training. The carrot keeps its inputs in range, but
-  how fast it can follow (and how much it lags) is only known after the GPU run; tune `--speed` from the plots.
+* **Generalisation:** the policy never saw a moving target in training. The carrot keeps its inputs in range;
+  in Isaac Sim it lags about 0.75 s behind the carrot and tops out near 1.3 m/s (see Results).
 * The built-in tracking task gives the `flat_orientation_l2` penalty a positive weight (+1.0); the new
   trajectory task uses -1.0.
 * The synthetic runs use a point-mass stand-in for the policy, so their tracking numbers are not the policy's.
@@ -214,7 +249,7 @@ CUDA_VISIBLE_DEVICES= python tests/run_cpu_tests.py                             
 ## Fixes before the first flight (2026-11-01)
 
 Six issues were found in the first version. Each was checked against the Isaac Lab 3.0 source and fixed.
-These are CPU-side changes only; nothing has run in Isaac Sim yet.
+These were CPU-side changes, made before the first flight in Isaac Sim (see Results).
 
 * **Map grid aligned with the rays (major).** The survey lines sit at 2, 6, 10 ... m from the area edge, so the
   0.25 m rows of rays fell exactly on the 0.25 m cell edges. Every cell was measured along its edge, which
@@ -237,5 +272,17 @@ These are CPU-side changes only; nothing has run in Isaac Sim yet.
 * **`--waypoints` with another `--pattern`** now stops with a clear message instead of silently flying the
   generated pattern (`survey_map.py`, `synthetic_survey.py`, `preview_area.py`).
 
-There are now 49 CPU tests (10 new), including an offline run of `survey_map.py` with a stand-in environment
-that exercises the Ctrl+C and error paths.
+These fixes brought the CPU tests to 49 (10 new), including an offline run of `survey_map.py` with a stand-in
+environment that exercises the Ctrl+C and error paths.
+
+## Fixes after the first flights (2026-11-01)
+
+* **No more stop-and-go carrot at high speed.** A carrot step that would end more than `max_lead` from the drone
+  was rejected whole, so above 3 m/s commanded the carrot stopped and went, and at 10 m/s it stalled for good. The
+  step is now shortened to the remaining lead. `--speed 6`: carrot waiting 84 % -> 0 % of the steps, survey speed
+  0.97 -> 1.32 m/s. Regression test: `test_carrot_keeps_moving_at_high_commanded_speed`.
+* **Time budget.** The default `--max_time` assumed the drone reaches the commanded speed, so fast commands cut the
+  survey short. It now assumes at most 1 m/s, and the log and summary say when the time limit stopped a flight
+  (the summary also records wall time and the real-time factor).
+* **`--settle`.** The drone hovers 1.5 s at the start before the carrot moves, so the video starts without the
+  spawn dip (vertical speed in the first 2 s of video: 0.58 -> 0.17 m/s).
