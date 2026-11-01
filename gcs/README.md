@@ -187,21 +187,81 @@ Or call the `Sender` methods directly with numpy arrays, CPU or GPU torch tensor
   the drones in turn.
 * Boxes that touch the image border are partial views. They are shown, but not put on the map
   (`--edge-margin 0` changes that).
-* Fine-tuning workflow (nothing has been trained yet):
-  1. Capture RGB + `instance_id_segmentation_fast` (+ its `info` JSON) from an Isaac Lab camera. The
-     snippet is in the docstring of `scripts/seg_to_yolo.py`.
-  2. `python scripts/seg_to_yolo.py --src <capture> --out ~/isaac_ws/datasets/drone_yolo --classes car,tent,person,tarp`
-     writes the YOLO labels (normalized cx cy w h) and `data.yaml`. Objects cut off by the image border keep
-     their visible box (`--max-truncation 0.6` would drop those with under 40 % visible). Tiny instances
-     (and any dropped object of a wanted class) are painted over with the image's mean colour, so the
-     detector is not taught that a visible object is background (`--no-mask-dropped` keeps the pixels).
-     Train/val are split in blocks of consecutive frames (no near-duplicate leakage); small captures use
-     shorter blocks, so val stays near 15 % and train is never empty (e.g. 40 frames → 34 / 6).
-  3. `python scripts/train_detector.py --data ~/isaac_ws/datasets/drone_yolo/data.yaml --dry-run` checks it.
-     Without `--dry-run` it trains from the nano weights. Defaults for about 2000 images on a 16 GB GPU:
-     120 epochs, patience 30, imgsz 640, batch 32, RAM cache, flipud aug. It copies `best.pt` to
-     `models/detector.pt` (Git LFS) and writes `models/detector_metrics.json`.
-  4. `python scripts/gcs.py --weights models/detector.pt`
+* Fine-tuning on other captures: `scripts/seg_to_yolo.py` turns RGB + instance segmentation (+ the annotator's
+  `info` JSON; the capture snippet is in its docstring) into YOLO labels and `data.yaml`,
+  `scripts/train_detector.py` trains from the nano weights (`--dry-run` checks the dataset first) and
+  `scripts/eval_detector.py` scores the result. Objects cut off by the image border keep their visible box
+  unless `--max-truncation` drops them. Tiny and dropped objects of a wanted class are painted over with the
+  image's mean colour, so the detector is not taught that a visible object is background (`--no-mask-dropped`
+  keeps the pixels). A capture without `train/` and `val/` folders is split in blocks of consecutive frames
+  (no near-duplicate leakage; val stays near 15 %).
+
+### Fine-tuned detector for the search-and-rescue site
+
+`~/isaac_ws/assets/models/drone_sar_yolo26n.pt` is YOLO26n fine-tuned on the downward camera of the dressed
+drone_lab site. It knows the site's seven classes, in this id order: person, vehicle, crate, barrel, pallet,
+cone, landing_pad. Use it with `python scripts/gcs.py --weights ~/isaac_ws/assets/models/drone_sar_yolo26n.pt`
+(17 ms per frame on the CPU).
+
+The images are Isaac Sim renders of the mission camera (640 × 480, f = 480 px). The labels come from the
+camera's instance segmentation, so nothing was labelled by hand:
+
+| Split | Sites (scenario seeds) | Frames | Objects | Views |
+|---|---|---|---|---|
+| train | 36 (1000-1035) | 1620 | 4605 | 5-12 m above the ground, up to 15° off nadir, any heading; 2 in 3 aimed at an object |
+| val | 7 others (2000-2006) | 315 | 856 | the same, on sites never seen in training |
+| test | the demo mission's site (seed 0) | 183 | 174 | every 2.5 m along the survey path, at the mission's height and light |
+
+Train and val frames also vary the light (sun direction and strength, overcast sky) and the ground (materials
+swapped between terrain types, tinted, rescaled). Objects with less than 40 % inside the frame (measured on a
+render with a wider margin) or fewer than 100 visible pixels are dropped and painted over. Train and val never
+use a seed below 1000, so any site picked with `--seed` in drone_lab is new to the detector.
+
+Scores: mAP50 / mAP50-95, and at the GCS threshold (confidence 0.25) the objects found, missed and the false
+alarms:
+
+| Class | val: held-out sites | test: mission site | test at 0.25: found / missed / false alarms |
+|---|---|---|---|
+| person | 0.995 / 0.925 | 0.995 / 0.914 | 55 / 0 / 0 |
+| vehicle | 0.995 / 0.963 | 0.995 / 0.995 | 6 / 0 / 0 |
+| crate | 0.994 / 0.900 | 0.995 / 0.978 | 36 / 0 / 0 |
+| barrel | 0.995 / 0.922 | 0.995 / 0.927 | 29 / 0 / 0 |
+| pallet | 0.995 / 0.968 | 0.995 / 0.967 | 23 / 0 / 0 |
+| cone | 0.995 / 0.962 | 0.995 / 0.983 | 23 / 0 / 2 |
+| landing_pad | 0.995 / 0.995 | 0.995 / 0.995 | 2 / 0 / 0 |
+| **all** | **0.995 / 0.948** | **0.995 / 0.965** | **174 / 0 / 2** |
+
+The stock COCO model, on the person class of the same frames, scores 0.507 / 0.296 on val and 0.655 / 0.416 on
+test. At confidence 0.25 it finds 27 of the 55 people in the test frames, with 8 false alarms. It learned people
+from photos taken at eye level; from 7 m straight above, a body in a T-pose is a cross with a head in the
+middle. Almost all false alarms of the fine-tuned model touch the image border, mostly on objects cut by the
+frame edge, which the GCS does not put on the map. The exception: it sometimes calls the hands of a standing
+person seen from above cones.
+
+![The fine-tuned model and the stock COCO model on mission frames of the demo site](docs/images/detector_vs_coco.jpg)
+
+*Mission frames of the demo site (test split), confidence 0.25. Left: the fine-tuned model. Right: the stock
+COCO model, person class only.*
+
+To build it again (about 15 minutes on the RTX 5080):
+
+```bash
+# 1. Render the frames: drone_lab, conda env env_isaaclab (about 7 min)
+cd ~/isaac_ws/projects/drone_lab && python scripts/gen_yolo_dataset.py
+# 2. Labels, 3. training (about 6 min), 4. scores: this repo, conda env vision
+cd ~/isaac_ws/projects/drone_gcs
+python scripts/seg_to_yolo.py --src ~/isaac_ws/datasets/drone_sar_yolo/capture \
+    --out ~/isaac_ws/datasets/drone_sar_yolo/yolo --classes person,vehicle,crate,barrel,pallet,cone,landing_pad \
+    --min-area 100 --min-side 6 --max-truncation 0.6
+python scripts/train_detector.py --data ~/isaac_ws/datasets/drone_sar_yolo/yolo/data.yaml --epochs 100 \
+    --name drone_sar_yolo26n --out ~/isaac_ws/assets/models/drone_sar_yolo26n.pt --offline
+python scripts/eval_detector.py --data ~/isaac_ws/datasets/drone_sar_yolo/yolo/data.yaml \
+    --weights ~/isaac_ws/assets/models/drone_sar_yolo26n.pt
+```
+
+Next to the weights: `drone_sar_yolo26n_metrics.json` (training), `drone_sar_yolo26n_eval.json` (every score
+above), the confusion matrices at confidence 0.25 and the precision-recall curves of val and test, and the
+figure above. The training curves are in `runs/train/drone_sar_yolo26n/`.
 
 ## Tests
 
@@ -220,7 +280,7 @@ DRONE_GCS_SKIP_E2E=1 ./run_tests.sh # without the end-to-end run
 | App | Arrow keys neither quit nor take screenshots. Data / END of another mission ignored; a new mission clears an old END. Rollover keeps ground truth and drops the old mission's late detections. Every drone gets detection. Video keeps real time through stalls |
 | Fake world | Rays and depth lie on the height field |
 | Detectors | The blob detector finds every object. The worker keeps the newest frame. YOLO wrapper: 2 CPU inferences on Ultralytics' `bus.jpg`; class filters validated (typos raise) and matched after `--class-map` |
-| Dataset tools | `seg_to_yolo` on synthetic segmentation gives exact labels, keeps cut-off boxes, paints over tiny ones. Block split gives train data and ~15 % val from 8 to 2000 frames. `train_detector --dry-run` |
+| Dataset tools | `seg_to_yolo` on synthetic segmentation gives exact labels, keeps cut-off boxes, paints over tiny ones. Split capture folders stay the splits, and the full box of a cut-off object decides whether it stays. Block split gives train data and ~15 % val from 8 to 2000 frames. `train_detector --dry-run` |
 | Sender import | The sender imports without cv2, torch or PIL. **A sender process in env_isaaclab** sends to a receiver in vision, and arrays arrive bit-exact |
 | Dashboard and report | All three layers render. All report files are written |
 | End to end | Fake drone process → socket → headless GCS process. Coverage grows monotonically to over 98 %. Elevation error is under 1 cm RMSE on smooth cells (measured 2.6 mm) and under 5 mm median. All synthetic objects are found with no false positives and a mean horizontal error under 25 cm |
@@ -276,7 +336,7 @@ use needs an Ultralytics Enterprise License. Everything except `drone_gcs/detect
 drone_gcs/        protocol.py link.py geometry.py isaac_bridge.py   <- sender side: stdlib + numpy only
                   mapping.py state.py detector.py dashboard.py text.py report.py app.py dataset.py
                   sim/fake_world.py sim/flight.py                   <- stand-in simulator
-scripts/          gcs.py  fake_drone.py  seg_to_yolo.py  train_detector.py
+scripts/          gcs.py  fake_drone.py  seg_to_yolo.py  train_detector.py  eval_detector.py
 tests/            unittest suite (./run_tests.sh)
 PROTOCOL.md       message types, fields, units, frames, Isaac Lab conversions
 models/           fine-tuned detector goes here (Git LFS)
