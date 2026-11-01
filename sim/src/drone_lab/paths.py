@@ -233,6 +233,31 @@ def figure8(
     return np.column_stack([x, y, np.full(len(t), float(altitude))])
 
 
+def resolve_pattern(pattern: str | None, waypoints_given: bool, default: str | None = "lawnmower") -> str | None:
+    """Survey pattern from the ``--pattern`` / ``--waypoints`` command-line flags.
+
+    A waypoint file implies ``"waypoints"``. Combining it with a generated pattern is an error: the generated path
+    would silently ignore the file.
+
+    Args:
+        pattern: Value of ``--pattern`` (None when not given).
+        waypoints_given: Whether ``--waypoints`` was given.
+        default: Pattern when neither flag is given (None: leave the task config's pattern alone).
+
+    Raises:
+        ValueError: ``--waypoints`` with another ``--pattern``, or ``--pattern waypoints`` without a file.
+    """
+    if waypoints_given and pattern not in (None, "waypoints"):
+        raise ValueError(
+            f"--waypoints needs --pattern waypoints (or no --pattern), not --pattern {pattern}: "
+            "a generated pattern would ignore the file"
+        )
+    resolved = "waypoints" if waypoints_given else (pattern or default)
+    if resolved == "waypoints" and not waypoints_given:
+        raise ValueError("--pattern waypoints needs --waypoints <file.csv|file.json>")
+    return resolved
+
+
 def read_waypoint_rows(path: str | Path) -> list[list[float]]:
     """Raw waypoint rows from a ``.csv`` (columns x,y[,z], optional header) or ``.json`` (list of [x, y(, z)])."""
     path = Path(path).expanduser()

@@ -24,9 +24,11 @@ MODULES = (
     "test_carrot",
     "test_reference",
     "test_plotting",
+    "test_video",
     "test_terrain",
     "test_env_cfgs",
     "test_registration",
+    "test_survey_map_offline",
 )
 
 

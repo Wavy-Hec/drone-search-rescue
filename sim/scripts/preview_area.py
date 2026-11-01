@@ -24,17 +24,19 @@ if str(PROJECT_ROOT / "src") not in sys.path:
 import numpy as np  # noqa: E402
 
 from drone_lab.mapping import GridSpec, MeshHeightQuery, ground_truth_map  # noqa: E402
-from drone_lab.paths import PATTERNS, build_env_paths, load_waypoints, polyline_length  # noqa: E402
+from drone_lab.paths import PATTERNS, build_env_paths, load_waypoints, polyline_length, resolve_pattern  # noqa: E402
 from drone_lab.survey_io import write_planned_path_csv  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--pattern", choices=PATTERNS, default="lawnmower")
+    parser.add_argument("--pattern", choices=PATTERNS, default=None,
+                        help="Survey pattern (default lawnmower; waypoints when --waypoints is given).")
     parser.add_argument("--spacing", type=float, default=4.0)
     parser.add_argument("--altitude", type=float, default=4.0, help="Clearance above the highest terrain point [m].")
     parser.add_argument("--num_drones", type=int, default=1)
-    parser.add_argument("--waypoints", type=str, default=None)
+    parser.add_argument("--waypoints", type=str, default=None,
+                        help="CSV/JSON waypoints file; implies --pattern waypoints.")
     parser.add_argument("--turn", choices=("round", "square"), default="round")
     parser.add_argument("--direction", choices=("x", "y"), default="x")
     parser.add_argument("--resolution", type=float, default=0.25, help="Height map cell size [m].")
@@ -42,6 +44,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--theme", choices=("light", "dark"), default="light")
     parser.add_argument("--out", type=str, default=None, help="Run name under runs/ (default preview_<pattern>).")
     args = parser.parse_args(argv)
+    try:
+        args.pattern = resolve_pattern(args.pattern, bool(args.waypoints))
+    except ValueError as exc:
+        parser.error(str(exc))
 
     from drone_lab.plotting import get_theme, plot_area_preview
     from drone_lab.terrain import SURVEY_TERRAIN_CFG, generate_terrain_mesh, terrain_area

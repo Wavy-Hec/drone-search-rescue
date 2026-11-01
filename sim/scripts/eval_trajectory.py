@@ -9,7 +9,8 @@ then (env_isaaclab, project root)::
     python scripts/eval_trajectory.py --checkpoint logs/rsl_rl/drone_lab_track_trajectory/<run>/model_1999.pt \
         --shape figure8 --size 2.0 --speed 1.0 --duration 30
 
-Writes ``runs/<out>/trajectory_eval.csv``, ``eval_summary.json`` and ``trajectory_tracking.png``.
+Writes ``runs/<out>/trajectory_eval.csv``, ``eval_summary.json`` and ``trajectory_tracking.png`` (plus
+``trajectory.mp4`` with ``--video``: a chase camera with the reference and look-ahead markers).
 """
 
 from __future__ import annotations
@@ -35,6 +36,9 @@ parser.add_argument("--speed", type=float, default=1.0, help="Peak reference spe
 parser.add_argument("--z_amp", type=float, default=0.0, help="Vertical wave amplitude [m].")
 parser.add_argument("--duration", type=float, default=30.0, help="Evaluation time [s].")
 parser.add_argument("--video", dest="record_video", action="store_true", help="Record trajectory.mp4 (chase cam).")
+parser.add_argument("--video_fps", type=int, default=30,
+                    help="Playback frame rate. One frame per 0.1 s policy step (10 Hz), so the default 30 fps is a "
+                         "3x time-lapse; 10 plays in real time.")
 parser.add_argument("--out", type=str, default=None, help="Run name under runs/.")
 parser.add_argument("--print_config", action="store_true", help="Resolve the config and exit (no simulator).")
 add_launcher_args(parser)
@@ -49,6 +53,7 @@ import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
 import drone_lab.tasks  # noqa: E402,F401
+from drone_lab.video import capture_frame, find_kit_visualizer, open_mp4_writer, playback_speedup  # noqa: E402
 
 
 def load_policy(checkpoint: str, env, device: str):
@@ -120,12 +125,13 @@ def main():
         robot = base.scene["robot"]
         writer = viz = None
         if args_cli.record_video:
-            import imageio.v2 as imageio
-
-            viz = next((v for v in base.sim.visualizers if getattr(v.cfg, "visualizer_type", None) == "kit"), None)
-            if viz is not None:
-                writer = imageio.get_writer(str(run_dir / "trajectory.mp4"), fps=30, codec="libx264", quality=7,
-                                            macro_block_size=8)
+            viz = find_kit_visualizer(base.sim)
+            if viz is None:
+                print("[eval_trajectory] WARNING: no Kit visualizer is active; no video will be recorded.")
+            else:
+                writer = open_mp4_writer(run_dir / "trajectory.mp4", args_cli.video_fps)
+                print(f"[eval_trajectory] video at {args_cli.video_fps} fps = "
+                      f"{playback_speedup(args_cli.video_fps, base.step_dt):g}x real time")
         obs, _ = base.reset()
         rows, terminated_at = [], None
         steps = int(math.ceil(args_cli.duration / base.step_dt))
@@ -142,11 +148,11 @@ def main():
                 rows.append([float(term.t[0]), *pos, *ref, *vel, *ref_v])
                 if writer is not None:
                     try:
-                        if not base.sim.is_rendering:
-                            base.sim.forward()
-                        frame = viz.render_rgb_array()
+                        # syncs the stage and dispatches the marker callbacks (reference / look-ahead spheres),
+                        # which a headless visualizer never gets from env.step()
+                        frame = capture_frame(base.sim, viz)
                         if frame is not None and frame.any():
-                            writer.append_data(np.ascontiguousarray(frame[:, :, :3]))
+                            writer.append_data(frame)
                     except Exception as exc:  # never lose the evaluation because of the video
                         print(f"[eval_trajectory] WARNING: video capture failed ({exc}); continuing without video.")
                         writer.close()

@@ -20,6 +20,7 @@ from drone_lab.paths import (
     point_at_arclength,
     polyline_length,
     resample_polyline,
+    resolve_pattern,
     spiral,
 )
 
@@ -134,6 +135,22 @@ def test_load_waypoints_csv_and_json():
         json_path = Path(d) / "wp.json"
         json_path.write_text(json.dumps({"waypoints": [[1, 2], [3, 4]]}))
         assert np.allclose(load_waypoints(json_path, default_z=2.0), [[1, 2, 2], [3, 4, 2]])
+
+
+def test_resolve_pattern_from_flags():
+    """A waypoint file with a generated pattern is an error, not a silently ignored file."""
+    assert resolve_pattern(None, False) == "lawnmower"
+    assert resolve_pattern(None, False, default=None) is None  # survey_map: keep the task config's pattern
+    assert resolve_pattern("spiral", False) == "spiral"
+    assert resolve_pattern(None, True) == "waypoints"
+    assert resolve_pattern("waypoints", True, default=None) == "waypoints"
+    for pattern, given in (("lawnmower", True), ("figure8", True), ("waypoints", False)):
+        try:
+            resolve_pattern(pattern, given)
+        except ValueError as exc:
+            assert "--waypoints" in str(exc)
+        else:
+            raise AssertionError(f"resolve_pattern({pattern!r}, {given}) should fail")
 
 
 if __name__ == "__main__":

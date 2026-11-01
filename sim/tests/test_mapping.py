@@ -19,6 +19,7 @@ from drone_lab.mapping import (
     path_length,
     survey_map_metrics,
     tracking_stats,
+    truth_at_hits_map,
 )
 from drone_lab.paths import Area, lawnmower, resample_polyline
 
@@ -136,6 +137,69 @@ def test_coverage_drops_with_wide_spacing():
     cov = coverage_fraction(count, g.area_mask(AREA))
     # 30 m extent -> 4 lines, 7.5 m apart, each covering a 5.25 m wide band (21 rays at 0.25 m)
     assert 0.6 < cov < 0.78, cov
+
+
+def test_survey_grid_puts_ray_rows_on_cell_centres():
+    """Lines at 2, 6, 10 ... m from the edge put the 0.25 m ray rows on the 0.25 m lattice.
+
+    An edge-anchored grid then samples every cell along its lower edge: on a slope across the lines that is a
+    systematic error of slope * 0.125 m. ``GridSpec.for_survey`` puts the rows on the cell centres instead.
+    """
+    area = Area(-20.0, 20.0, -20.0, 20.0)
+    plane = lambda x, y: 0.5 * y + 1.0  # noqa: E731  (slope across the lines only)
+    v, f = _terrain_mesh(plane, half=24.0, step=1.0)
+    query = MeshHeightQuery(v, f)
+    plan = lawnmower(area, 4.0, 6.0, turn="square")
+    assert np.allclose(np.unique(plan[:, 1]), np.arange(-18.0, 18.1, 4.0))  # on the 0.25 m lattice
+    path, _ = resample_polyline(plan, 0.1)
+    rays = (path[:, None, :2] + _grid_offsets()[None]).reshape(-1, 2)
+    hits = np.column_stack([rays, query(rays)])
+    edge_grid, centred = GridSpec.from_area(area, 0.25), GridSpec.for_survey(area, 0.25)
+    xs, _ = centred.cell_centers()
+    assert np.isclose(centred.x_min, -20.125) and np.isclose(xs[0], -20.0) and centred.shape == (161, 161)
+    errors = {}
+    for name, g in (("edge", edge_grid), ("centred", centred)):
+        elev, count = elevation_map(hits, g, "median")
+        gt, gt_range = ground_truth_map(v, f, g, supersample=3, query=query)
+        stats = survey_map_metrics(elev, count, gt, gt_range, g, area)
+        assert stats["coverage_area"] > 0.999, (name, stats["coverage_area"])
+        errors[name] = stats["error_area"]
+    # edge-anchored: the rows sit on the lower cell edges -> about -0.5 * 0.125 m on most cells
+    assert errors["edge"]["rmse"] > 0.04 and errors["edge"]["bias"] < -0.04, errors["edge"]
+    assert errors["centred"]["rmse"] < 0.01 and abs(errors["centred"]["bias"]) < 0.005, errors["centred"]
+    # 0.5 m cells hold two ray rows: edges midway between rows (half the *ray* spacing) keep them symmetric about
+    # the centre; half a *cell* would put one row on the cell edge again. (Cells at the edges of the swath
+    # overlaps still see one row twice as often as the other, so the median is not exact there.)
+    rmse = {}
+    for name, g in (("ray", GridSpec.for_survey(area, 0.5)), ("cell", GridSpec.from_area(area, 0.5, padding=0.25))):
+        elev, _ = elevation_map(hits, g, "median")
+        gt, _ = ground_truth_map(v, f, g, supersample=3, query=query)
+        rmse[name] = map_error_stats(elev, gt, g.area_mask(area))["rmse"]
+    assert rmse["cell"] > 0.04 and rmse["ray"] < 0.5 * rmse["cell"], rmse
+
+
+def test_truth_at_hits_isolates_sensor_error():
+    """Map vs the true terrain under the same rays: zero for exact rays, the offset for a biased sensor."""
+    area = Area(-20.0, 20.0, -20.0, 20.0)
+    plane = lambda x, y: 0.5 * y + 1.0  # noqa: E731
+    v, f = _terrain_mesh(plane, half=24.0, step=1.0)
+    query = MeshHeightQuery(v, f)
+    path, _ = resample_polyline(lawnmower(area, 4.0, 6.0, turn="square"), 0.1)
+    rays = (path[:, None, :2] + _grid_offsets()[None]).reshape(-1, 2)
+    hits = np.column_stack([rays, query(rays)])
+    g = GridSpec.from_area(area, 0.25)  # edge-anchored on purpose: large sampling error, no sensor error
+    gt, gt_range = ground_truth_map(v, f, g, supersample=3, query=query)
+    for offset in (0.0, 0.05):
+        biased = hits + np.array([0.0, 0.0, offset])
+        elev, count = elevation_map(biased, g, "median")
+        at_hits = truth_at_hits_map(biased, g, query, "median")
+        assert np.array_equal(np.isfinite(at_hits), count > 0)
+        stats = survey_map_metrics(elev, count, gt, gt_range, g, area, truth_at_hits=at_hits)
+        sensor = stats["error_area_at_hits"]
+        assert abs(sensor["bias"] - offset) < 1e-6 and abs(sensor["rmse"] - offset) < 1e-6, (offset, sensor)
+        if offset == 0.0:  # exact rays: the sampling error only shows against the cell means
+            assert stats["error_area"]["rmse"] > 0.04, stats["error_area"]
+    assert np.isnan(truth_at_hits_map(np.zeros((0, 3)), g, query)).all()
 
 
 def test_error_stats_and_tracking():

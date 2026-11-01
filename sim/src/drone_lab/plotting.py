@@ -6,7 +6,10 @@ pairs in both modes):
 * elevation (magnitude): one-hue neutral ramp, low = light, high = dark (flipped in dark mode);
 * map error (polarity): blue <-> red with a neutral grey midpoint and symmetric limits;
 * drones (identity): categorical slots 1..3 in fixed order; drones beyond three are folded into "other";
-* text uses ink tokens only; the planned path is a dashed ink line, flown trajectories are solid lines.
+* text uses ink tokens only; the planned path is a dashed ink line, flown trajectories are solid lines;
+* cells without ray hits show the bare surface and are outlined in secondary ink with a surface halo, so a
+  coverage hole never reads as "lowest elevation" or "zero error" (both of those colours sit close to the
+  surface); the "no ray hits" legend swatch carries the same outline and appears only when there are holes.
 """
 
 from __future__ import annotations
@@ -177,6 +180,36 @@ def _area_outline(ax, area: Area, theme: Theme):
     )
 
 
+NO_HITS_LINEWIDTH = 0.9
+"""Outline width of cells without ray hits (also used by the legend swatch)."""
+
+
+def _no_hit_cells(run: SurveyRun) -> np.ndarray:
+    """Cells inside the survey area that no ray hit, (ny, nx) bool."""
+    return (np.asarray(run.count) == 0) & run.grid.area_mask(run.area)
+
+
+def _outline_cells(ax, mask: np.ndarray, grid: GridSpec, theme: Theme, zorder: float = 2.5) -> bool:
+    """Outline groups of grid cells along their edges (secondary ink on a surface halo); False if none."""
+    mask = np.asarray(mask, dtype=bool)
+    if not mask.any():
+        return False
+    # one empty cell of padding closes the outline of groups that touch the grid edge; the 0.5 level of the
+    # 0/1 field lies half-way between neighbouring cell centres, i.e. on the cell edges
+    xs, ys = grid.cell_centers()
+    r = grid.resolution
+    xs = np.concatenate([[xs[0] - r], xs, [xs[-1] + r]])
+    ys = np.concatenate([[ys[0] - r], ys, [ys[-1] + r]])
+    cs = ax.contour(xs, ys, np.pad(mask.astype(float), 1), levels=[0.5], colors=[theme.ink_secondary],
+                    linewidths=NO_HITS_LINEWIDTH, zorder=zorder)
+    cs.set_path_effects(_halo(theme, 2.6))
+    return True
+
+
+def _no_hits_handle(theme: Theme) -> Patch:
+    return Patch(facecolor=theme.no_data, edgecolor=theme.ink_secondary, lw=NO_HITS_LINEWIDTH, label="no ray hits")
+
+
 def _legend(ax, handles, theme: Theme, loc="upper right", ncol=1):
     leg = ax.legend(handles=handles, loc=loc, ncol=ncol, fontsize=8, frameon=True, facecolor=theme.surface,
                     edgecolor=theme.grid, framealpha=0.92, labelcolor=theme.ink_secondary)
@@ -226,8 +259,10 @@ def plot_map_with_trajectory(run: SurveyRun, out_path: str | Path, theme: Theme 
     im = ax.imshow(run.elevation, origin="lower", extent=run.grid.extent, cmap=_elevation_cmap(theme), vmin=vmin,
                    vmax=vmax, interpolation="nearest", zorder=1)
     _area_outline(ax, run.area, theme)
+    has_holes = _outline_cells(ax, _no_hit_cells(run), run.grid, theme)
     handles = _plan_and_paths(ax, run, theme)
-    handles.append(Patch(facecolor=theme.no_data, edgecolor=theme.axis, lw=0.6, label="no ray hits"))
+    if has_holes:
+        handles.append(_no_hits_handle(theme))
     _figure_legend(fig, handles, theme)
     pad = 0.5 * float(s.get("lawnmower_spacing_m") or 0.0) + 1.0
     x_lo, x_hi = min(run.grid.x_min, run.area.x_min - pad), max(run.grid.x_max, run.area.x_max + pad)
@@ -283,8 +318,9 @@ def plot_map_error(run: SurveyRun, out_path: str | Path, theme: Theme = LIGHT) -
     ax.set_ylabel("y [m]")
     cb = _colorbar(fig, im, ax, theme, "Map − ground truth [m]")
     cb.ax.yaxis.set_label_position("right")
-    _legend(ax, [Patch(facecolor=theme.no_data, edgecolor=theme.axis, lw=0.6, label="no ray hits")], theme,
-            loc="upper right")
+    holes = _no_hit_cells(run)
+    if _outline_cells(ax, holes, run.grid, theme):
+        _figure_legend(fig, [_no_hits_handle(theme)], theme, y=0.895)  # header row: never covers the map
 
     hx = fig.add_axes([0.66, 0.11, 0.31, 0.74])
     _style_axes(hx, theme, grid=True)
@@ -294,16 +330,22 @@ def plot_map_error(run: SurveyRun, out_path: str | Path, theme: Theme = LIGHT) -
         hx.axvline(0.0, color=theme.axis, lw=0.8, zorder=2)
     hx.set_xlabel(f"Map − ground truth [m] (end bins hold |e| > {lim:.2f} m)")
     hx.set_ylabel("Cells")
+    map_summary = run.summary.get("map", {}) or {}
     txt = (
         f"RMSE {stats['rmse']:.3f} m\nMAE {stats['mae']:.3f} m\np95 |e| {stats['p95_abs']:.3f} m\n"
         f"max |e| {stats['max_abs']:.2f} m\nbias {stats['bias']:+.3f} m"
         if stats["n_cells"]
         else "no covered cells"
     )
+    at_hits = map_summary.get("error_area_at_hits") or {}
+    if stats["n_cells"] and at_hits.get("rmse") is not None:
+        txt += f"\n\nvs terrain under\nthe same rays:\nRMSE {at_hits['rmse']:.3f} m"
     hx.text(0.97, 0.96, txt, transform=hx.transAxes, ha="right", va="top", fontsize=8.5, color=theme.ink,
             bbox=dict(facecolor=theme.surface, edgecolor=theme.grid, lw=0.6, boxstyle="round,pad=0.4"))
-    smooth = (run.summary.get("map", {}) or {}).get("error_area_smooth") or {}
-    sub = f"red = map too high, blue = too low · {stats['n_cells']:,} covered {run.grid.resolution:g} m cells"
+    smooth = map_summary.get("error_area_smooth") or {}
+    n_area = int(in_area.sum())
+    sub = (f"red = map too high, blue = too low · {n_area - int(holes.sum()):,} of {n_area:,} cells "
+           f"({run.grid.resolution:g} m) have ray hits")
     if smooth.get("rmse") is not None:
         sub += f" · RMSE away from steps/walls {smooth['rmse']:.3f} m"
     _title(fig, theme, "Elevation map error", sub)

@@ -14,7 +14,7 @@ import numpy as np
 import torch
 
 from .carrot import advance_carrot, clamp_offset, interpolate_path, pad_paths
-from .mapping import ElevationMapper, GridSpec, MeshHeightQuery, ground_truth_map
+from .mapping import ElevationMapper, GridSpec, MeshHeightQuery, ground_truth_map, truth_at_hits_map
 from .paths import Area
 from .survey_io import TrajectoryRecorder, compute_summary
 
@@ -52,7 +52,7 @@ def simulate_survey(
     footprint: tuple[float, float] = (5.0, 5.0),
     ray_resolution: float = 0.25,
     map_resolution: float = 0.25,
-    map_padding: float = 0.0,
+    map_padding: float | None = None,
     reducer: str = "median",
     kp: float = 4.0,
     kd: float = 3.2,
@@ -66,7 +66,11 @@ def simulate_survey(
     gt_supersample: int = 3,
     extra_summary: dict | None = None,
 ):
-    """Fly every drone along its path and build the map; returns a dict with everything :func:`save_run` needs."""
+    """Fly every drone along its path and build the map; returns a dict with everything :func:`save_run` needs.
+
+    ``map_padding=None`` uses the same map grid as ``scripts/survey_map.py`` (:meth:`GridSpec.for_survey`, cell
+    edges midway between the ray rows); a number anchors the grid that far outside the area instead.
+    """
     rng = np.random.default_rng(seed)
     terrain = MeshHeightQuery(vertices, faces)
     num = len(waypoints)
@@ -75,7 +79,10 @@ def simulate_survey(
     pos = pts[:, 0].numpy().astype(np.float64).copy()
     vel = np.zeros((num, 3))
     offsets = grid_offsets(footprint, ray_resolution)
-    grid = GridSpec.from_area(area, map_resolution, padding=map_padding)
+    if map_padding is None:
+        grid = GridSpec.for_survey(area, map_resolution, ray_spacing=ray_resolution)
+    else:
+        grid = GridSpec.from_area(area, map_resolution, padding=map_padding)
     mapper = ElevationMapper(grid)
     rec = TrajectoryRecorder()
     hits_log = []
@@ -108,6 +115,9 @@ def simulate_survey(
         # mapping rays: vertical, world-aligned footprint (ray_alignment="world")
         active = ~finished
         ray_xy = (pos[active, None, :2] + offsets[None, :, :]).reshape(-1, 2)
+        # float32 like the simulator's ray hits, so the stored hit is exactly the point that was measured (a
+        # float64 ray on a vertical step edge could otherwise be stored on the other side of the edge)
+        ray_xy = ray_xy.astype(np.float32).astype(np.float64)
         z_hit = terrain(ray_xy)
         hits = np.column_stack([ray_xy, z_hit])
         mapper.add(hits)
@@ -160,6 +170,8 @@ def simulate_survey(
             break
     elevation, count = mapper.finalize(reducer)
     gt, gt_range = ground_truth_map(vertices, faces, grid, gt_supersample, query=terrain)
+    # the synthetic rays are exact, so the map matches this (sensor error ~1e-7 m, float32 storage of z)
+    gt_hits = truth_at_hits_map(mapper.points(), grid, terrain, reducer)
     traj = rec.as_dict()
     summary = compute_summary(
         traj,
@@ -173,6 +185,7 @@ def simulate_survey(
         commanded_speed=speed,
         crashed=[False] * num,
         extra=extra_summary,
+        ground_truth_at_hits=gt_hits,
     )
     return {
         "trajectory": traj,

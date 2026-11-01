@@ -29,7 +29,7 @@ if str(PROJECT_ROOT / "src") not in sys.path:
 
 import numpy as np  # noqa: E402
 
-from drone_lab.paths import PATTERNS, build_env_paths, load_waypoints  # noqa: E402
+from drone_lab.paths import PATTERNS, build_env_paths, load_waypoints, resolve_pattern  # noqa: E402
 from drone_lab.survey_io import format_summary, save_run  # noqa: E402
 
 
@@ -43,12 +43,14 @@ def resolve_run_dir(out: str | None, prefix: str) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--pattern", choices=PATTERNS, default="lawnmower")
+    parser.add_argument("--pattern", choices=PATTERNS, default=None,
+                        help="Survey pattern (default lawnmower; waypoints when --waypoints is given).")
     parser.add_argument("--spacing", type=float, default=4.0, help="Line/ring spacing [m].")
     parser.add_argument("--altitude", type=float, default=4.0, help="Clearance above the highest terrain point [m].")
     parser.add_argument("--speed", type=float, default=1.0, help="Carrot speed [m/s].")
     parser.add_argument("--num_drones", type=int, default=1)
-    parser.add_argument("--waypoints", type=str, default=None, help="CSV/JSON file for --pattern waypoints.")
+    parser.add_argument("--waypoints", type=str, default=None,
+                        help="CSV/JSON waypoints file; implies --pattern waypoints.")
     parser.add_argument("--turn", choices=("round", "square"), default="round")
     parser.add_argument("--direction", choices=("x", "y"), default="x")
     parser.add_argument("--map_resolution", type=float, default=0.25)
@@ -58,6 +60,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=str, default=None, help="Run name under runs/ or a path.")
     parser.add_argument("--no_plots", action="store_true")
     args = parser.parse_args(argv)
+    try:
+        args.pattern = resolve_pattern(args.pattern, bool(args.waypoints))
+    except ValueError as exc:
+        parser.error(str(exc))
 
     from drone_lab.synthetic import simulate_survey
     from drone_lab.terrain import SURVEY_TERRAIN_CFG, generate_terrain_mesh, terrain_area

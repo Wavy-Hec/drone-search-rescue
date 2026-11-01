@@ -10,24 +10,34 @@ import numpy as np
 
 from _runner import main_for, require
 
-from drone_lab.mapping import ElevationMapper, GridSpec, ground_truth_map, heightfield_to_mesh, MeshHeightQuery
+from drone_lab.mapping import (
+    ElevationMapper,
+    GridSpec,
+    MeshHeightQuery,
+    ground_truth_map,
+    heightfield_to_mesh,
+    truth_at_hits_map,
+)
 from drone_lab.paths import Area, lawnmower, resample_polyline
 from drone_lab.survey_io import TrajectoryRecorder, compute_summary, load_run, save_run
 
 AREA = Area(-6.0, 6.0, -6.0, 6.0)
 
 
-def _make_run(run_dir: Path) -> None:
-    """A tiny but complete run: analytic terrain, lawnmower flight, grid rays, map, ground truth, summary."""
+def _make_run(run_dir: Path, spacing: float = 3.0) -> None:
+    """A tiny but complete run: analytic terrain, lawnmower flight, grid rays, map, ground truth, summary.
+
+    The footprint is 4 m wide, so ``spacing`` above 4 m leaves uncovered strips.
+    """
     xs = np.arange(-9.0, 9.0001, 0.1)
     xx, yy = np.meshgrid(xs, xs)
     zz = 0.8 * np.sin(xx / 2.0) + 1.5 * ((np.abs(xx - 2) < 1.5) & (np.abs(yy + 2) < 1.0))
     v, f = heightfield_to_mesh(xs, xs, zz)
     query = MeshHeightQuery(v, f)
-    plan = lawnmower(AREA, 3.0, 4.0)
+    plan = lawnmower(AREA, spacing, 4.0)
     path, _ = resample_polyline(plan, 0.15)
     rec = TrajectoryRecorder()
-    grid = GridSpec.from_area(AREA, 0.25)
+    grid = GridSpec.for_survey(AREA, 0.25)
     mapper = ElevationMapper(grid)
     o = np.arange(-2.0, 2.0001, 0.25)
     off = np.column_stack([a.ravel() for a in np.meshgrid(o, o)])
@@ -42,7 +52,8 @@ def _make_run(run_dir: Path) -> None:
     traj = rec.as_dict()
     summary = compute_summary(traj, [plan], grid=grid, area=AREA, elevation=elev, count=count, ground_truth=gt,
                               ground_truth_range=gt_range, commanded_speed=1.5,
-                              extra={"pattern": "lawnmower", "flight_z_m": 4.0, "max_lead_m": 1.0})
+                              extra={"pattern": "lawnmower", "flight_z_m": 4.0, "max_lead_m": 1.0},
+                              ground_truth_at_hits=truth_at_hits_map(mapper.points(), grid, query))
     save_run(run_dir, trajectory=traj, planned=[plan], grid=grid, area=AREA, elevation=elev, count=count,
              ground_truth=gt, ground_truth_range=gt_range, hits=np.zeros((0, 5)), meta={"source": "test"},
              summary=summary)
@@ -58,8 +69,34 @@ def test_run_roundtrip_and_summary():
         s = json.loads((run_dir / "summary.json").read_text())
         assert s["map"]["coverage_area"] > 0.99
         assert s["map"]["error_area_smooth"]["rmse"] < 0.05
+        assert s["map"]["error_area_at_hits"]["rmse"] < 1e-5  # exact synthetic rays: no sensor error
         assert abs(s["tracking"]["cross_track_mean_m"] - 0.05) < 0.01
-        assert "coverage of area" in (run_dir / "summary.txt").read_text()
+        text = (run_dir / "summary.txt").read_text()
+        assert "coverage of area" in text and "map error (sensor)" in text and "PARTIAL RUN" not in text
+
+
+def test_coverage_holes_are_outlined():
+    """Cells without ray hits are outlined (legend swatch included); a fully covered map has none."""
+    require("matplotlib")
+    import matplotlib.pyplot as plt
+
+    from drone_lab.plotting import DARK, LIGHT, _no_hit_cells, _outline_cells, make_all_plots
+
+    with tempfile.TemporaryDirectory() as d:
+        full_dir, holes_dir = Path(d) / "full", Path(d) / "holes"
+        _make_run(full_dir)
+        _make_run(holes_dir, spacing=6.0)  # lines 6 m apart, 4 m footprint: uncovered strips
+        assert not _no_hit_cells(load_run(full_dir)).any()
+        run = load_run(holes_dir)
+        holes = _no_hit_cells(run)
+        assert 0.2 < holes.mean() < 0.5, holes.mean()
+        for theme in (LIGHT, DARK):
+            fig, ax = plt.subplots()
+            assert _outline_cells(ax, holes, run.grid, theme) and len(ax.collections) == 1
+            assert not _outline_cells(ax, np.zeros_like(holes), run.grid, theme) and len(ax.collections) == 1
+            plt.close(fig)
+        for theme in ("light", "dark"):
+            assert len(make_all_plots(holes_dir, theme=theme)) == 4
 
 
 def test_plots_written_and_not_blank():

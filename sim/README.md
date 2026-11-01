@@ -26,10 +26,13 @@ trajectories, error maps, a 3D view, altitude/speed plots, and optionally a vide
    It is seeded and fully deterministic, so the CPU preview shows exactly what the simulator builds.
 4. **Mapping:** a 5 m x 5 m grid of 441 vertical rays (0.25 m apart) hangs under the drone (gimballed: it stays
    level when the drone tilts). Every step the ray hits are binned into 0.25 m cells; each cell's height is the
-   median of its hits. The ground truth is a dense vertical ray cast of the exact terrain mesh.
+   median of its hits. The survey lines run 2, 6, 10 ... m from the area edge, so the rows of rays fall on a
+   0.25 m lattice; the cell edges are placed midway between those rows, so each row crosses the middle of its
+   cells instead of their edge. The ground truth is a dense vertical ray cast of the exact terrain mesh.
 5. **Metrics:** coverage of the area, map RMSE / MAE / max error (also "away from steps", since a 0.25 m cell
-   straddling a 2 m wall is ambiguous by nature), path length, cross-track error between plan and flight, and the
-   drone-carrot distance.
+   straddling a 2 m wall is ambiguous by nature), the sensor-only error (map vs the true terrain under the very
+   same rays, independent of where the rays landed in each cell), path length, cross-track error between plan
+   and flight, and the drone-carrot distance.
 
 ## Layout
 
@@ -42,6 +45,7 @@ src/drone_lab/
   survey_io.py      run directory format, trajectory log, summary                           (numpy only)
   plotting.py       all figures                                                              (matplotlib)
   synthetic.py      CPU-only kinematic survey (pipeline test without Isaac Sim)
+  video.py          headless MP4 capture from a Kit visualizer, shared by the GPU scripts    (numpy only)
   reference.py      reference trajectories for the tracking task                            (torch only)
   register.py       task-registration callback for the isaaclab CLI without pip install
   tasks/
@@ -83,7 +87,8 @@ ls $RUN/exported        # policy.pt  policy.onnx
 # 3. Quick smoke test of the survey (1 minute of flight, no video)
 python scripts/survey_map.py --checkpoint ${RUN}exported/policy.pt --max_time 60 --out smoke
 
-# 4. Full lawnmower survey with video (headless camera over the whole area)
+# 4. Full lawnmower survey with video (headless camera over the whole area; 3x time-lapse)
+#    Ctrl+C stops the flight early and still saves everything flown so far (marked PARTIAL RUN).
 python scripts/survey_map.py --checkpoint ${RUN}exported/policy.pt --pattern lawnmower \
     --altitude 4 --spacing 4 --speed 1.0 --video --out lawnmower_v1
 
@@ -103,12 +108,14 @@ python scripts/survey_map.py --checkpoint ${RUN}exported/policy.pt --print_confi
 ```
 
 `survey_map.py` options: `--pattern lawnmower|spiral|figure8|waypoints`, `--waypoints file.csv|json` (x,y flown at
-the survey altitude, or x,y,z absolute), `--altitude` (clearance above the highest terrain point, default 4 m),
-`--spacing` (default 4 m; keep it below the 5 m footprint), `--speed` (default 1 m/s), `--max_lead` (default 1 m),
-`--turn round|square`, `--direction x|y`, `--num_envs N` (drones split the area into strips), `--sensor grid|lidar`,
-`--map_resolution`, `--reducer median|mean|max|min`, `--max_time`, `--video`, `--camera overview|chase`,
-`--video_fps`, `--show_rays`, `--seed`, `--out`. Trailing `key=value` tokens are Hydra overrides of the task
-config, e.g. `env.commands.survey_target.turn=square`.
+the survey altitude, or x,y,z absolute; implies `--pattern waypoints`, and combining it with another `--pattern`
+is an error), `--altitude` (clearance above the highest terrain point, default 4 m), `--spacing` (default 4 m;
+keep it below the 5 m footprint), `--speed` (default 1 m/s), `--max_lead` (default 1 m), `--turn round|square`,
+`--direction x|y`, `--num_envs N` (drones split the area into strips), `--sensor grid|lidar`, `--map_resolution`
+(keep it a multiple of the 0.25 m ray spacing), `--reducer median|mean|max|min`, `--max_time`, `--video`,
+`--camera overview|chase`, `--video_fps` (default 30: one frame per 0.1 s step, so a 3x time-lapse; 10 plays in
+real time), `--show_rays`, `--seed`, `--out`. Trailing `key=value` tokens are Hydra overrides of the task config,
+e.g. `env.commands.survey_target.turn=square`.
 
 Watching the survey task in the `isaaclab` CLI needs the project installed (once, in env_isaaclab), or the
 no-install callback:
@@ -138,7 +145,8 @@ python scripts/eval_trajectory.py --checkpoint ${TRUN}model_1999.pt --shape figu
 ```
 
 `eval_trajectory.py` writes `runs/<name>/trajectory_tracking.png` (3D and top view of reference vs flown, error
-over time with the RMSE), `trajectory_eval.csv` and `eval_summary.json`.
+over time with the RMSE), `trajectory_eval.csv` and `eval_summary.json`; with `--video` also `trajectory.mp4`
+(chase camera with the reference and look-ahead markers; `--video_fps`, default 30 = 3x time-lapse).
 
 ## Outputs of a survey (`runs/<name>/`)
 
@@ -150,9 +158,9 @@ over time with the RMSE), `trajectory_eval.csv` and `eval_summary.json`.
 | `hit_count.npy` | ray hits per cell |
 | `ground_truth.npy`, `ground_truth_range.npy` | true terrain height per cell, and the height spread inside each cell (steps/walls) |
 | `hits.npy` | subsampled ray hits, world frame: time, drone, x, y, z |
-| `map_meta.json`, `summary.json`, `summary.txt` | grid and area, all metrics, short text summary |
-| `map_with_trajectory.png`, `map_error.png`, `map_3d.png`, `altitude_profile.png` | figures |
-| `survey.mp4` | video (with `--video`) |
+| `map_meta.json`, `summary.json`, `summary.txt` | grid and area, all metrics (map error vs the cell-mean truth, away from steps, and sensor-only vs the truth under the same rays), short text summary; `interrupted` is set for a partial run (Ctrl+C or an error) |
+| `map_with_trajectory.png`, `map_error.png`, `map_3d.png`, `altitude_profile.png` | figures; cells without ray hits are outlined |
+| `survey.mp4` | video (with `--video`): one frame per 0.1 s policy step written at `--video_fps` 30, i.e. a 3x time-lapse (`--video_fps 10` for real time) |
 
 ## CPU tools (no GPU needed)
 
@@ -160,7 +168,7 @@ over time with the RMSE), `trajectory_eval.csv` and `eval_summary.json`.
 conda activate env_isaaclab           # or the isaac terminal
 CUDA_VISIBLE_DEVICES= python scripts/preview_area.py --pattern lawnmower           # runs/preview_lawnmower/
 CUDA_VISIBLE_DEVICES= python scripts/synthetic_survey.py --out synthetic_lawnmower  # whole pipeline, ~4 s
-CUDA_VISIBLE_DEVICES= python tests/run_cpu_tests.py                                 # 39 tests
+CUDA_VISIBLE_DEVICES= python tests/run_cpu_tests.py                                 # 49 tests
 ~/anaconda3/bin/python -m pytest tests                                             # numpy-only subset
 ```
 
@@ -174,8 +182,11 @@ CUDA_VISIBLE_DEVICES= python tests/run_cpu_tests.py                             
   `'env.commands.survey_target.area=[-15,15,-15,15]' env.commands.survey_target.area_margin=1.0`
   (quote the brackets in zsh).
 * **Path:** `--pattern`, `--spacing`, `--altitude`, `--turn`, `--direction`, or your own waypoints file.
-  Coverage needs spacing <= footprint (5 m); denser lines or a little cross-track jitter also reduce the per-cell
-  sampling bias of a fixed ray grid.
+  Coverage needs spacing <= footprint (5 m). When the survey lines sit at multiples of 0.25 m from the area edge
+  (the default: 40 m area, 4 m spacing), every row of rays crosses the middle of its cells. Other spacings or
+  drone counts (e.g. 3 drones: lines 3.33 m apart) put the rows elsewhere inside the cells, which costs about
+  1-2 cm of RMSE away from steps on this terrain; the summary's "map error (sensor)" line stays independent of
+  that.
 * **Sensor:** `--sensor lidar` (downward cone, 1152 rays) or edit `MAPPING_GRID` in
   `tasks/survey/config/arl_robot_1/survey_env_cfg.py`.
 * **Speed:** the carrot waits whenever the drone lags more than `max_lead`; if the drone cannot keep up, the
@@ -199,3 +210,32 @@ CUDA_VISIBLE_DEVICES= python tests/run_cpu_tests.py                             
   If the contact check ever fires without a real collision, disable it for a run with the Hydra token
   `env.terminations.collision=null`.
 * `survey_map.py` also accepts the raw training checkpoint (`model_*.pt`), so step 2 (export) is optional.
+
+## Fixes before the first flight (2026-11-01)
+
+Six issues were found in the first version. Each was checked against the Isaac Lab 3.0 source and fixed.
+These are CPU-side changes only; nothing has run in Isaac Sim yet.
+
+* **Map grid aligned with the rays (major).** The survey lines sit at 2, 6, 10 ... m from the area edge, so the
+  0.25 m rows of rays fell exactly on the 0.25 m cell edges. Every cell was measured along its edge, which
+  shifted the map by 12.5 cm across the lines (opposite-signed errors on north- and south-facing slopes). The
+  cell edges now sit midway between the ray rows (`GridSpec.for_survey`: half the ray spacing, which also keeps
+  `--map_resolution 0.5` or `1.0` symmetric). Synthetic lawnmower: RMSE 0.155 -> 0.086 m, away from steps
+  0.046 -> 0.006 m. The summary also reports a sensor-only error: the map against the true terrain under the
+  very same rays. That number does not depend on where the rays landed and is 0.000 m for the exact synthetic
+  rays. Line spacings off the lattice (3 drones: lines 3.33 m apart) stay at about 0.017 m away from steps.
+* **Markers in the trajectory video.** `eval_trajectory.py --video` now captures frames the way Isaac Lab's own
+  recorder does (sync the stage, then run the marker callbacks), so the reference and look-ahead spheres move.
+  Both GPU scripts share `drone_lab/video.py`.
+* **Ctrl+C keeps the survey.** Ctrl+C or an error during the flight saves everything logged so far (summary, map,
+  plots, marked PARTIAL RUN) before the script exits. An error is re-raised after saving.
+* **Coverage holes are visible.** Cells without ray hits are outlined in both map figures, in light and dark
+  themes, so a hole no longer looks like "lowest terrain" or "zero error". The "no ray hits" legend entry only
+  appears when there are holes.
+* **Video speed is stated.** `survey.mp4` is a 3x time-lapse by default (10 Hz frames written at 30 fps);
+  `--video_fps 10` plays in real time. The factor is printed and stored in the summary.
+* **`--waypoints` with another `--pattern`** now stops with a clear message instead of silently flying the
+  generated pattern (`survey_map.py`, `synthetic_survey.py`, `preview_area.py`).
+
+There are now 49 CPU tests (10 new), including an offline run of `survey_map.py` with a stand-in environment
+that exercises the Ctrl+C and error paths.

@@ -44,6 +44,22 @@ class GridSpec:
             area.x_min - padding, area.x_max + padding, area.y_min - padding, area.y_max + padding, resolution
         )
 
+    @classmethod
+    def for_survey(cls, area: Area, resolution: float, ray_spacing: float = 0.25) -> GridSpec:
+        """Map grid whose cell edges lie midway between the rows of the mapping ray lattice.
+
+        The mapping rays form a fixed lattice around the drone (``GridPatternCfg``: offsets ``k * ray_spacing``),
+        and the survey lines sit at round distances from the area edge (default: 2, 6, 10, ... m), so the ray
+        rows fall on ``area.x_min + k * ray_spacing`` (same in y). A grid anchored at the area edge would put
+        every ray row exactly on a cell *boundary*: each cell is then measured along its edge instead of across
+        it, which shifts the map by half a cell across the lines. Shifting the grid by half the ray spacing puts
+        the edges between the rows instead: with ``resolution == ray_spacing`` (the default 0.25 m) every row runs
+        through the middle of its cells, and with a multiple of it the rows inside a cell sit symmetrically about
+        its centre (where neighbouring swaths overlap, one row of a cell can still be hit more often than the
+        other). Keep ``resolution`` a multiple of ``ray_spacing``; the default is the most accurate.
+        """
+        return cls.from_area(area, resolution, padding=0.5 * ray_spacing)
+
     @property
     def x_max(self) -> float:
         return self.x_min + self.nx * self.resolution
@@ -339,6 +355,27 @@ def ground_truth_map(
     return gt.astype(np.float32), rng.astype(np.float32)
 
 
+def truth_at_hits_map(
+    points: np.ndarray, grid: GridSpec, query: MeshHeightQuery, reducer: str = "median"
+) -> np.ndarray:
+    """Ground truth sampled where the rays actually hit, reduced per cell like the elevation map.
+
+    Every hit's z is replaced by the true terrain height under the same xy, and the cells are reduced with the
+    same ``reducer``. Comparing the map with this isolates the *sensor* error (what the rays measured versus the
+    terrain at those very points) from the *sampling* error (where inside each cell the rays happened to land),
+    which the comparison with the cell-mean ground truth of :func:`ground_truth_map` also contains.
+
+    Returns:
+        Heights (ny, nx) float32, NaN where the map has no hits.
+    """
+    pts = _clean_points(points)
+    if len(pts) == 0:
+        return np.full(grid.shape, np.nan, dtype=np.float32)
+    z_true = query(pts[:, :2])
+    ok = np.isfinite(z_true)
+    return elevation_map(np.column_stack([pts[ok, :2], z_true[ok]]), grid, reducer)[0]
+
+
 def heightfield_to_mesh(xs: np.ndarray, ys: np.ndarray, z: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Triangle mesh of a height field sampled at ``xs`` (nx,) x ``ys`` (ny,), ``z`` shape (ny, nx)."""
     xs = np.asarray(xs, dtype=np.float64)
@@ -438,14 +475,21 @@ def survey_map_metrics(
     grid: GridSpec,
     area: Area,
     step_threshold: float = 0.2,
+    truth_at_hits: np.ndarray | None = None,
 ) -> dict:
-    """Coverage and map error inside the survey area (and away from steps/walls)."""
+    """Coverage and map error inside the survey area (and away from steps/walls).
+
+    ``truth_at_hits`` (see :func:`truth_at_hits_map`) adds ``error_area_at_hits``: the map against the true
+    terrain under the same rays, i.e. the sensor error alone, independent of where the rays fell in each cell.
+    """
     in_area = grid.area_mask(area)
     stats = {
         "coverage_area": coverage_fraction(count, in_area),
         "coverage_grid": coverage_fraction(count),
         "error_area": map_error_stats(elevation, gt, in_area),
     }
+    if truth_at_hits is not None:
+        stats["error_area_at_hits"] = map_error_stats(elevation, truth_at_hits, in_area)
     if gt_range is not None:
         smooth = in_area & np.isfinite(gt_range) & (gt_range <= step_threshold)
         stats["error_area_smooth"] = map_error_stats(elevation, gt, smooth)

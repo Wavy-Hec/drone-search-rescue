@@ -7,11 +7,13 @@ slides along the survey path (see ``drone_lab/carrot.py``).
 
 During the flight the script logs the drone state, the carrot and the mapping ray hits; afterwards it builds a
 2.5D elevation map, a ground-truth map from the terrain mesh, metrics, and plots. Outputs go to
-``runs/<name>/`` (see ``drone_lab/survey_io.py``).
+``runs/<name>/`` (see ``drone_lab/survey_io.py``). Ctrl+C (or an error) during the flight still saves
+everything logged so far as a partial run (marked in summary.txt); a second Ctrl+C aborts the saving.
 
 Examples (env_isaaclab, from the project root)::
 
-    python scripts/survey_map.py --checkpoint logs/rsl_rl/arl_robot_1_track_position_state_based/<run>/exported/policy.pt
+    python scripts/survey_map.py \\
+        --checkpoint logs/rsl_rl/arl_robot_1_track_position_state_based/<run>/exported/policy.pt
     python scripts/survey_map.py --checkpoint <run>/model_1499.pt --pattern spiral --speed 1.5 --video --out spiral
     python scripts/survey_map.py --checkpoint <policy.pt> --num_envs 3 --camera chase --video --out three_drones
     python scripts/survey_map.py --checkpoint <policy.pt> --print_config      # check the setup, no simulator
@@ -49,13 +51,16 @@ parser.add_argument("--speed", type=float, default=None, help="Carrot speed alon
 parser.add_argument("--max_lead", type=float, default=None,
                     help="Max drone-carrot distance [m] (default 1; the policy was trained on starts within +-1 m).")
 parser.add_argument("--waypoints", type=str, default=None,
-                    help="CSV/JSON waypoints for --pattern waypoints: x,y (survey altitude) or x,y,z (absolute).")
+                    help="CSV/JSON waypoints, x,y (survey altitude) or x,y,z (absolute); implies --pattern waypoints "
+                         "and cannot be combined with another --pattern.")
 parser.add_argument("--turn", choices=("round", "square"), default=None, help="Lawnmower turn style (default round).")
 parser.add_argument("--direction", choices=("x", "y"), default=None, help="Lawnmower line direction (default x).")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of drones (they split the area).")
 parser.add_argument("--sensor", choices=("grid", "lidar"), default="grid",
                     help="Mapping rays: 5x5 m grid of vertical rays (0.25 m) or a downward lidar cone.")
-parser.add_argument("--map_resolution", type=float, default=0.25, help="Elevation map cell size [m].")
+parser.add_argument("--map_resolution", type=float, default=0.25,
+                    help="Elevation map cell size [m]; keep it a multiple of the 0.25 m ray spacing (the cell "
+                         "edges are placed midway between ray rows, see GridSpec.for_survey).")
 parser.add_argument("--reducer", choices=REDUCERS, default="median", help="Per-cell statistic of the hit heights.")
 parser.add_argument("--max_time", type=float, default=None, help="Stop after this much sim time [s].")
 parser.add_argument("--physics", dest="physics_backend", choices=("isaacsim_physx", "newton_mjwarp"),
@@ -66,8 +71,11 @@ parser.add_argument("--video", dest="record_video", action="store_true",
                     help="Record runs/<name>/survey.mp4 from a headless Kit camera (needs no moviepy).")
 parser.add_argument("--camera", choices=("overview", "chase"), default="overview",
                     help="Video camera: high oblique view of the area, or a chase camera behind drone 0.")
-parser.add_argument("--video_fps", type=int, default=30, help="Video frame rate (policy runs at 10 Hz).")
-parser.add_argument("--video_stride", type=int, default=1, help="Capture every N-th policy step.")
+parser.add_argument("--video_fps", type=int, default=30,
+                    help="Playback frame rate. One frame is captured per 0.1 s policy step (10 Hz), so the default "
+                         "30 fps is a 3x time-lapse; 10 plays in real time.")
+parser.add_argument("--video_stride", type=int, default=1,
+                    help="Capture every N-th policy step (multiplies the time-lapse factor by N).")
 parser.add_argument("--video_size", type=int, nargs=2, default=(1280, 720), metavar=("W", "H"))
 parser.add_argument("--show_rays", action="store_true", help="Draw the mapping ray hits (debug markers).")
 parser.add_argument("--hits_every", type=int, default=5, help="Log subsampled hits every N steps (hits.npy).")
@@ -91,8 +99,14 @@ import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
 import drone_lab.tasks  # noqa: E402,F401  (registers the DroneLab gym ids)
-from drone_lab.mapping import ElevationMapper, GridSpec, MeshHeightQuery, ground_truth_map  # noqa: E402
-from drone_lab.paths import read_waypoint_rows  # noqa: E402
+from drone_lab.mapping import (  # noqa: E402
+    ElevationMapper,
+    GridSpec,
+    MeshHeightQuery,
+    ground_truth_map,
+    truth_at_hits_map,
+)
+from drone_lab.paths import read_waypoint_rows, resolve_pattern  # noqa: E402
 from drone_lab.survey_io import (  # noqa: E402
     TrajectoryRecorder,
     compute_summary,
@@ -100,6 +114,7 @@ from drone_lab.survey_io import (  # noqa: E402
     quat_xyzw_to_euler,
     save_run,
 )
+from drone_lab.video import capture_frame, find_kit_visualizer, open_mp4_writer, playback_speedup  # noqa: E402
 
 UNSUPPORTED_PHYSICS_MSG = (
     "--physics {name} is not supported for this robot: isaaclab_contrib.assets.Multirotor subclasses the PhysX "
@@ -119,7 +134,14 @@ def resolve_run_dir(out: str | None, prefix: str) -> Path:
 def configure_env(env_cfg):
     """Apply the command-line survey settings to the resolved task config."""
     cmd = env_cfg.commands.survey_target
-    for name in ("pattern", "spacing", "altitude", "speed", "turn", "direction"):
+    try:
+        # --waypoints implies the waypoints pattern; with another --pattern the file would be ignored silently
+        pattern = resolve_pattern(args_cli.pattern, bool(args_cli.waypoints), default=None)
+    except ValueError as exc:
+        sys.exit(f"[survey_map] {exc}")
+    if pattern is not None:
+        cmd.pattern = pattern
+    for name in ("spacing", "altitude", "speed", "turn", "direction"):
         value = getattr(args_cli, name)
         if value is not None:
             setattr(cmd, name, value)
@@ -128,8 +150,6 @@ def configure_env(env_cfg):
         cmd.slow_lead = min(cmd.slow_lead, 0.7 * args_cli.max_lead)
     if args_cli.waypoints:
         cmd.waypoints = read_waypoint_rows(args_cli.waypoints)
-        if args_cli.pattern is None:
-            cmd.pattern = "waypoints"
     if cmd.pattern == "waypoints" and not cmd.waypoints:
         sys.exit("[survey_map] --pattern waypoints needs --waypoints <file.csv|file.json>")
     env_cfg.seed = args_cli.seed
@@ -208,23 +228,6 @@ def load_policy(checkpoint: str, env, device: str):
     return policy, "rsl_rl"
 
 
-def find_kit_visualizer(sim):
-    for viz in getattr(sim, "visualizers", []) or []:
-        if getattr(viz.cfg, "visualizer_type", None) == "kit" and hasattr(viz, "render_rgb_array"):
-            return viz
-    return None
-
-
-def capture_frame(sim, viz) -> np.ndarray | None:
-    """Same capture path as isaaclab.envs.utils.video_recorder (VideoRecorder._frame_from_visualizer)."""
-    if not sim.is_rendering:
-        sim.forward()
-        if viz.supports_markers():
-            sim.vis_marker_registry.dispatch_callbacks()
-    frame = viz.render_rgb_array()
-    return None if frame is None else np.ascontiguousarray(frame[:, :, :3])
-
-
 def main():
     import gymnasium as gym
 
@@ -273,7 +276,10 @@ def main():
         step_dt = base.step_dt
         print(str(term))
 
-        grid = GridSpec.from_area(term.area, args_cli.map_resolution)
+        # cell edges midway between the ray rows: anchoring the cells at the area edge would put every ray row on a
+        # cell boundary and shift the map by half a cell across the survey lines (GridSpec.for_survey)
+        ray_spacing = getattr(env_cfg.scene.mapping_scanner.pattern_cfg, "resolution", 0.25)  # grid pattern
+        grid = GridSpec.for_survey(term.area, args_cli.map_resolution, ray_spacing=ray_spacing)
         mapper = ElevationMapper(grid)
         rec = TrajectoryRecorder()
         hits_log: list[np.ndarray] = []
@@ -282,15 +288,15 @@ def main():
         max_steps = int(math.ceil(max_time / step_dt))
 
         writer, viz = None, None
+        speedup = playback_speedup(args_cli.video_fps, step_dt, args_cli.video_stride)
         if args_cli.record_video:
-            import imageio.v2 as imageio
-
             viz = find_kit_visualizer(base.sim)
             if viz is None:
                 print("[survey_map] WARNING: no Kit visualizer is active; no video will be recorded.")
             else:
-                writer = imageio.get_writer(str(run_dir / "survey.mp4"), fps=args_cli.video_fps, codec="libx264",
-                                            quality=7, macro_block_size=8)
+                writer = open_mp4_writer(run_dir / "survey.mp4", args_cli.video_fps)
+                print(f"[survey_map] video: one frame per {step_dt * max(1, args_cli.video_stride):.2f} s of flight "
+                      f"at {args_cli.video_fps} fps = {speedup:g}x real time")
 
         obs, _ = base.reset()
         active = torch.ones(num_envs, dtype=torch.bool, device=device)
@@ -298,149 +304,192 @@ def main():
         finished = torch.zeros(num_envs, dtype=torch.bool, device=device)
         end_points = term.path_points[torch.arange(num_envs, device=device), -1]
         t_wall = time.time()
-        step = 0
-        with torch.inference_mode():
-            for step in range(max_steps):
-                actions = policy(obs["policy"])
-                progress_before = term.progress.clone()
-                obs, _, terminated, truncated, _ = base.step(actions)
-                # an env that terminated has already been reset inside step(): stop logging it
-                newly_crashed = terminated & active
-                if torch.any(newly_crashed):
-                    for e in torch.nonzero(newly_crashed).flatten().tolist():
-                        print(f"[survey_map] drone {e} crashed at t={(step + 1) * step_dt:.1f} s "
-                              f"(progress {100 * float(progress_before[e]):.1f} %)")
-                    crashed |= newly_crashed
-                    active &= ~newly_crashed
-                active &= ~truncated
-                ids = torch.nonzero(active).flatten()
-                if len(ids) > 0:
-                    t = (step + 1) * step_dt
-                    pos = robot.data.root_pos_w.torch[ids]
-                    quat = robot.data.root_quat_w.torch[ids]
-                    lin = robot.data.root_lin_vel_w.torch[ids]
-                    ang = robot.data.root_ang_vel_b.torch[ids]
-                    carrot = term.carrot_w[ids]
-                    rows = {
-                        "step": np.full(len(ids), step),
-                        "time": np.full(len(ids), t),
-                        "env": ids.cpu().numpy(),
-                        "pos": pos.cpu().numpy(),
-                        "quat": quat.cpu().numpy(),
-                        "lin": lin.cpu().numpy(),
-                        "ang": ang.cpu().numpy(),
-                        "carrot": carrot.cpu().numpy(),
-                        "s": term.s[ids].cpu().numpy(),
-                        "progress": term.progress[ids].cpu().numpy(),
-                        "seg": term.segment_index[ids].cpu().numpy(),
-                        "obs": obs["policy"][ids, 0:3].cpu().numpy(),
-                        "gate": term.gate[ids].cpu().numpy(),
-                    }
-                    roll, pitch, yaw = quat_xyzw_to_euler(rows["quat"])
-                    rec.record(
-                        step=rows["step"], time=rows["time"], env=rows["env"],
-                        x=rows["pos"][:, 0], y=rows["pos"][:, 1], z=rows["pos"][:, 2],
-                        qx=rows["quat"][:, 0], qy=rows["quat"][:, 1], qz=rows["quat"][:, 2], qw=rows["quat"][:, 3],
-                        roll=roll, pitch=pitch, yaw=yaw,
-                        vx=rows["lin"][:, 0], vy=rows["lin"][:, 1], vz=rows["lin"][:, 2],
-                        wx=rows["ang"][:, 0], wy=rows["ang"][:, 1], wz=rows["ang"][:, 2],
-                        speed=np.linalg.norm(rows["lin"], axis=1),
-                        carrot_x=rows["carrot"][:, 0], carrot_y=rows["carrot"][:, 1], carrot_z=rows["carrot"][:, 2],
-                        carrot_dist=np.linalg.norm(rows["pos"] - rows["carrot"], axis=1),
-                        path_s=rows["s"], progress=rows["progress"], path_index=rows["seg"],
-                        obs_dx=rows["obs"][:, 0], obs_dy=rows["obs"][:, 1], obs_dz=rows["obs"][:, 2],
-                        gate=rows["gate"],
-                    )
-                    hits = scanner.data.ray_hits_w.torch[ids].cpu().numpy().reshape(-1, 3)
-                    mapper.add(hits)
-                    if args_cli.hits_every > 0 and step % args_cli.hits_every == 0:
-                        env_col = np.repeat(rows["env"], scanner.num_rays).astype(np.float32)
-                        sub = slice(None, None, max(1, args_cli.hits_stride))
-                        h, e_col = hits[sub], env_col[sub]
-                        ok = np.all(np.isfinite(h), axis=1)
-                        hits_log.append(np.column_stack([np.full(ok.sum(), t), e_col[ok], h[ok]]).astype(np.float32))
-                if writer is not None and step % max(1, args_cli.video_stride) == 0:
-                    try:
-                        frame = capture_frame(base.sim, viz)
-                        if frame is not None and frame.any():
-                            writer.append_data(frame)
-                    except Exception as exc:  # a video problem must not cost the survey
-                        print(f"[survey_map] WARNING: video capture failed ({exc}); continuing without video.")
-                        writer.close()
-                        writer = None
-                # a drone is finished once its carrot reached the end and it is close to the last point
-                close = torch.linalg.norm(robot.data.root_pos_w.torch - end_points, dim=-1) < 0.5
-                finished |= active & term.done & close
-                active &= ~finished
-                if step % 200 == 0:
-                    prog = ", ".join(f"{100 * p:.0f}%" for p in term.progress.tolist())
-                    print(f"[survey_map] t={(step + 1) * step_dt:7.1f} s  progress [{prog}]  "
-                          f"hits {mapper.num_points:,}  wall {time.time() - t_wall:.0f} s")
-                if not torch.any(active):
-                    break
+        steps_done = 0
+        interrupted: str | None = None  # why the flight stopped early (None: it ran to the end)
+        loop_error: Exception | None = None
+        # Ctrl+C or an error in the loop must not lose the flight: everything logged so far is saved below. An
+        # exception leaving this `with launch_simulation` block closes Kit, whose fast shutdown ends the process.
+        try:
+            with torch.inference_mode():
+                for step in range(max_steps):
+                    actions = policy(obs["policy"])
+                    progress_before = term.progress.clone()
+                    obs, _, terminated, truncated, _ = base.step(actions)
+                    steps_done = step + 1
+                    # an env that terminated has already been reset inside step(): stop logging it
+                    newly_crashed = terminated & active
+                    if torch.any(newly_crashed):
+                        for e in torch.nonzero(newly_crashed).flatten().tolist():
+                            print(f"[survey_map] drone {e} crashed at t={steps_done * step_dt:.1f} s "
+                                  f"(progress {100 * float(progress_before[e]):.1f} %)")
+                        crashed |= newly_crashed
+                        active &= ~newly_crashed
+                    active &= ~truncated
+                    ids = torch.nonzero(active).flatten()
+                    if len(ids) > 0:
+                        t = steps_done * step_dt
+                        pos = robot.data.root_pos_w.torch[ids]
+                        quat = robot.data.root_quat_w.torch[ids]
+                        lin = robot.data.root_lin_vel_w.torch[ids]
+                        ang = robot.data.root_ang_vel_b.torch[ids]
+                        carrot = term.carrot_w[ids]
+                        rows = {
+                            "step": np.full(len(ids), step),
+                            "time": np.full(len(ids), t),
+                            "env": ids.cpu().numpy(),
+                            "pos": pos.cpu().numpy(),
+                            "quat": quat.cpu().numpy(),
+                            "lin": lin.cpu().numpy(),
+                            "ang": ang.cpu().numpy(),
+                            "carrot": carrot.cpu().numpy(),
+                            "s": term.s[ids].cpu().numpy(),
+                            "progress": term.progress[ids].cpu().numpy(),
+                            "seg": term.segment_index[ids].cpu().numpy(),
+                            "obs": obs["policy"][ids, 0:3].cpu().numpy(),
+                            "gate": term.gate[ids].cpu().numpy(),
+                        }
+                        roll, pitch, yaw = quat_xyzw_to_euler(rows["quat"])
+                        rec.record(
+                            step=rows["step"], time=rows["time"], env=rows["env"],
+                            x=rows["pos"][:, 0], y=rows["pos"][:, 1], z=rows["pos"][:, 2],
+                            qx=rows["quat"][:, 0], qy=rows["quat"][:, 1], qz=rows["quat"][:, 2],
+                            qw=rows["quat"][:, 3], roll=roll, pitch=pitch, yaw=yaw,
+                            vx=rows["lin"][:, 0], vy=rows["lin"][:, 1], vz=rows["lin"][:, 2],
+                            wx=rows["ang"][:, 0], wy=rows["ang"][:, 1], wz=rows["ang"][:, 2],
+                            speed=np.linalg.norm(rows["lin"], axis=1),
+                            carrot_x=rows["carrot"][:, 0], carrot_y=rows["carrot"][:, 1],
+                            carrot_z=rows["carrot"][:, 2],
+                            carrot_dist=np.linalg.norm(rows["pos"] - rows["carrot"], axis=1),
+                            path_s=rows["s"], progress=rows["progress"], path_index=rows["seg"],
+                            obs_dx=rows["obs"][:, 0], obs_dy=rows["obs"][:, 1], obs_dz=rows["obs"][:, 2],
+                            gate=rows["gate"],
+                        )
+                        hits = scanner.data.ray_hits_w.torch[ids].cpu().numpy().reshape(-1, 3)
+                        mapper.add(hits)
+                        if args_cli.hits_every > 0 and step % args_cli.hits_every == 0:
+                            env_col = np.repeat(rows["env"], scanner.num_rays).astype(np.float32)
+                            sub = slice(None, None, max(1, args_cli.hits_stride))
+                            h, e_col = hits[sub], env_col[sub]
+                            ok = np.all(np.isfinite(h), axis=1)
+                            hits_log.append(
+                                np.column_stack([np.full(ok.sum(), t), e_col[ok], h[ok]]).astype(np.float32)
+                            )
+                    if writer is not None and step % max(1, args_cli.video_stride) == 0:
+                        try:
+                            frame = capture_frame(base.sim, viz)
+                            if frame is not None and frame.any():
+                                writer.append_data(frame)
+                        except Exception as exc:  # a video problem must not cost the survey
+                            print(f"[survey_map] WARNING: video capture failed ({exc}); continuing without video.")
+                            writer.close()
+                            writer = None
+                    # a drone is finished once its carrot reached the end and it is close to the last point
+                    close = torch.linalg.norm(robot.data.root_pos_w.torch - end_points, dim=-1) < 0.5
+                    finished |= active & term.done & close
+                    active &= ~finished
+                    if step % 200 == 0:
+                        prog = ", ".join(f"{100 * p:.0f}%" for p in term.progress.tolist())
+                        print(f"[survey_map] t={steps_done * step_dt:7.1f} s  progress [{prog}]  "
+                              f"hits {mapper.num_points:,}  wall {time.time() - t_wall:.0f} s")
+                    if not torch.any(active):
+                        break
+        except KeyboardInterrupt:
+            interrupted = "stopped with Ctrl+C"
+            print(f"\n[survey_map] Ctrl+C at t={steps_done * step_dt:.1f} s: saving the partial run "
+                  "(press Ctrl+C again to abort)")
+        except Exception as exc:  # saved first, re-raised at the end of this block
+            loop_error = exc
+            interrupted = f"flight loop error: {type(exc).__name__}: {exc}"
+            print(f"[survey_map] ERROR at t={steps_done * step_dt:.1f} s ({type(exc).__name__}: {exc}); saving "
+                  "the partial run first, the traceback follows at the end")
         if writer is not None:
-            writer.close()
-        print(f"[survey_map] flight finished after {(step + 1) * step_dt:.1f} s sim time "
+            try:
+                writer.close()
+            except Exception as exc:
+                print(f"[survey_map] WARNING: closing the video failed ({exc})")
+        sim_time = steps_done * step_dt
+        print(f"[survey_map] flight {'stopped' if interrupted else 'finished'} after {sim_time:.1f} s sim time "
               f"({time.time() - t_wall:.0f} s wall); finished {finished.tolist()}, crashed {crashed.tolist()}")
 
-        # ground truth from the exact terrain mesh in the stage (fallback: deterministic regeneration)
-        from drone_lab.tasks.survey.mdp import terrain_mesh_from_stage
+        saved = False
+        if len(rec) == 0:
+            print("[survey_map] nothing was logged; no run files written")
+        else:
+            # ground truth from the exact terrain mesh in the stage (fallback: deterministic regeneration)
+            from drone_lab.tasks.survey.mdp import terrain_mesh_from_stage
 
-        mesh = terrain_mesh_from_stage(term.cfg.terrain_prim_path)
-        gt_source = "usd_stage"
-        if mesh is None:
-            from drone_lab.terrain import generate_terrain_mesh
+            mesh = None
+            try:
+                mesh = terrain_mesh_from_stage(term.cfg.terrain_prim_path)
+            except Exception as exc:  # e.g. the stage is gone after a simulator error
+                print(f"[survey_map] WARNING: could not read the terrain from the stage ({exc})")
+            gt_source = "usd_stage"
+            if mesh is None:
+                from drone_lab.terrain import generate_terrain_mesh
 
-            mesh = generate_terrain_mesh(env_cfg.scene.terrain.terrain_generator)
-            gt_source = "terrain_generator"
-        terrain = MeshHeightQuery(*mesh)
-        gt, gt_range = ground_truth_map(*mesh, grid, supersample=3, query=terrain)
-        traj = rec.as_dict()
-        traj["agl"] = traj["z"] - terrain(np.column_stack([traj["x"], traj["y"]]))
-        elevation, count = mapper.finalize(args_cli.reducer)
+                mesh = generate_terrain_mesh(env_cfg.scene.terrain.terrain_generator)
+                gt_source = "terrain_generator"
+            terrain = MeshHeightQuery(*mesh)
+            gt, gt_range = ground_truth_map(*mesh, grid, supersample=3, query=terrain)
+            # the true terrain under the very same hits: the map's sensor error alone, independent of where the
+            # rays landed inside each cell
+            gt_hits = truth_at_hits_map(mapper.points(), grid, terrain, args_cli.reducer)
+            traj = rec.as_dict()
+            traj["agl"] = traj["z"] - terrain(np.column_stack([traj["x"], traj["y"]]))
+            elevation, count = mapper.finalize(args_cli.reducer)
 
-        import isaaclab
+            import isaaclab
 
-        extra = {
-            "source": "isaac_sim",
-            "task": args_cli.task,
-            "checkpoint": str(Path(args_cli.checkpoint).expanduser().resolve()),
-            "policy_kind": policy_kind,
-            "physics": args_cli.physics_backend,
-            "pattern": cmd.pattern,
-            "lawnmower_spacing_m": cmd.spacing,
-            "altitude_clearance_m": cmd.altitude,
-            "terrain_z_min_m": term.terrain_z_min,
-            "terrain_z_max_m": term.terrain_z_max,
-            "flight_z_m": term.flight_altitude,
-            "max_lead_m": cmd.max_lead,
-            "sensor": args_cli.sensor,
-            "num_rays": int(scanner.num_rays),
-            "map_reducer": args_cli.reducer,
-            "ground_truth_source": gt_source,
-            "step_dt_s": step_dt,
-            "sim_time_s": (step + 1) * step_dt,
-            "finished": finished.tolist(),
-            "isaaclab_version": getattr(isaaclab, "__version__", "unknown"),
-            "created": datetime.now().isoformat(timespec="seconds"),
-            "command": " ".join(sys.argv),
-        }
-        summary = compute_summary(
-            traj, term.waypoints, grid=grid, area=term.area, elevation=elevation, count=count, ground_truth=gt,
-            ground_truth_range=gt_range, commanded_speed=cmd.speed, crashed=crashed.tolist(), extra=extra,
-        )
-        hits_arr = np.concatenate(hits_log) if hits_log else np.zeros((0, 5), dtype=np.float32)
-        meta = {"source": "isaac_sim", "map_reducer": args_cli.reducer, "sensor": args_cli.sensor,
-                "num_rays": int(scanner.num_rays), "ground_truth_source": gt_source}
-        save_run(run_dir, trajectory=traj, planned=term.waypoints, grid=grid, area=term.area, elevation=elevation,
-                 count=count, ground_truth=gt, ground_truth_range=gt_range, hits=hits_arr, meta=meta,
-                 summary=summary)
-        print(format_summary(json.loads((run_dir / "summary.json").read_text())))
-        env.close()
+            extra = {
+                "source": "isaac_sim",
+                "task": args_cli.task,
+                "checkpoint": str(Path(args_cli.checkpoint).expanduser().resolve()),
+                "policy_kind": policy_kind,
+                "physics": args_cli.physics_backend,
+                "pattern": cmd.pattern,
+                "lawnmower_spacing_m": cmd.spacing,
+                "altitude_clearance_m": cmd.altitude,
+                "terrain_z_min_m": term.terrain_z_min,
+                "terrain_z_max_m": term.terrain_z_max,
+                "flight_z_m": term.flight_altitude,
+                "max_lead_m": cmd.max_lead,
+                "sensor": args_cli.sensor,
+                "num_rays": int(scanner.num_rays),
+                "map_reducer": args_cli.reducer,
+                "ground_truth_source": gt_source,
+                "step_dt_s": step_dt,
+                "sim_time_s": sim_time,
+                "finished": finished.tolist(),
+                "interrupted": interrupted,
+                "isaaclab_version": getattr(isaaclab, "__version__", "unknown"),
+                "created": datetime.now().isoformat(timespec="seconds"),
+                "command": " ".join(sys.argv),
+            }
+            if args_cli.record_video:
+                extra.update(video_fps=args_cli.video_fps, video_speedup=speedup)
+            summary = compute_summary(
+                traj, term.waypoints, grid=grid, area=term.area, elevation=elevation, count=count, ground_truth=gt,
+                ground_truth_range=gt_range, commanded_speed=cmd.speed, crashed=crashed.tolist(), extra=extra,
+                ground_truth_at_hits=gt_hits,
+            )
+            hits_arr = np.concatenate(hits_log) if hits_log else np.zeros((0, 5), dtype=np.float32)
+            meta = {"source": "isaac_sim", "map_reducer": args_cli.reducer, "sensor": args_cli.sensor,
+                    "num_rays": int(scanner.num_rays), "ground_truth_source": gt_source,
+                    "grid_alignment": f"cell edges midway between ray rows (GridSpec.for_survey, ray spacing "
+                                      f"{ray_spacing} m)"}
+            save_run(run_dir, trajectory=traj, planned=term.waypoints, grid=grid, area=term.area,
+                     elevation=elevation, count=count, ground_truth=gt, ground_truth_range=gt_range, hits=hits_arr,
+                     meta=meta, summary=summary)
+            saved = True
+            print(format_summary(json.loads((run_dir / "summary.json").read_text())))
+        try:
+            env.close()
+        except Exception as exc:
+            print(f"[survey_map] WARNING: env.close() failed ({exc})")
 
         # still inside launch_simulation: closing Kit uses fast shutdown, which ends the process
         # (isaacsim.simulation_app SimulationApp.close), so nothing after this block would run
-        if not args_cli.no_plots:
+        if saved and not args_cli.no_plots:
             try:
                 from drone_lab.plotting import make_all_plots
 
@@ -448,7 +497,12 @@ def main():
                     print(f"[survey_map] wrote {p}")
             except Exception as exc:  # plotting must never lose the run data
                 print(f"[survey_map] plotting failed ({exc}); run: python scripts/plot_survey.py {run_dir}")
-        print(f"[survey_map] done: {run_dir}")
+        if saved:
+            print(f"[survey_map] {'partial run saved' if interrupted else 'done'}: {run_dir}")
+        if loop_error is not None:
+            raise loop_error  # launch_simulation prints the traceback and exits with status 1
+        if interrupted is not None:
+            raise KeyboardInterrupt  # exit status 130, as for an unhandled Ctrl+C
 
 
 if __name__ == "__main__":

@@ -275,8 +275,14 @@ def compute_summary(
     commanded_speed: float | None = None,
     crashed: list[bool] | None = None,
     extra: dict | None = None,
+    ground_truth_at_hits: np.ndarray | None = None,
 ) -> dict:
-    """Coverage, map error, path length and tracking metrics of a survey run."""
+    """Coverage, map error, path length and tracking metrics of a survey run.
+
+    The map is scored against the cell-mean ground truth (``error_area``, ``error_area_smooth``) and, when
+    ``ground_truth_at_hits`` is given (:func:`drone_lab.mapping.truth_at_hits_map`), also against the true
+    terrain under the same rays (``error_area_at_hits``: sensor error only).
+    """
     envs = sorted({int(e) for e in trajectory["env"]}) if len(trajectory.get("env", [])) else []
     per_env = []
     all_ct = []
@@ -313,7 +319,8 @@ def compute_summary(
         per_env.append(entry)
         if len(pos):
             all_ct.append(distance_to_polyline(pos, plan, planar=True)[0])
-    map_stats = survey_map_metrics(elevation, count, ground_truth, ground_truth_range, grid, area)
+    map_stats = survey_map_metrics(elevation, count, ground_truth, ground_truth_range, grid, area,
+                                   truth_at_hits=ground_truth_at_hits)
     summary = {
         "num_drones": len(envs),
         "commanded_speed_mps": commanded_speed,
@@ -324,6 +331,7 @@ def compute_summary(
             "coverage_area": map_stats["coverage_area"],
             "coverage_grid": map_stats["coverage_grid"],
             "error_area": map_stats["error_area"],
+            "error_area_at_hits": map_stats.get("error_area_at_hits"),
             "error_area_smooth": map_stats.get("error_area_smooth"),
             "smooth_cell_fraction": map_stats.get("smooth_cell_fraction"),
             "step_threshold_m": map_stats.get("step_threshold"),
@@ -385,7 +393,7 @@ def _fmt(v, unit: str = "", digits: int = 2) -> str:
         return "n/a"
     if isinstance(v, bool):
         return "yes" if v else "no"
-    return f"{v:.{digits}f}{unit}"
+    return f"{round(float(v), digits) + 0.0:.{digits}f}{unit}"  # + 0.0: no "-0.000"
 
 
 def format_summary(summary: dict) -> str:
@@ -393,10 +401,13 @@ def format_summary(summary: dict) -> str:
     m = summary.get("map", {})
     err = m.get("error_area") or {}
     smooth = m.get("error_area_smooth") or {}
+    at_hits = m.get("error_area_at_hits") or {}
     fl = summary.get("flight", {})
     tr = summary.get("tracking", {})
-    lines = [
-        f"Survey summary ({summary.get('source', 'run')})",
+    lines = [f"Survey summary ({summary.get('source', 'run')})"]
+    if summary.get("interrupted"):
+        lines.append(f"  PARTIAL RUN        : {summary['interrupted']} (data up to the interruption)")
+    lines += [
         f"  pattern            : {summary.get('pattern', 'n/a')}, {summary.get('num_drones', 0)} drone(s)",
         f"  flight altitude    : {_fmt(summary.get('flight_z_m'), ' m')} (terrain max "
         f"{_fmt(summary.get('terrain_z_max_m'), ' m')} + clearance {_fmt(summary.get('altitude_clearance_m'), ' m')})",
@@ -412,6 +423,13 @@ def format_summary(summary: dict) -> str:
         f"  map error (smooth) : RMSE {_fmt(smooth.get('rmse'), ' m', 3)} on "
         f"{_fmt(100 * m['smooth_cell_fraction'] if m.get('smooth_cell_fraction') is not None else None, ' %', 0)}"
         " of the cells (no step/wall inside the cell)",
+    ]
+    if at_hits:
+        lines.append(
+            f"  map error (sensor) : RMSE {_fmt(at_hits.get('rmse'), ' m', 3)}, "
+            f"bias {_fmt(at_hits.get('bias'), ' m', 3)} (vs the true terrain under the same rays)"
+        )
+    lines += [
         f"  cross-track error  : mean {_fmt(tr.get('cross_track_mean_m'), ' m')}, RMS "
         f"{_fmt(tr.get('cross_track_rms_m'), ' m')}, max {_fmt(tr.get('cross_track_max_m'), ' m')}",
         f"  drone-carrot dist  : mean {_fmt(tr.get('carrot_dist_mean_m'), ' m')}, max "
