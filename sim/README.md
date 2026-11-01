@@ -89,6 +89,44 @@ python scripts/sar_preview.py            # GPU, ~1 min: overview, photo map with
 python scripts/sar_preview.py --no_sim   # CPU, seconds: ground truth + object map
 ```
 
+## Rescue finale: a quadruped walks the route planned on the drone's map
+
+After the survey, a ground robot goes to a person the drone found. A Unitree Go2, driven by Isaac Lab's
+rough-terrain locomotion policy (unchanged), gets the drone's elevation map and the pins of the people and objects.
+It works out where it can walk (slope, step height, roughness, object footprints, its own size), plans the cheapest
+safe route with A*, and follows it with pure pursuit. It starts on the drone's landing pad, which sits on the flat
+border just outside the surveyed area, so the planner adds that border to the drone's map. Commands, method and
+tests: [`src/drone_lab/teaming/README.md`](src/drone_lab/teaming/README.md).
+
+![The Go2 next to the person after walking the route planned on the drone's map](docs/images/rescue_finale_arrival.jpg)
+
+![The route planned on the drone's elevation map, and the traversability cost](docs/images/rescue_finale_plan.png)
+
+*Dressed site seed 0, route planned on the drone's map of the survey `runs/lawnmower_v1`: from the landing pad north
+along the border, past the crater rim, to a person lying among the collapsed buildings. Top: the arrival in the
+follow-cam video (the minimap shows the route and the walked track). Bottom: the elevation the robot planned on and
+the traversability cost with the no-go cells.*
+
+| Map the route was planned on | Person | Outcome | Planned / walked | Falls |
+|---|---|---|---|---|
+| the drone's survey map (`--run runs/lawnmower_v1 --sar_seed 0`) | person_03, lying among the blocks | reached in 34.9 s | 25.2 / 25.0 m | 0 |
+| terrain ground truth (default) | lying between the collapsed buildings | reached in 33.0 s | 24.0 / 23.8 m | 0 |
+| ground truth, dressed site (`--sar_seed 0`) | person_05, standing on the hill | reached in 25.8 s | 18.7 / 18.5 m | 0 |
+| same, `--goal_pin person_08 --max_slope 26` | person_08, down in the crater | reached in 21.6 s | 14.5 / 14.5 m | 0 |
+
+With 8 robots at once on two routes and no second tries, the 600- and the 1500-iteration checkpoints both reached the
+person 8/8 times, also with looser limits (30 deg slopes, 0.2 m steps). The drone flies on Isaac Sim PhysX and the
+Go2 walks on Newton, the backend its policy was trained on (on PhysX this checkpoint flips within about 2 s), so
+they run as two simulations of the same seeded terrain.
+
+```bash
+CUDA_VISIBLE_DEVICES= python scripts/rescue_finale.py --plan_only --out rescue_plan    # CPU, seconds: plan only
+python scripts/rescue_finale.py --run runs/lawnmower_v1 --sar_seed 0 --video --out rescue_drone_sar0   # GPU walk
+```
+
+Each run writes `runs/<out>/plan.png`, `walk.png`, `summary.txt` and, with `--video`, `rescue.mp4` plus
+`rescue_share.mp4` (about 5x smaller, for sharing).
+
 ## Layout
 
 ```
@@ -104,10 +142,12 @@ src/drone_lab/
   reference.py      reference trajectories for the tracking task                            (torch only)
   register.py       task-registration callback for the isaaclab CLI without pip install
   sar/              search-and-rescue site: assets, seeded scenario + ground truth, camera, spawner, labels
+  teaming/          rescue finale: traversability, A* planner, pure-pursuit follower, drone-map inputs, figures
   tasks/
     physics.py      physics preset (Isaac Sim PhysX)
     survey/         DroneLab-Survey-ARL-Robot-1-v0          (flies the built-in policy, not for training)
     sar/            DroneLab-SAR-ARL-Robot-1-v0             (the survey over the dressed site, with the camera)
+    rescue/         DroneLab-Rescue-Go2-v0                  (a Go2 walks a planned route; Newton physics)
     track_trajectory/ DroneLab-TrackTrajectory-ARL-Robot-1-v0 (new RL task: follow moving references)
 scripts/
   survey_map.py     GPU: fly the survey with a trained policy, map, score, plot, video
@@ -116,6 +156,7 @@ scripts/
   synthetic_survey.py CPU: full pipeline with a kinematic stand-in for the policy
   eval_trajectory.py  GPU: evaluate a trajectory-tracking policy (reference vs flown, RMSE)
   sar_preview.py    GPU: render the SAR site (overview, photo map, drone frames) and check its scale and labels
+  rescue_finale.py  rescue finale: plan on the drone's map (CPU), walk it with the Go2 (GPU), follow-cam video
 tests/              CPU tests (run_cpu_tests.py or pytest)
 docs/images/        Isaac Sim figures (isaac_*, sar_*) and CPU-pipeline previews (synthetic_*, area_preview)
 ```
