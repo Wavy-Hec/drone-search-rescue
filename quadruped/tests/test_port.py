@@ -127,6 +127,51 @@ def test_events_and_actuator_keep_2x_semantics():
     assert env_cfg.scene.robot.joint_ordering is None
 
 
+@pytest.mark.parametrize("task_id", [FLAT, ROUGH, DEPTH])
+def test_robot_preset_per_backend(task_id):
+    """PhysX keeps robot.usd with native ordering; Newton gets robot_newton.usd in the PhysX joint/body order."""
+    from quadruped_lab.assets.custom_quad import (
+        CUSTOM_QUAD_CFG,
+        CUSTOM_QUAD_NEWTON_USD_PATH,
+        CUSTOM_QUAD_PHYSX_BODY_ORDER,
+        CUSTOM_QUAD_PHYSX_JOINT_ORDER,
+        CUSTOM_QUAD_USD_PATH,
+    )
+
+    for overrides in ([], ["physics=isaacsim_physx"], ["physics=physx"]):
+        robot = _resolve(task_id, overrides)[0].scene.robot
+        assert robot.spawn.usd_path == str(CUSTOM_QUAD_USD_PATH), overrides
+        assert robot.joint_ordering is None and robot.body_ordering is None, overrides
+    for overrides in (["physics=newton_mjwarp"], ["physics=newton_kamino"]):
+        robot = _resolve(task_id, overrides)[0].scene.robot
+        assert robot.spawn.usd_path == str(CUSTOM_QUAD_NEWTON_USD_PATH), overrides
+        assert robot.joint_ordering == list(CUSTOM_QUAD_PHYSX_JOINT_ORDER)
+        assert robot.body_ordering == list(CUSTOM_QUAD_PHYSX_BODY_ORDER)
+        assert robot.prim_path == "{ENV_REGEX_NS}/Robot"
+        # only the asset's collision layout and the ordering differ from the PhysX robot
+        assert robot.actuators == CUSTOM_QUAD_CFG.actuators and robot.init_state == CUSTOM_QUAD_CFG.init_state
+    # an explicit usd_path override is applied after the preset and still wins
+    feb23 = str(CUSTOM_QUAD_USD_PATH.with_name("robot_feb23.usd"))
+    robot = _resolve(task_id, ["physics=newton_mjwarp", f"env.scene.robot.spawn.usd_path={feb23}"])[0].scene.robot
+    assert robot.spawn.usd_path == feb23
+
+
+def test_newton_asset_matches_canonical_asset():
+    """robot_newton.usd only moves the collision APIs onto the meshes; Newton imports one collider per body (CPU)."""
+    import os
+    import subprocess
+
+    script = PROJECT / "scripts" / "make_newton_asset.py"
+    assert _script("make_newton_asset").check() == 0
+    env = dict(os.environ, CUDA_VISIBLE_DEVICES="")  # Newton's importer runs on the CPU; keep the GPU out of it
+    out = subprocess.run(
+        [sys.executable, str(script), "--check", "--newton"], env=env, capture_output=True, text=True, timeout=300
+    )
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert "robot.usd: 0 collision shapes" in out.stdout
+    assert "robot_newton.usd: 17 collision shapes on 17 bodies" in out.stdout
+
+
 def test_depth_task_layout():
     from isaaclab.utils.math import quat_apply
 

@@ -13,6 +13,9 @@ Ported from the Isaac Lab 2.3.2 task ``custom_quadruped/custom_quad.py``. Change
 * ``effort_limit`` / ``velocity_limit`` are renamed to ``actuator_effort_limit`` / ``actuator_velocity_limit``.
   ``joint_effort_limit`` is set explicitly: 3.0 no longer widens the solver effort limit of explicit actuators to
   1e9, so it is pinned to the actuator limit (the asset authors 500 N*m, so it never clips below 45 N*m).
+
+New in 3.0: :data:`CUSTOM_QUAD_NEWTON_CFG`, the same robot for the Newton backend (``robot_newton.usd``, PhysX
+joint/body order). The tasks select it with ``physics=newton_mjwarp`` / ``physics=newton_kamino``.
 """
 
 from math import pi
@@ -21,6 +24,7 @@ import isaaclab.sim as sim_utils
 from isaaclab.actuators import DCMotorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.sim.schemas import UsdPhysicsRigidBodyCfg
+from isaaclab.utils import replace
 from isaaclab_newton.sim.schemas import NewtonArticulationCfg
 from isaaclab_physx.sim.schemas import PhysxArticulationCfg, PhysxRigidBodyCfg
 
@@ -36,6 +40,54 @@ CUSTOM_QUAD_FEB23_USD_PATH = CUSTOM_QUAD_USD_DIR / "robot_feb23.usd"
 """Unused alternative: the 2026-02-23 re-save from ``~/IsaacLab``. Its root layer differs from the canonical one only
 in the saved viewport camera (``customLayerData``); the composed physics is identical. Kept for an A/B test via
 ``env.scene.robot.spawn.usd_path=<path>``."""
+
+CUSTOM_QUAD_NEWTON_USD_PATH = CUSTOM_QUAD_USD_DIR / "robot_newton.usd"
+"""Newton variant of :data:`CUSTOM_QUAD_USD_PATH`, written by ``scripts/make_newton_asset.py``.
+
+``robot.usd`` authors ``PhysicsCollisionAPI`` + ``PhysicsMeshCollisionAPI`` on the Xform above each collision mesh.
+Isaac Sim PhysX accepts that layout; Newton's USD importer only builds shapes from Gprims, skips all 17 colliders and
+the scene does not build (the contact sensor finds no shapes). ``robot_newton.usd`` sublayers ``robot.usd`` and
+selects a ``Physics = "Newton"`` variant whose payload moves the two APIs onto the Mesh prims. Bodies, masses,
+joints, drives, limits and collision meshes are composed from the original layers, which stay untouched."""
+
+CUSTOM_QUAD_PHYSX_JOINT_ORDER = (
+    "FL_hip_joint",
+    "FR_hip_joint",
+    "RL_hip_joint",
+    "RR_hip_joint",
+    "FL_thigh_joint",
+    "FR_thigh_joint",
+    "RL_thigh_joint",
+    "RR_thigh_joint",
+    "FL_calf_joint",
+    "FR_calf_joint",
+    "RL_calf_joint",
+    "RR_calf_joint",
+)
+"""Isaac Sim PhysX joint order of the asset (breadth-first; measured on the GPU). The converted 2.x checkpoint's
+``joint_pos`` / ``joint_vel`` / ``actions`` entries follow it. Newton lists the joints per leg (FL hip, thigh, calf,
+FR hip, ...)."""
+
+CUSTOM_QUAD_PHYSX_BODY_ORDER = (
+    "trunk",
+    "FL_hip",
+    "FR_hip",
+    "RL_hip",
+    "RR_hip",
+    "FL_thigh",
+    "FR_thigh",
+    "RL_thigh",
+    "RR_thigh",
+    "FL_calf",
+    "FR_calf",
+    "RL_calf",
+    "RR_calf",
+    "FL_foot",
+    "FR_foot",
+    "RL_foot",
+    "RR_foot",
+)
+"""Isaac Sim PhysX body order of the asset (breadth-first; measured on the GPU). Newton lists the bodies per leg."""
 
 CUSTOM_QUAD_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
@@ -78,6 +130,7 @@ CUSTOM_QUAD_CFG = ArticulationCfg(
     soft_joint_pos_limit_factor=0.9,
     # joint_ordering / body_ordering stay None (backend-native order). The 2.x checkpoints were trained with
     # Isaac Sim PhysX's native order; the "physx" alias means OvPhysX tensor-view order and may differ.
+    # CUSTOM_QUAD_NEWTON_CFG pins both to that Isaac Sim PhysX order as explicit name lists.
     actuators={
         "base_legs": DCMotorCfg(
             joint_names_expr=[".*_hip_joint", ".*_thigh_joint", ".*_calf_joint"],
@@ -92,3 +145,14 @@ CUSTOM_QUAD_CFG = ArticulationCfg(
     },
 )
 """Configuration of the custom quadruped with a DC-motor actuator model on all 12 leg joints."""
+
+CUSTOM_QUAD_NEWTON_CFG = replace(
+    CUSTOM_QUAD_CFG,
+    spawn=replace(CUSTOM_QUAD_CFG.spawn, usd_path=str(CUSTOM_QUAD_NEWTON_USD_PATH)),
+    joint_ordering=list(CUSTOM_QUAD_PHYSX_JOINT_ORDER),
+    body_ordering=list(CUSTOM_QUAD_PHYSX_BODY_ORDER),
+)
+"""Newton (MJWarp / Kamino) variant of :data:`CUSTOM_QUAD_CFG`: :data:`CUSTOM_QUAD_NEWTON_USD_PATH`, with joints and
+bodies presented in the Isaac Sim PhysX order. Observations and actions then use the same layout on both backends: the
+converted 2.x checkpoint replays on Newton, and a policy trained on either backend has the layout the other expects.
+Everything else equals :data:`CUSTOM_QUAD_CFG`."""

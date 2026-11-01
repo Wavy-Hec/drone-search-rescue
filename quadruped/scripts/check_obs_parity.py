@@ -594,8 +594,10 @@ def main(argv: list[str] | None = None) -> int:
     old_state, skipped, old_defaults = old["state"], old["skipped"], old["defaults"]
 
     cfg = CustomQuadRoughEnvCfg()
+    # scene.robot is the CustomQuadRobotCfg preset; its default is the PhysX robot (robot.usd) the checkpoint used
+    robot = cfg.scene.robot.default
     new_terms = new_policy_terms(cfg)
-    joints = usd_dof_joints(cfg.scene.robot.spawn.usd_path)
+    joints = usd_dof_joints(robot.spawn.usd_path)
     rays = grid_pattern(cfg.scene.height_scanner.pattern_cfg, "cpu")[0].shape[0]
     dims = FIXED_DIMS | {"joint_pos_rel": len(joints), "joint_vel_rel": len(joints), "last_action": len(joints)}
     dims["height_scan"] = rays
@@ -646,10 +648,10 @@ def main(argv: list[str] | None = None) -> int:
             (cfg.sim.dt, cfg.decimation, cfg.sim.render_interval),
         ),
         "episode length [s]": (old_state.kwargs["episode_length_s"], cfg.episode_length_s),
-        "init root pos": (old_robot["init_pos"], tuple(cfg.scene.robot.init_state.pos)),
-        "default joint pos (regex -> rad)": (old_robot["joint_pos"], dict(cfg.scene.robot.init_state.joint_pos)),
+        "init root pos": (old_robot["init_pos"], tuple(robot.init_state.pos)),
+        "default joint pos (regex -> rad)": (old_robot["joint_pos"], dict(robot.init_state.joint_pos)),
     }
-    act_cfg = cfg.scene.robot.actuators["base_legs"]
+    act_cfg = robot.actuators["base_legs"]
     o = old_robot["actuator"]
     checks["DC motor (effort, saturation, velocity, kp, kd, friction)"] = (
         (o["effort_limit"], o["saturation_effort"], o["velocity_limit"], o["stiffness"], o["damping"], o["friction"]),

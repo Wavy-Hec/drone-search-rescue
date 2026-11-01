@@ -17,8 +17,24 @@ changes (<=50 envs, 5x5 terrain grid without curriculum, random spawn level, no 
 from isaaclab.utils import configclass, replace
 
 from isaaclab_tasks.core.velocity.velocity_env_cfg import LocomotionVelocityRoughEnvCfg
+from isaaclab_tasks.utils import PresetCfg
 
-from quadruped_lab.assets.custom_quad import CUSTOM_QUAD_CFG
+from quadruped_lab.assets.custom_quad import CUSTOM_QUAD_CFG, CUSTOM_QUAD_NEWTON_CFG
+
+
+@configclass
+class CustomQuadRobotCfg(PresetCfg):
+    """The robot per physics backend, picked by the ``physics=`` selector (like 3.0's ``ShadowHandRobotCfg``).
+
+    Isaac Sim PhysX (the default, also ``physx`` / ``ovphysx``) keeps the canonical ``robot.usd`` the 2.x checkpoints
+    were trained on, with backend-native ordering. The Newton presets use ``robot_newton.usd``, whose colliders Newton
+    can import, and present joints and bodies in the Isaac Sim PhysX order (Newton's own order is per leg), so one
+    policy runs on both backends. Only the asset's collision layout and the ordering differ; everything else is shared.
+    """
+
+    default = replace(CUSTOM_QUAD_CFG, prim_path="{ENV_REGEX_NS}/Robot")
+    newton_mjwarp = replace(CUSTOM_QUAD_NEWTON_CFG, prim_path="{ENV_REGEX_NS}/Robot")
+    newton_kamino = newton_mjwarp
 
 
 @configclass
@@ -40,8 +56,8 @@ class CustomQuadRoughEnvCfg(LocomotionVelocityRoughEnvCfg):
         # ``env.sim.use_newton_actuators=false`` restores the deprecated Isaac Lab execution path for an A/B test.
         self.sim.use_newton_actuators = True
 
-        # scene
-        self.scene.robot = replace(CUSTOM_QUAD_CFG, prim_path="{ENV_REGEX_NS}/Robot")
+        # scene: robot.usd on PhysX, robot_newton.usd (+ PhysX joint/body order) on Newton, see CustomQuadRobotCfg
+        self.scene.robot = CustomQuadRobotCfg()
         self.scene.height_scanner.prim_path = "{ENV_REGEX_NS}/Robot/trunk"
         # scale down the terrains because the robot is small
         sub_terrains = self.scene.terrain.terrain_generator.sub_terrains

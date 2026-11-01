@@ -255,7 +255,7 @@ def configured_setup():
     cam = cfg.scene.depth_camera
     if cam.offset.convention != "opengl":
         raise NotImplementedError(f"only the 'opengl' offset convention is supported, got {cam.offset.convention!r}")
-    robot = cfg.scene.robot
+    robot = cfg.scene.robot.default  # CustomQuadRobotCfg preset: the PhysX robot (robot.usd), the task default
     return cam, robot.spawn.usd_path, dict(robot.init_state.joint_pos)
 
 
