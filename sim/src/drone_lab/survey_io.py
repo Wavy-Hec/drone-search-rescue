@@ -407,11 +407,20 @@ def format_summary(summary: dict) -> str:
     lines = [f"Survey summary ({summary.get('source', 'run')})"]
     if summary.get("interrupted"):
         lines.append(f"  PARTIAL RUN        : {summary['interrupted']} (data up to the interruption)")
+    if summary.get("time_limit_reached"):
+        lines.append(f"  TIME LIMIT         : stopped at {_fmt(summary.get('max_time_s'), ' s', 0)} of sim time "
+                     "(--max_time) before every drone reached the end of its path")
     lines += [
         f"  pattern            : {summary.get('pattern', 'n/a')}, {summary.get('num_drones', 0)} drone(s)",
         f"  flight altitude    : {_fmt(summary.get('flight_z_m'), ' m')} (terrain max "
         f"{_fmt(summary.get('terrain_z_max_m'), ' m')} + clearance {_fmt(summary.get('altitude_clearance_m'), ' m')})",
         f"  duration           : {_fmt(fl.get('duration_s'), ' s', 1)}",
+    ]
+    if summary.get("real_time_factor") is not None:  # simulator runs only
+        lines.append(f"  sim / wall time    : {_fmt(summary.get('sim_time_s'), ' s', 1)} / "
+                     f"{_fmt(summary.get('wall_time_s'), ' s', 1)} ({_fmt(summary.get('real_time_factor'), 'x', 1)} "
+                     "real time, flight loop only)")
+    lines += [
         f"  path planned/flown : {_fmt(fl.get('path_length_planned_m'), ' m', 1)} / "
         f"{_fmt(fl.get('path_length_flown_m'), ' m', 1)}",
         f"  completion (min)   : {_fmt(100 * fl['completion_min'] if 'completion_min' in fl else None, ' %', 1)}"

@@ -84,7 +84,10 @@ def advance_carrot(
 
     The nominal step ``speed * dt`` is scaled by a gate that is 1 while the drone-carrot distance is below
     ``slow_lead`` and falls linearly to 0 at ``max_lead``. A step that would put the carrot more than
-    ``max_lead`` away from the drone is rejected (the carrot waits).
+    ``max_lead`` away from the drone is shortened to ``max_lead - distance``: the carrot moves at most that far
+    along the path, and a chord is never longer than its arc, so it stays within ``max_lead``. (Rejecting the
+    whole step instead made the carrot stop-and-go once ``speed * dt > max_lead - slow_lead``, e.g. above 3 m/s
+    with the defaults, and stall for good at ``speed * dt >= max_lead``.)
 
     Args:
         s: (E,) current carrot arclength.
@@ -104,11 +107,15 @@ def advance_carrot(
     carrot, _ = interpolate_path(points, arclength, s)
     dist = torch.linalg.norm(carrot - drone_pos, dim=-1)
     gate = ((max_lead - dist) / (max_lead - slow_lead)).clamp(0.0, 1.0)
-    s_try = torch.minimum(s + speed * gate * dt, arclength[:, -1])
+    step = speed * gate * dt
+    s_try = torch.minimum(s + step, arclength[:, -1])
     carrot_try, _ = interpolate_path(points, arclength, s_try)
     ok = torch.linalg.norm(carrot_try - drone_pos, dim=-1) <= max_lead
-    s_new = torch.where(ok, s_try, s)
-    carrot_new = torch.where(ok.unsqueeze(-1), carrot_try, carrot)
+    # too far: advance only by the remaining lead (|carrot' - drone| <= dist + arc step <= max_lead)
+    s_short = torch.minimum(s + torch.minimum(step, (max_lead - dist).clamp(min=0.0)), arclength[:, -1])
+    s_new = torch.where(ok, s_try, s_short)
+    carrot_short, _ = interpolate_path(points, arclength, s_short)
+    carrot_new = torch.where(ok.unsqueeze(-1), carrot_try, carrot_short)
     return s_new, carrot_new, gate
 
 

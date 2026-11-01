@@ -284,7 +284,10 @@ def main():
         rec = TrajectoryRecorder()
         hits_log: list[np.ndarray] = []
         path_len = float(term.path_length.max())
-        max_time = args_cli.max_time or (3.0 * path_len / max(cmd.speed, 1e-3) + 60.0)
+        # default time budget: the drone may never reach the commanded speed (the built-in policy tops out near
+        # 1.3 m/s however fast the carrot is asked to go), so budget for at most 1 m/s; the loop ends as soon as
+        # every drone is done, so a generous budget costs nothing
+        max_time = args_cli.max_time or (3.0 * path_len / min(max(cmd.speed, 1e-3), 1.0) + 60.0)
         max_steps = int(math.ceil(max_time / step_dt))
 
         writer, viz = None, None
@@ -321,7 +324,7 @@ def main():
                     if torch.any(newly_crashed):
                         for e in torch.nonzero(newly_crashed).flatten().tolist():
                             print(f"[survey_map] drone {e} crashed at t={steps_done * step_dt:.1f} s "
-                                  f"(progress {100 * float(progress_before[e]):.1f} %)")
+                                  f"(progress {100 * float(progress_before[e]):.1f} %)", flush=True)
                         crashed |= newly_crashed
                         active &= ~newly_crashed
                     active &= ~truncated
@@ -389,8 +392,10 @@ def main():
                     active &= ~finished
                     if step % 200 == 0:
                         prog = ", ".join(f"{100 * p:.0f}%" for p in term.progress.tolist())
+                        # flush: with stdout redirected to a log (or | tee) the lines would otherwise only appear
+                        # at exit
                         print(f"[survey_map] t={steps_done * step_dt:7.1f} s  progress [{prog}]  "
-                              f"hits {mapper.num_points:,}  wall {time.time() - t_wall:.0f} s")
+                              f"hits {mapper.num_points:,}  wall {time.time() - t_wall:.0f} s", flush=True)
                     if not torch.any(active):
                         break
         except KeyboardInterrupt:
@@ -408,8 +413,19 @@ def main():
             except Exception as exc:
                 print(f"[survey_map] WARNING: closing the video failed ({exc})")
         sim_time = steps_done * step_dt
-        print(f"[survey_map] flight {'stopped' if interrupted else 'finished'} after {sim_time:.1f} s sim time "
-              f"({time.time() - t_wall:.0f} s wall); finished {finished.tolist()}, crashed {crashed.tolist()}")
+        wall_time = time.time() - t_wall
+        real_time_factor = sim_time / max(wall_time, 1e-9)
+        # the loop also ends at the time budget, with drones still flying: say so instead of "finished"
+        time_limit_reached = interrupted is None and steps_done >= max_steps and bool(torch.any(active))
+        if interrupted:
+            how = "stopped"
+        elif time_limit_reached:
+            how = f"stopped at the time limit ({max_time:g} s, --max_time)"
+        else:
+            how = "finished"
+        print(f"[survey_map] flight {how} after {sim_time:.1f} s sim time ({wall_time:.0f} s wall, "
+              f"{real_time_factor:.1f}x real time); finished {finished.tolist()}, crashed {crashed.tolist()}",
+              flush=True)
 
         saved = False
         if len(rec) == 0:
@@ -459,6 +475,10 @@ def main():
                 "ground_truth_source": gt_source,
                 "step_dt_s": step_dt,
                 "sim_time_s": sim_time,
+                "wall_time_s": wall_time,
+                "real_time_factor": real_time_factor,
+                "max_time_s": max_time,
+                "time_limit_reached": time_limit_reached,
                 "finished": finished.tolist(),
                 "interrupted": interrupted,
                 "isaaclab_version": getattr(isaaclab, "__version__", "unknown"),
