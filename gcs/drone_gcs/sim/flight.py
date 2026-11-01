@@ -16,7 +16,9 @@ from ..mapping import area_tuple
 G = 9.81
 
 
-def lawnmower(area, spacing: float, z: float, direction: str = "x", margin: float | None = None, overshoot: float = 2.0):
+def lawnmower(
+    area, spacing: float, z: float, direction: str = "x", margin: float | None = None, overshoot: float = 2.0
+):
     """Boustrophedon waypoints (N, 3): lines along ``direction`` spaced ``spacing`` apart, ``margin`` from the
     area edges (default ``spacing / 2``), extended ``overshoot`` metres past the area on both ends."""
     x0, x1, y0, y1 = area_tuple(area)

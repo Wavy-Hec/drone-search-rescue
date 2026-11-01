@@ -5,6 +5,7 @@ synthetic object (colour-blob stand-in detector), video written. ~20-30 s. Skip 
 """
 
 import csv
+import itertools
 import json
 import os
 import subprocess
@@ -30,26 +31,24 @@ class TestEndToEnd(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = short_tmpdir("dgcs_e2e")
         addr = f"unix:{cls.tmp}/gcs.sock"
-        cls.gcs_log = open(Path(cls.tmp) / "gcs.log", "w")
-        gcs = subprocess.Popen(
-            [sys.executable, str(ROOT / "scripts" / "gcs.py"), "--addr", addr, "--headless", "--detector", "blob",
-             "--out-dir", cls.tmp, "--name", "e2e", "--fps", "10", "--max-time", "150", "--linger", "1"],
-            cwd=ROOT, stdout=cls.gcs_log, stderr=subprocess.STDOUT,
-        )  # fmt: skip
-        try:
-            cls.drone = subprocess.run(
-                [sys.executable, str(ROOT / "scripts" / "fake_drone.py"), "--addr", addr, "--area", str(AREA), str(AREA),
-                 "--seed", str(SEED), "--speedup", "8", "--wait-gcs", "20"],
-                cwd=ROOT, capture_output=True, text=True, timeout=180,
-            )  # fmt: skip
-            gcs.wait(timeout=120)
-        finally:
-            if gcs.poll() is None:
-                gcs.kill()
-            cls.gcs_log.close()
+        gcs_cmd = [sys.executable, str(ROOT / "scripts" / "gcs.py"), "--addr", addr, "--headless"]
+        gcs_cmd += ["--detector", "blob", "--out-dir", cls.tmp, "--name", "e2e", "--fps", "10"]
+        gcs_cmd += ["--max-time", "150", "--linger", "1"]
+        drone_cmd = [sys.executable, str(ROOT / "scripts" / "fake_drone.py"), "--addr", addr]
+        drone_cmd += ["--area", str(AREA), str(AREA), "--seed", str(SEED), "--speedup", "8", "--wait-gcs", "20"]
+        with open(Path(cls.tmp) / "gcs.log", "w") as log:
+            gcs = subprocess.Popen(gcs_cmd, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+            try:
+                cls.drone = subprocess.run(drone_cmd, cwd=ROOT, capture_output=True, text=True, timeout=180)
+                gcs.wait(timeout=120)
+            finally:
+                if gcs.poll() is None:
+                    gcs.kill()
         cls.gcs_rc = gcs.returncode
         cls.run_dir = Path(cls.tmp) / "e2e"
-        cls.summary = json.loads((cls.run_dir / "summary.json").read_text()) if (cls.run_dir / "summary.json").exists() else None
+        cls.summary = (
+            json.loads((cls.run_dir / "summary.json").read_text()) if (cls.run_dir / "summary.json").exists() else None
+        )
 
     @classmethod
     def tearDownClass(cls):
@@ -80,8 +79,8 @@ class TestEndToEnd(unittest.TestCase):
         cov = [float(r["elevation_coverage"]) for r in rows]
         photo = [float(r["photo_coverage"]) for r in rows]
         self.assertGreater(len(cov), 20)
-        self.assertTrue(all(b >= a for a, b in zip(cov, cov[1:])), "elevation coverage decreased")
-        self.assertTrue(all(b >= a for a, b in zip(photo, photo[1:])), "photo coverage decreased")
+        self.assertTrue(all(b >= a for a, b in itertools.pairwise(cov)), "elevation coverage decreased")
+        self.assertTrue(all(b >= a for a, b in itertools.pairwise(photo)), "photo coverage decreased")
         self.assertLess(cov[len(cov) // 4], 0.6)  # it really grows during the flight
         self.assertGreater(cov[-1], 0.98)
         self.assertGreater(photo[-1], 0.98)
@@ -114,8 +113,10 @@ class TestEndToEnd(unittest.TestCase):
 
     def test_geolocation_of_synthetic_objects(self):
         e = self.summary["evaluation"]
-        print(f"\n[e2e] objects: precision {e['precision']}, recall {e['recall']}, mean xy error {e['mean_err_xy_m']:.3f} m, "
-              f"max {e['max_err_xy_m']:.3f} m ({e['ground_truth']} objects)")  # fmt: skip
+        print(
+            f"\n[e2e] objects: precision {e['precision']}, recall {e['recall']}, "
+            f"mean xy error {e['mean_err_xy_m']:.3f} m, max {e['max_err_xy_m']:.3f} m ({e['ground_truth']} objects)"
+        )
         self.assertGreaterEqual(e["ground_truth"], 5)
         self.assertEqual(e["recall"], 1.0)
         self.assertEqual(e["precision"], 1.0)

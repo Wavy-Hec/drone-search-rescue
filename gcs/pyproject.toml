@@ -23,3 +23,12 @@ packages = ["drone_gcs", "drone_gcs.sim"]
 [tool.ruff]
 line-length = 120
 target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["drone_gcs"]
+
+[tool.ruff.format]
+docstring-code-format = true

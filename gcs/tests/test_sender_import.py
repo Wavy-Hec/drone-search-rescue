@@ -24,10 +24,12 @@ SENDER_SCRIPT = textwrap.dedent(
     import numpy as np
     from drone_gcs.link import Sender
     from drone_gcs.isaac_bridge import IsaacLabStreamer
-    heavy = sorted(m for m in sys.modules if m.split('.')[0] in ('cv2', 'torch', 'ultralytics', 'PIL', 'matplotlib', 'isaacsim', 'omni'))
+    HEAVY = ('cv2', 'torch', 'ultralytics', 'PIL', 'matplotlib', 'isaacsim', 'omni')
+    heavy = sorted(m for m in sys.modules if m.split('.')[0] in HEAVY)
     tx = Sender({addr!r}, name='isaac-env-test')
     assert tx.wait_connected(10)
-    tx.send_mission((0, 10, 0, 10), 0.25, np.array([[0, 0], [10, 0]], float), 5.0, name='cross-env', note=','.join(heavy) or 'none')
+    path = np.array([[0, 0], [10, 0]], float)
+    tx.send_mission((0, 10, 0, 10), 0.25, path, 5.0, name='cross-env', note=','.join(heavy) or 'none')
     tx.send_telemetry(1.0, np.array([1.0, 2.0, 3.0]), [1, 0, 0, 0], np.float32([0.5, 0, 0]), wp_index=1)
     tx.send_scan(1.1, np.arange(30, dtype=np.float32).reshape(10, 3), valid=np.arange(10) % 2 == 0, origin=[1, 2, 3])
     rgb = (np.arange(48 * 64 * 3) % 251).astype(np.uint8).reshape(48, 64, 3)
@@ -44,8 +46,10 @@ SENDER_SCRIPT = textwrap.dedent(
 class TestSenderImport(unittest.TestCase):
     def test_link_imports_without_heavy_modules(self):
         code = (
-            f"import sys; sys.path.insert(0, {str(ROOT)!r}); import drone_gcs.link, drone_gcs.isaac_bridge, drone_gcs.geometry; "
-            "print(sorted(m for m in sys.modules if m.split('.')[0] in ('cv2','torch','ultralytics','PIL','matplotlib')))"
+            f"import sys; sys.path.insert(0, {str(ROOT)!r}); "
+            "import drone_gcs.link, drone_gcs.isaac_bridge, drone_gcs.geometry; "
+            "heavy = ('cv2', 'torch', 'ultralytics', 'PIL', 'matplotlib'); "
+            "print(sorted(m for m in sys.modules if m.split('.')[0] in heavy))"
         )
         out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
         self.assertEqual(out.returncode, 0, out.stderr)

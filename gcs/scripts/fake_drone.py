@@ -87,16 +87,22 @@ def main(argv=None) -> int:
     p.add_argument("--wait-gcs", type=float, default=15.0, help="wait up to N s for the GCS before flying (0 = no)")
     p.add_argument("-q", "--quiet", action="store_true")
     a = p.parse_args(argv)
-    logging.basicConfig(level=logging.WARNING if a.quiet else logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
+    logging.basicConfig(
+        level=logging.WARNING if a.quiet else logging.INFO,
+        format="%(asctime)s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
     t_build = time.monotonic()
     area, world, z, path, flight = build(a)
     W, H = a.camera_size
     K = intrinsics_from_fov(W, H, a.hfov)
     say = (lambda *x: None) if a.quiet else print
-    say(f"[fake_drone] world {world.grid.nx}x{world.grid.ny} @ {world.grid.resolution} m, {len(world.objects)} objects, "
-        f"terrain {world.hmin:.1f}..{world.hmax:.1f} m, survey z {z:.1f} m, path {flight.length:.0f} m "
-        f"({len(path)} waypoints), built in {time.monotonic() - t_build:.1f} s")
+    say(
+        f"[fake_drone] world {world.grid.nx}x{world.grid.ny} @ {world.grid.resolution} m, "
+        f"{len(world.objects)} objects, terrain {world.hmin:.1f}..{world.hmax:.1f} m, survey z {z:.1f} m, "
+        f"path {flight.length:.0f} m ({len(path)} waypoints), built in {time.monotonic() - t_build:.1f} s"
+    )
 
     sender = Sender(a.addr, name="fake_drone")
     if a.wait_gcs > 0:
@@ -138,7 +144,11 @@ def main(argv=None) -> int:
                 cam = PinholeCamera(K, W, H, R_wc, cpos)
                 t0 = time.perf_counter()
                 rgb, depth = world.render(cam)
-                render_ms = 0.8 * render_ms + 0.2 * (time.perf_counter() - t0) * 1000 if frame_id else (time.perf_counter() - t0) * 1000
+                render_ms = (
+                    0.8 * render_ms + 0.2 * (time.perf_counter() - t0) * 1000
+                    if frame_id
+                    else (time.perf_counter() - t0) * 1000
+                )
                 sender.send_camera(
                     t, rgb, K, cpos, cam.quat, None if a.no_depth else depth, jpeg=a.jpeg, frame_id=frame_id
                 )
@@ -146,9 +156,13 @@ def main(argv=None) -> int:
             if t >= next_print:
                 next_print += 10.0
                 s = sender.stats()
-                say(f"[fake_drone] t={t:6.1f} s  wp {flight.wp_index + 1}/{len(path)}  pos ({flight.p[0]:+6.1f}, {flight.p[1]:+6.1f}, "
-                    f"{flight.p[2]:4.1f})  sent {s.get('sent', 0)}  dropped {s['dropped']}  link {'up' if s['connected'] else 'DOWN'}  "
-                    f"render {render_ms:.0f} ms  x{t / max(1e-6, time.monotonic() - wall0):.1f}")
+                px, py, pz = flight.p
+                link = "up" if s["connected"] else "DOWN"
+                say(
+                    f"[fake_drone] t={t:6.1f} s  wp {flight.wp_index + 1}/{len(path)}  "
+                    f"pos ({px:+6.1f}, {py:+6.1f}, {pz:4.1f})  sent {s.get('sent', 0)}  dropped {s['dropped']}  "
+                    f"link {link}  render {render_ms:.0f} ms  x{t / max(1e-6, time.monotonic() - wall0):.1f}"
+                )
             sleep = wall0 + t / a.speedup - time.monotonic()
             if sleep > 0:
                 time.sleep(sleep)
@@ -159,9 +173,12 @@ def main(argv=None) -> int:
     sender.close(flush_timeout=2.0)
     world.close()
     wall = time.monotonic() - wall0
-    say(f"[fake_drone] {'aborted' if aborted else 'done'}: sim {t:.1f} s in {wall:.1f} s wall (x{t / max(wall, 1e-6):.1f}), "
-        f"{frame_id} camera frames, sent {s.get('sent', 0)} msgs / {s.get('sent_bytes', 0) / 1e6:.1f} MB, "
-        f"dropped {s['dropped']} {s['dropped_by_type'] or ''}")
+    say(
+        f"[fake_drone] {'aborted' if aborted else 'done'}: sim {t:.1f} s in {wall:.1f} s wall "
+        f"(x{t / max(wall, 1e-6):.1f}), {frame_id} camera frames, "
+        f"sent {s.get('sent', 0)} msgs / {s.get('sent_bytes', 0) / 1e6:.1f} MB, "
+        f"dropped {s['dropped']} {s['dropped_by_type'] or ''}"
+    )
     return 0
 
 

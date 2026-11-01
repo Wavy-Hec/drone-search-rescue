@@ -33,7 +33,9 @@ class TestProtocol(unittest.TestCase):
             self.assertTrue(b.dtype.isnative, k)
 
     def test_header_is_plain_json_with_explicit_dtypes(self):
-        frame = P.encode_bytes(P.CAMERA, {"K": np.eye(3)}, {"rgb": np.zeros((2, 2, 3), np.uint8), "depth": np.ones((2, 2), np.float32)})
+        frame = P.encode_bytes(
+            P.CAMERA, {"K": np.eye(3)}, {"rgb": np.zeros((2, 2, 3), np.uint8), "depth": np.ones((2, 2), np.float32)}
+        )
         hlen, plen = P.parse_prefix(frame[: P.PREFIX_SIZE])
         header = json.loads(frame[P.PREFIX_SIZE : P.PREFIX_SIZE + hlen])
         self.assertEqual(header["proto"], "drone_gcs")

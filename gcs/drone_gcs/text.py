@@ -12,7 +12,10 @@ _FONT_CANDIDATES = {
     "sans": ["/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"],
     "medium": ["/usr/share/fonts/truetype/ubuntu/Ubuntu-M.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"],
     "bold": ["/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"],
-    "mono": ["/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"],
+    "mono": [
+        "/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    ],
     "mono_bold": [
         "/usr/share/fonts/truetype/ubuntu/UbuntuMono-B.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
@@ -118,7 +121,9 @@ class TextRenderer:
                     img[by0:by1, bx0:bx1] = bg
                 else:
                     roi = img[by0:by1, bx0:bx1].astype(np.float32)
-                    img[by0:by1, bx0:bx1] = (roi * (1 - bg_alpha) + np.array(bg, np.float32) * bg_alpha).astype(np.uint8)
+                    img[by0:by1, bx0:bx1] = (roi * (1 - bg_alpha) + np.array(bg, np.float32) * bg_alpha).astype(
+                        np.uint8
+                    )
         cx0, cy0 = max(0, x0), max(0, y0)
         cx1, cy1 = min(W, x0 + w), min(H, y0 + h)
         if cx1 <= cx0 or cy1 <= cy0:

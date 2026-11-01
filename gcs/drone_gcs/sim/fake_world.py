@@ -363,7 +363,9 @@ class FakeWorld:
         def h_at(t):
             mx = (o[0] + t * dx) * sx + ox_
             my = (o[1] + t * dy) * sy + oy_
-            return cv2.remap(hgt, mx.astype(np.float32), my.astype(np.float32), cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+            return cv2.remap(
+                hgt, mx.astype(np.float32), my.astype(np.float32), cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
+            )
 
         lo = t0.copy()
         hi = np.full_like(t0, np.inf)
