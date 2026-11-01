@@ -61,6 +61,43 @@ def test_carrot_never_runs_away_from_a_stuck_drone():
     assert float(s) <= 1.0 + 1e-5 and float(gate) < 1e-3
 
 
+def _follow_fast_carrot(c, speed: float, max_lead: float, steps: int = 300, dt: float = 0.1):
+    """Carrot commanded at ``speed`` ahead of a follower like the GPU policy: it closes the offset with a 0.75 s
+    time constant and tops out at 1.33 m/s (measured). Returns (stalled steps, worst distance, carrot arclength)."""
+    torch = require("torch")
+
+    pts, arc, length = c.pad_paths([lawnmower(Area(-20, 20, -20, 20), 4.0, 7.5)], 0.25)
+    s = torch.zeros(1)
+    drone = pts[:, 0].clone()
+    stalled, worst = 0, 0.0
+    for k in range(steps):
+        s_old = s.clone()
+        s, carrot_pos, _ = c.advance_carrot(s, pts, arc, drone, speed, dt, max_lead, 0.7 * max_lead)
+        if k >= 30 and float(s - s_old) < 1e-6:  # after the start-up, the carrot should never wait
+            stalled += 1
+        worst = max(worst, float(torch.linalg.norm(carrot_pos - drone)))
+        v = (carrot_pos - drone) / 0.75
+        drone = drone + v * torch.clamp(1.33 / torch.linalg.norm(v).clamp(min=1e-9), max=1.0) * dt
+    assert float(s) < float(length[0]) - 1.0  # still mid-survey: every counted step could have advanced
+    return stalled, worst, float(s)
+
+
+def test_carrot_keeps_moving_at_high_commanded_speed():
+    """Regression (survey flights, 2026-11-01): once ``speed * dt > max_lead - slow_lead`` (3 m/s with the
+    defaults) the whole step overshot ``max_lead`` and was rejected, so the carrot went stop-and-go (waiting on
+    84 % of the steps at --speed 6 on the GPU) and stalled for good at ``speed * dt >= max_lead``. The step is now
+    shortened to the remaining lead: the carrot keeps moving and still never gets more than max_lead ahead."""
+    c = _carrot()
+
+    # before the fix: waited on 231 / 270 / 200 of the 270 counted steps, carrot at 26.4 / 1.0 / 15.8 m after 30 s
+    for speed, max_lead in ((6.0, 1.0), (10.0, 1.0), (2.0, 0.5)):
+        stalled, worst, s = _follow_fast_carrot(c, speed, max_lead)
+        assert stalled == 0, (speed, max_lead, f"carrot waited on {stalled} steps")
+        assert worst <= max_lead + 1e-5, (speed, max_lead, worst)
+        # the follower runs at its top speed: the 1.33 m/s cap, or max_lead / 0.75 s when the lead limits it
+        assert s > 0.9 * min(1.33, max_lead / 0.75) * 30.0, (speed, max_lead, s)
+
+
 def test_clamp_offset_ball_and_box():
     c = _carrot()
     torch = require("torch")

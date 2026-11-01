@@ -5,6 +5,9 @@ The policy is the one trained on the built-in task ``IsaacContrib-TrackPositionN
 ``DroneLab-Survey-ARL-Robot-1-v0`` unchanged: the task feeds it the drone position relative to a carrot that
 slides along the survey path (see ``drone_lab/carrot.py``).
 
+The drone first hovers ``--settle`` seconds at the path start (it dips ~15 cm right after the spawn and
+recovers within ~1 s), then the carrot starts; the video begins after the settle.
+
 During the flight the script logs the drone state, the carrot and the mapping ray hits; afterwards it builds a
 2.5D elevation map, a ground-truth map from the terrain mesh, metrics, and plots. Outputs go to
 ``runs/<name>/`` (see ``drone_lab/survey_io.py``). Ctrl+C (or an error) during the flight still saves
@@ -62,7 +65,12 @@ parser.add_argument("--map_resolution", type=float, default=0.25,
                     help="Elevation map cell size [m]; keep it a multiple of the 0.25 m ray spacing (the cell "
                          "edges are placed midway between ray rows, see GridSpec.for_survey).")
 parser.add_argument("--reducer", choices=REDUCERS, default="median", help="Per-cell statistic of the hit heights.")
-parser.add_argument("--max_time", type=float, default=None, help="Stop after this much sim time [s].")
+parser.add_argument("--max_time", type=float, default=None,
+                    help="Stop after this much sim time [s] (the --settle hover counts).")
+parser.add_argument("--settle", type=float, default=1.5,
+                    help="Hover at the path start for this long before the carrot starts [s]. Right after the "
+                         "spawn the drone dips ~15 cm and recovers within ~1 s; the video starts when the carrot "
+                         "does. 0 starts the carrot at once.")
 parser.add_argument("--physics", dest="physics_backend", choices=("isaacsim_physx", "newton_mjwarp"),
                     default="isaacsim_physx", help="Physics backend (the multirotor asset is PhysX-only).")
 parser.add_argument("--allow_unsupported_physics", action="store_true",
@@ -248,7 +256,8 @@ def main():
         print(f"[survey_map] task {args_cli.task}: {env_cfg.scene.num_envs} env(s), physics "
               f"{type(env_cfg.sim.physics).__name__}, dt {env_cfg.sim.dt} x decimation {env_cfg.decimation}")
         print(f"[survey_map] survey: {cmd.pattern}, spacing {cmd.spacing} m, clearance {cmd.altitude} m, "
-              f"speed {cmd.speed} m/s, max lead {cmd.max_lead} m, turn {cmd.turn}, waypoints {cmd.waypoints}")
+              f"speed {cmd.speed} m/s, max lead {cmd.max_lead} m, turn {cmd.turn}, waypoints {cmd.waypoints}, "
+              f"settle {args_cli.settle:g} s")
         print(f"[survey_map] mapping sensor: {type(env_cfg.scene.mapping_scanner.pattern_cfg).__name__}, "
               f"alignment {env_cfg.scene.mapping_scanner.ray_alignment}")
         print(f"[survey_map] policy observation terms: "
@@ -284,10 +293,14 @@ def main():
         rec = TrajectoryRecorder()
         hits_log: list[np.ndarray] = []
         path_len = float(term.path_length.max())
+        # hover first: the carrot is held at the path start (speed 0) for the settle steps, then released
+        commanded_speed = float(term.cfg.speed)
+        settle_steps = max(0, int(round(args_cli.settle / step_dt)))
+        settle_s = settle_steps * step_dt
         # default time budget: the drone may never reach the commanded speed (the built-in policy tops out near
         # 1.3 m/s however fast the carrot is asked to go), so budget for at most 1 m/s; the loop ends as soon as
         # every drone is done, so a generous budget costs nothing
-        max_time = args_cli.max_time or (3.0 * path_len / min(max(cmd.speed, 1e-3), 1.0) + 60.0)
+        max_time = args_cli.max_time or (3.0 * path_len / min(max(commanded_speed, 1e-3), 1.0) + 60.0 + settle_s)
         max_steps = int(math.ceil(max_time / step_dt))
 
         writer, viz = None, None
@@ -299,7 +312,10 @@ def main():
             else:
                 writer = open_mp4_writer(run_dir / "survey.mp4", args_cli.video_fps)
                 print(f"[survey_map] video: one frame per {step_dt * max(1, args_cli.video_stride):.2f} s of flight "
-                      f"at {args_cli.video_fps} fps = {speedup:g}x real time")
+                      f"at {args_cli.video_fps} fps = {speedup:g}x real time, from the carrot start "
+                      f"(t={settle_s:g} s)")
+        if settle_steps:
+            print(f"[survey_map] hovering {settle_s:g} s at the path start before the carrot starts (--settle)")
 
         obs, _ = base.reset()
         active = torch.ones(num_envs, dtype=torch.bool, device=device)
@@ -315,6 +331,8 @@ def main():
         try:
             with torch.inference_mode():
                 for step in range(max_steps):
+                    # the command term reads its cfg.speed every step: 0 holds the carrot during the settle
+                    term.cfg.speed = 0.0 if step < settle_steps else commanded_speed
                     actions = policy(obs["policy"])
                     progress_before = term.progress.clone()
                     obs, _, terminated, truncated, _ = base.step(actions)
@@ -377,7 +395,8 @@ def main():
                             hits_log.append(
                                 np.column_stack([np.full(ok.sum(), t), e_col[ok], h[ok]]).astype(np.float32)
                             )
-                    if writer is not None and step % max(1, args_cli.video_stride) == 0:
+                    if (writer is not None and step >= settle_steps
+                            and (step - settle_steps) % max(1, args_cli.video_stride) == 0):
                         try:
                             frame = capture_frame(base.sim, viz)
                             if frame is not None and frame.any():
@@ -407,6 +426,8 @@ def main():
             interrupted = f"flight loop error: {type(exc).__name__}: {exc}"
             print(f"[survey_map] ERROR at t={steps_done * step_dt:.1f} s ({type(exc).__name__}: {exc}); saving "
                   "the partial run first, the traceback follows at the end")
+        finally:
+            term.cfg.speed = commanded_speed  # also after a stop during the settle
         if writer is not None:
             try:
                 writer.close()
@@ -474,6 +495,7 @@ def main():
                 "map_reducer": args_cli.reducer,
                 "ground_truth_source": gt_source,
                 "step_dt_s": step_dt,
+                "settle_s": settle_s,
                 "sim_time_s": sim_time,
                 "wall_time_s": wall_time,
                 "real_time_factor": real_time_factor,
@@ -489,7 +511,7 @@ def main():
                 extra.update(video_fps=args_cli.video_fps, video_speedup=speedup)
             summary = compute_summary(
                 traj, term.waypoints, grid=grid, area=term.area, elevation=elevation, count=count, ground_truth=gt,
-                ground_truth_range=gt_range, commanded_speed=cmd.speed, crashed=crashed.tolist(), extra=extra,
+                ground_truth_range=gt_range, commanded_speed=commanded_speed, crashed=crashed.tolist(), extra=extra,
                 ground_truth_at_hits=gt_hits,
             )
             hits_arr = np.concatenate(hits_log) if hits_log else np.zeros((0, 5), dtype=np.float32)

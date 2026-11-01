@@ -275,6 +275,49 @@ def test_error_saves_partial_run_then_reraises():
         assert not (empty_dir / "summary.json").exists()
 
 
+def test_settle_holds_the_carrot_at_the_start():
+    """--settle: the carrot waits at the path start (the drone recovers from its spawn dip), then flies at the
+    commanded speed; the summary keeps the commanded speed, also after a Ctrl+C during the settle."""
+    _requirements()
+    from drone_lab.survey_io import read_trajectory_csv
+
+    with tempfile.TemporaryDirectory() as d:
+        run_dir = Path(d) / "settle"
+        mod = _load_script(["--checkpoint", "fake.pt", "--max_time", "5", "--settle", "2", "--no_plots",
+                            "--out", str(run_dir)])
+        with _offline(mod, _Policy()) as envs:
+            mod.main()
+        traj = read_trajectory_csv(run_dir / "trajectory.csv")
+        held = traj["time"] < 2.0 + 1e-6  # rows are logged after each 0.1 s step: t = 0.1 ... 2.0 is the settle
+        assert held.sum() == 20 and np.all(traj["path_s"][held] == 0.0), traj["path_s"][:25]
+        assert np.all(traj["path_s"][~held] > 0.0) and np.isclose(traj["path_s"][-1], 3.0, atol=0.05)
+        s = json.loads((run_dir / "summary.json").read_text())
+        assert np.isclose(s["settle_s"], 2.0) and s["commanded_speed_mps"] == 1.0
+        assert envs[0].term.cfg.speed == 1.0
+        assert "hover at the start" in (run_dir / "summary.txt").read_text()
+
+        # stopped while still hovering: the speed is restored before the summary is written
+        stop_dir = Path(d) / "settle_ctrl_c"
+        mod = _load_script(["--checkpoint", "fake.pt", "--settle", "2", "--no_plots", "--out", str(stop_dir)])
+        with (
+            _offline(mod, _Policy(fail_at=5, fail=KeyboardInterrupt())) as envs,
+            contextlib.suppress(KeyboardInterrupt),
+        ):
+            mod.main()
+        s = json.loads((stop_dir / "summary.json").read_text())
+        assert s["commanded_speed_mps"] == 1.0 and envs[0].term.cfg.speed == 1.0
+
+        # --settle 0: the carrot starts at once (the behaviour before the option existed)
+        now_dir = Path(d) / "no_settle"
+        mod = _load_script(["--checkpoint", "fake.pt", "--max_time", "1", "--settle", "0", "--no_plots",
+                            "--out", str(now_dir)])
+        with _offline(mod, _Policy()):
+            mod.main()
+        traj = read_trajectory_csv(now_dir / "trajectory.csv")
+        assert traj["path_s"][0] > 0.0
+        assert "hover" not in (now_dir / "summary.txt").read_text()
+
+
 def test_waypoints_flag_conflicts_with_generated_pattern():
     """--waypoints with --pattern lawnmower exits instead of silently flying the lawnmower."""
     _requirements()

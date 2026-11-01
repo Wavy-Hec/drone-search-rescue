@@ -414,7 +414,9 @@ def format_summary(summary: dict) -> str:
         f"  pattern            : {summary.get('pattern', 'n/a')}, {summary.get('num_drones', 0)} drone(s)",
         f"  flight altitude    : {_fmt(summary.get('flight_z_m'), ' m')} (terrain max "
         f"{_fmt(summary.get('terrain_z_max_m'), ' m')} + clearance {_fmt(summary.get('altitude_clearance_m'), ' m')})",
-        f"  duration           : {_fmt(fl.get('duration_s'), ' s', 1)}",
+        f"  duration           : {_fmt(fl.get('duration_s'), ' s', 1)}"
+        + (f" (incl. {_fmt(summary['settle_s'], ' s', 1)} hover at the start, --settle)"
+           if summary.get("settle_s") else ""),
     ]
     if summary.get("real_time_factor") is not None:  # simulator runs only
         lines.append(f"  sim / wall time    : {_fmt(summary.get('sim_time_s'), ' s', 1)} / "
