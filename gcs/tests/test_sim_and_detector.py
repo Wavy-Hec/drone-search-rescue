@@ -3,14 +3,18 @@ import os
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
-from drone_gcs.detector import DEFAULT_WEIGHTS, ColorBlobDetector, Detection, DetectorWorker
+from drone_gcs import detector
+from drone_gcs.detector import COCO_WEIGHTS, ColorBlobDetector, Detection, DetectorWorker
 from drone_gcs.geometry import C_BODY_TO_NADIR_CAM, PinholeCamera, intrinsics_from_fov, quat_from_euler, quat_to_matrix
 from drone_gcs.mapping import GridSpec
 from drone_gcs.sim.fake_world import FakeWorld
 from drone_gcs.sim.flight import CarrotFlight, lawnmower
+
+from ._util import rmtree, short_tmpdir
 
 
 class TestFakeWorld(unittest.TestCase):
@@ -131,7 +135,26 @@ class TestDetectors(unittest.TestCase):
         self.assertGreater(wk.n_dropped, 0)
         self.assertGreater(res[0][2], 40)  # inference ms reported
 
-    @unittest.skipUnless(os.path.exists(DEFAULT_WEIGHTS), "YOLO weights not found")
+    def test_default_weights(self):
+        tmp = Path(short_tmpdir("dgcs_w"))
+        try:
+            sar = tmp / "sar.pt"
+            with mock.patch.object(detector, "SAR_WEIGHTS", sar), mock.patch.dict(os.environ, clear=False) as env:
+                env.pop("DRONE_GCS_WEIGHTS", None)
+                self.assertEqual(detector.default_weights(), COCO_WEIGHTS)  # no fine-tuned model yet
+                sar.write_bytes(b"")
+                self.assertEqual(detector.default_weights(), sar)
+                env["DRONE_GCS_WEIGHTS"] = "~/other.pt"
+                self.assertEqual(detector.default_weights(), Path("~/other.pt").expanduser())
+        finally:
+            rmtree(tmp)
+
+    def test_simulator_boxes_become_detections(self):
+        boxes = [{"class": "person", "box": [1, 2, 3, 4]}, {"class": None, "box": [0, 0, 1, 1]}, {"class": "cone"}]
+        dets = detector.detections_from_boxes(boxes)
+        self.assertEqual([(d.cls, d.box, d.conf) for d in dets], [("person", (1.0, 2.0, 3.0, 4.0), 1.0)])
+
+    @unittest.skipUnless(COCO_WEIGHTS.is_file(), "COCO YOLO weights not found")
     def test_yolo_wrapper_on_cpu(self):
         try:
             import ultralytics  # noqa: F401
@@ -142,7 +165,7 @@ class TestDetectors(unittest.TestCase):
         from drone_gcs.detector import YoloDetector
 
         bus = Path(ultralytics.__file__).parent / "assets" / "bus.jpg"
-        det = YoloDetector(device="cpu", conf=0.4)
+        det = YoloDetector(COCO_WEIGHTS, device="cpu", conf=0.4)
         rgb = cv2.imread(str(bus))[..., ::-1]
         dets = det.detect(rgb)
         names = [d.cls for d in dets]
@@ -151,20 +174,22 @@ class TestDetectors(unittest.TestCase):
         for d in dets:
             x1, y1, x2, y2 = d.box
             self.assertTrue(0 <= x1 < x2 <= rgb.shape[1] and 0 <= y1 < y2 <= rgb.shape[0])
-        det2 = YoloDetector(device="cpu", conf=0.4, classes="person", class_map="person=human")
+        det2 = YoloDetector(COCO_WEIGHTS, device="cpu", conf=0.4, classes="person", class_map="person=human")
         self.assertEqual({d.cls for d in det2.detect(rgb)}, {"human"})
         # class filters are checked against the model, and also match names after --class-map
         ids = {n: i for i, n in det2.names.items()}
-        det3 = YoloDetector(device="cpu", classes="car", class_map="truck=car")
+        det3 = YoloDetector(COCO_WEIGHTS, device="cpu", classes="car", class_map="truck=car")
         self.assertEqual(det3.class_ids, sorted([ids["car"], ids["truck"]]))
         with self.assertRaises(ValueError) as cm:
-            YoloDetector(device="cpu", classes="persn")  # a typo used to silently remove every detection
+            YoloDetector(COCO_WEIGHTS, device="cpu", classes="persn")  # a typo used to silently remove every detection
         self.assertIn("persn", str(cm.exception))
         with self.assertRaises(ValueError):
-            YoloDetector(device="cpu", classes="bench", class_map="bench=")  # nothing would be left
-        det4 = YoloDetector(device="cpu", classes="person,tarp")  # one unknown next to a valid one: warned, ignored
+            YoloDetector(COCO_WEIGHTS, device="cpu", classes="bench", class_map="bench=")  # nothing would be left
+        det4 = YoloDetector(
+            COCO_WEIGHTS, device="cpu", classes="person,tarp"
+        )  # one unknown next to a valid one: warned, ignored
         self.assertEqual((det4.class_ids, det4.ignored_classes), ([ids["person"]], ["tarp"]))
-        self.assertEqual(YoloDetector().device, "cpu")  # the default never touches the GPU
+        self.assertEqual(YoloDetector(COCO_WEIGHTS).device, "cpu")  # the default never touches the GPU
 
 
 if __name__ == "__main__":

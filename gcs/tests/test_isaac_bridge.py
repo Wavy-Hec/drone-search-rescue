@@ -158,6 +158,10 @@ class TestIsaacBridge(unittest.TestCase):
         self.assertEqual(g1[0][1], ("tent", [-1.0, -1.0, 0.0]))
         self.assertEqual(kg["drone_id"], 2)
         self.assertEqual(g2[0][0]["pos"], [1, 1, 0])
+        s.gt_terrain(np.full((2, 3), 4.0), 74.0, -76.0, 0.5, world=True)
+        (_, (h, x0, y0, res), kt) = tx.calls[-1]
+        np.testing.assert_allclose(h, 3.0)
+        self.assertEqual((x0, y0, res, kt["drone_id"]), (-26.0, -26.0, 0.5, 2))
 
 
 if __name__ == "__main__":

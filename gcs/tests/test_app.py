@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 
 from drone_gcs import protocol as P
-from drone_gcs.app import AppConfig, GCSApp, VideoRecorder, decode_key
+from drone_gcs.app import AppConfig, GCSApp, VideoRecorder, decode_key, link_label
 from drone_gcs.detector import Detection, DetectorWorker
 from drone_gcs.state import GCSState
 
@@ -121,6 +121,7 @@ class TestRollover(unittest.TestCase):
             new = app.state
             self.assertIsNot(new, st)
             self.assertEqual(new.gt_objects, st.gt_objects)  # latched GT stays in force
+            self.assertIs(new.gt_terrain, st.gt_terrain)
             self.assertEqual(new.senders, st.senders)
             self.assertEqual(app.gen, 1)
             new.apply(mission("B"))
@@ -137,6 +138,36 @@ class TestRollover(unittest.TestCase):
             app.receiver.close()
         finally:
             rmtree(tmp)
+
+
+class TestSimulatorBoxes(unittest.TestCase):
+    def test_gt_detector_maps_the_boxes_sent_with_each_frame(self):
+        tmp = short_tmpdir("dgcs_app")
+        try:
+            app = GCSApp(AppConfig(addr=f"unix:{tmp}/g.sock", out_dir=Path(tmp), name="gt", detector="gt"))
+            app._init_detector()
+            self.assertIsNone(app.worker)
+            self.assertTrue(app.ui_dict()["detector"]["on"])
+            app.handle_message(mission("A"))
+            app.handle_message(tel(1.0, "A"))
+            # nadir camera 10 m above (2, 3): the box around the image centre is the point below it
+            K = np.array([[100.0, 0, 32], [0, 100.0, 24], [0, 0, 1]])
+            boxes = [{"class": "person", "box": [28.0, 20.0, 36.0, 28.0]}, {"class": None, "box": [0, 0, 4, 4]}]
+            fields = {"t": 1.0, "K": K.tolist(), "pos": [2.0, 3.0, 10.0], "quat": [0, 1, 0, 0], "gt_boxes": boxes}
+            depth = np.full((48, 64), 10.0, np.float32)
+            for k in range(2):
+                fields["t"] = 1.0 + k
+                app.handle_message(msg(P.CAMERA, fields, {"rgb": np.zeros((48, 64, 3), np.uint8), "depth": depth}))
+            objs = app.state.tracker.confirmed()
+            self.assertEqual([o.cls for o in objs], ["person"])
+            np.testing.assert_allclose(objs[0].pos, [2.0, 3.0, 0.0], atol=1e-6)
+            app.receiver.close()
+        finally:
+            rmtree(tmp)
+
+    def test_link_label_hides_the_socket_directory(self):
+        self.assertEqual(link_label("unix:/run/user/1000/drone_gcs.sock"), "unix:drone_gcs.sock")
+        self.assertEqual(link_label("tcp://127.0.0.1:47800"), "tcp://127.0.0.1:47800")
 
 
 class TestDetectorWorker(unittest.TestCase):

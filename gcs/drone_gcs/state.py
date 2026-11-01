@@ -12,7 +12,7 @@ import numpy as np
 
 from .geometry import PinholeCamera, compass_heading_deg, yaw_from_quat
 from .mapping import ElevationMap, Geolocator, GridSpec, ObjectTracker, Orthomosaic, area_tuple, intersect_rays_with_map
-from .protocol import CAMERA, END, GT_OBJECTS, HELLO, MISSION, SCAN, TELEMETRY, Message
+from .protocol import CAMERA, END, GT_OBJECTS, GT_TERRAIN, HELLO, MISSION, SCAN, TELEMETRY, Message
 
 log = logging.getLogger("drone_gcs.state")
 
@@ -26,6 +26,17 @@ class GCSConfig:
     photo_subdiv: int = 2  # photo cells per elevation cell (per axis)
     depth_elevation: bool = False  # also feed back-projected depth pixels into the elevation map
     merge_radius: float = 2.0  # tracker: same class within this horizontal distance = same object [m]
+    # per-class radius: piles of crates or barrels stand closer together than that, a forklift is larger
+    class_radius: dict = field(
+        default_factory=lambda: {
+            "person": 1.5,
+            "vehicle": 3.0,
+            "crate": 0.8,
+            "barrel": 0.8,
+            "cone": 0.8,
+            "pallet": 1.0,
+        }
+    )
     min_hits: int = 2  # tracker: detections needed to confirm an object
     det_ref: str = "auto"  # geolocation reference pixel: auto | center | bottom
     edge_margin: float = 3.0  # boxes this close to the image border are partial views: shown, not mapped [px]
@@ -48,6 +59,7 @@ class CameraFrame:
     recv_time: float = 0.0
     detections: list | None = None  # [(Detection, geo dict)] once the detector has run on this frame
     det_ms: float = 0.0
+    gt_boxes: list | None = None  # boxes the simulator rendered for this frame (evaluation / --detector gt)
 
 
 @dataclass
@@ -60,6 +72,7 @@ class DroneState:
     vel: np.ndarray | None = None
     wp_index: int | None = None
     carrot: np.ndarray | None = None
+    phase: str = ""  # mission phase reported by the drone (take-off, survey, ...)
     yaw: float = 0.0
     camera: CameraFrame | None = None
     det_frame: CameraFrame | None = None
@@ -94,6 +107,29 @@ class DroneState:
         return (len(self.cam_times) - 1) / dt if dt > 0 else 0.0
 
 
+@dataclass
+class TerrainTruth:
+    """True terrain height on a regular grid (GT_TERRAIN), for the map-error metric only."""
+
+    heights: np.ndarray  # (ny, nx) [m], row 0 = south, NaN = unknown
+    grid: GridSpec
+
+    @classmethod
+    def from_message(cls, msg: Message) -> TerrainTruth:
+        h = np.asarray(msg.arrays["heights"], dtype=np.float32)
+        f = msg.fields
+        grid = GridSpec(float(f["x_min"]), float(f["y_min"]), float(f["resolution"]), h.shape[1], h.shape[0])
+        return cls(h, grid)
+
+    def on_grid(self, grid: GridSpec) -> np.ndarray:
+        """Heights at the cell centres of ``grid`` (nearest truth cell; NaN outside the truth grid)."""
+        xs, ys = np.meshgrid(*grid.cell_centers())
+        ix, iy, ok = self.grid.cell_index(xs, ys)
+        out = np.full(grid.shape, np.nan, np.float32)
+        out[ok] = self.heights[iy[ok], ix[ok]]
+        return out
+
+
 class GCSState:
     """Everything the dashboard shows and the report writes."""
 
@@ -109,12 +145,15 @@ class GCSState:
         self.elevation: ElevationMap | None = None
         self.mosaic: Orthomosaic | None = None
         self.geolocator: Geolocator | None = None
-        self.tracker = ObjectTracker(self.cfg.merge_radius, self.cfg.min_hits)
+        self.tracker = ObjectTracker(self.cfg.merge_radius, self.cfg.min_hits, self.cfg.class_radius)
         self.planned_path: np.ndarray | None = None
         self.ground_z = 0.0
         self.z_range: tuple | None = None
         self.drones: dict[int, DroneState] = {}
         self.gt_objects: list[dict] | None = None
+        self.gt_terrain: TerrainTruth | None = None
+        self.home: np.ndarray | None = None  # landing pad (MISSION "home")
+        self.end_fields: dict = {}
         self.ended = False
         self.end_reason = ""
         self.end_wall: float | None = None
@@ -177,7 +216,9 @@ class GCSState:
         # per-cell sampling).
         padding = math.ceil(max(0.0, float(padding)) / resolution - 1e-9) * resolution
         h = 0.5 * resolution
-        self.grid = GridSpec.from_bounds(x0 - padding - h, x1 + padding + h, y0 - padding - h, y1 + padding + h, resolution)
+        self.grid = GridSpec.from_bounds(
+            x0 - padding - h, x1 + padding + h, y0 - padding - h, y1 + padding + h, resolution
+        )
         k = max(1, int(self.cfg.photo_subdiv))
         if photo_resolution:
             k = max(1, int(round(resolution / photo_resolution)))
@@ -244,11 +285,16 @@ class GCSState:
             elif msg.type == GT_OBJECTS:
                 self.gt_objects = list(msg.fields.get("objects", []))
                 self.event(f"ground truth: {len(self.gt_objects)} objects (evaluation only)")
+            elif msg.type == GT_TERRAIN:
+                self.gt_terrain = TerrainTruth.from_message(msg)
+                g = self.gt_terrain.grid
+                self.event(f"ground truth: terrain {g.nx}x{g.ny} @ {g.resolution:g} m (evaluation only)")
             elif msg.type == END:
                 self._touch_time(msg.t)
                 if not self.ended:
                     self.ended = True
                     self.end_reason = str(msg.fields.get("reason", ""))
+                    self.end_fields = dict(msg.fields)
                     self.end_wall = time.time()
                     self.event(f"END received ({self.end_reason})")
             elif msg.type == HELLO:
@@ -277,6 +323,8 @@ class GCSState:
         if msg.drone_id is not None:
             self.mission["drone_id"] = msg.drone_id
         self.ground_z = float(f.get("ground_z", 0.0) or 0.0)
+        home = f.get("home")
+        self.home = np.asarray(home, dtype=np.float64).reshape(3) if home is not None else None
         zr = f.get("z_range")
         self.z_range = (float(zr[0]), float(zr[1])) if zr else None
         pp = msg.arrays.get("planned_path")
@@ -302,10 +350,15 @@ class GCSState:
         d.wp_index = f.get("wp_index")
         d.carrot = np.asarray(f["carrot"], dtype=np.float64) if f.get("carrot") is not None else None
         d.yaw = yaw_from_quat(d.quat)
+        d.phase = str(f.get("phase") or "")
         self._touch_time(msg.t)
         self._ensure_grid(pos[0], pos[1])
         t = msg.t if msg.t is not None else 0.0
-        if not d.trail or (pos[0] - d.trail[-1][1]) ** 2 + (pos[1] - d.trail[-1][2]) ** 2 > 0.01 or t - d.trail[-1][0] > 1.0:
+        if (
+            not d.trail
+            or (pos[0] - d.trail[-1][1]) ** 2 + (pos[1] - d.trail[-1][2]) ** 2 > 0.01
+            or t - d.trail[-1][0] > 1.0
+        ):
             d.trail.append((t, pos[0], pos[1], pos[2]))
         v = d.vel if d.vel is not None else (np.nan, np.nan, np.nan)
         c = d.carrot if d.carrot is not None else (np.nan, np.nan, np.nan)
@@ -338,7 +391,12 @@ class GCSState:
         if rgb is None:
             return None
         cam = PinholeCamera.from_pose(
-            f["K"], f.get("width", rgb.shape[1]), f.get("height", rgb.shape[0]), f["pos"], f["quat"], f.get("pixel_center", 0.5)
+            f["K"],
+            f.get("width", rgb.shape[1]),
+            f.get("height", rgb.shape[0]),
+            f["pos"],
+            f["quat"],
+            f.get("pixel_center", 0.5),
         )
         depth = msg.arrays.get("depth")
         self._touch_time(msg.t)
@@ -349,8 +407,15 @@ class GCSState:
             self.elevation.add_points(P, None, msg.t)
         d = self.drone(msg.drone_id)
         frame = CameraFrame(
-            msg.drone_id, msg.t or 0.0, int(f.get("frame_id", self.counts[CAMERA])), rgb, depth, cam,
-            str(f.get("camera", "cam0")), msg.recv_time,
+            msg.drone_id,
+            msg.t or 0.0,
+            int(f.get("frame_id", self.counts[CAMERA])),
+            rgb,
+            depth,
+            cam,
+            str(f.get("camera", "cam0")),
+            msg.recv_time,
+            gt_boxes=f.get("gt_boxes"),
         )
         d.camera = frame
         d.cam_times.append(time.monotonic())
@@ -373,7 +438,14 @@ class GCSState:
             out.append((det, geo))
             if geo["ok"] and not geo["truncated"]:
                 batch.append(
-                    {"cls": det.cls, "xyz": geo["xyz"], "conf": det.conf, "t": frame.t, "box": det.box, "drone_id": frame.drone_id}
+                    {
+                        "cls": det.cls,
+                        "xyz": geo["xyz"],
+                        "conf": det.conf,
+                        "t": frame.t,
+                        "box": det.box,
+                        "drone_id": frame.drone_id,
+                    }
                 )
         self.tracker.update(batch)
         frame.detections = out

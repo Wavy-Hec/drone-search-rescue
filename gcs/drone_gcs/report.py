@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 
 from .dashboard import render_report_map
-from .mapping import evaluate_detections, path_length
+from .mapping import evaluate_detections, path_length, terrain_error
 from .protocol import CAMERA, SCAN, TELEMETRY, jsonable
 from .state import GCSState
 
@@ -53,7 +53,11 @@ def write_report(
             "photo": f"Orthomosaic (camera pixels back-projected)   {name}   photo coverage {100 * cp:.1f} %",
             "coverage": f"Coverage (ray hits per cell; photo-only cells)   {name}",
         }
-        for layer, fname in (("elevation", "final_map_elevation.png"), ("photo", "final_map_photo.png"), ("coverage", "coverage.png")):
+        for layer, fname in (
+            ("elevation", "final_map_elevation.png"),
+            ("photo", "final_map_photo.png"),
+            ("coverage", "coverage.png"),
+        ):
             img = render_report_map(state, layer, map_size, title=titles[layer])
             cv2.imwrite(str(run_dir / fname), img)
             files.append(fname)
@@ -125,13 +129,24 @@ def write_report(
         w = csv.writer(fh)
         w.writerow(TRAJ_COLUMNS)
         for row in state.trajectory:
-            w.writerow([_round(v, 5) if isinstance(v, float) else (round(float(v), 5) if isinstance(v, np.floating) else v) for v in row])
+            w.writerow(
+                [
+                    _round(v, 5) if isinstance(v, float) else (round(float(v), 5) if isinstance(v, np.floating) else v)
+                    for v in row
+                ]
+            )
     with open(run_dir / "coverage_timeline.csv", "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(("t", "elevation_coverage", "photo_coverage", "confirmed_objects"))
         for row in state.coverage_timeline:
             w.writerow([round(float(row[0]), 3), round(float(row[1]), 5), round(float(row[2]), 5), int(row[3])])
     files += ["trajectory.csv", "coverage_timeline.csv"]
+
+    # ---- map height error against the true terrain (when the simulator sent it)
+    terrain = None
+    if state.gt_terrain is not None and state.elevation is not None:
+        truth = state.gt_terrain.on_grid(state.grid)
+        terrain = terrain_error(state.elevation.mean(), truth, state.area_mask)
 
     # ---- summary
     speeds = [math.hypot(r[9], r[10]) for r in state.trajectory if math.isfinite(r[9])]
@@ -180,11 +195,14 @@ def write_report(
             "raw_detections": tracker.n_detections,
             "by_class": by_class,
             "merge_radius_m": tracker.merge_radius,
+            "merge_radius_by_class_m": tracker.class_radius,
             "min_hits": tracker.min_hits,
         },
         "evaluation": None
         if evaluation is None
         else {k: v for k, v in evaluation.items() if k not in ("matches", "unmatched_gt", "unmatched_pred")},
+        "terrain_error": terrain,
+        "drone_stats": state.end_fields.get("stats"),
         "messages": {
             "telemetry": state.counts[TELEMETRY],
             "scan": state.counts[SCAN],
@@ -195,13 +213,128 @@ def write_report(
         "video": None if video_path is None else Path(video_path).name,
         "files": files,
     }
+    summary["scorecard"] = scorecard(state, evaluation, terrain)
     if extra:
         summary.update(extra)
     if video_path is not None:
         files.append(Path(video_path).name)
+    files += ["summary.json", "report.md"]
     (run_dir / "summary.json").write_text(json.dumps(jsonable(summary), indent=2))
-    files.append("summary.json")
+    (run_dir / "report.md").write_text(report_markdown(summary, confirmed, state.gt_objects))
     return summary
+
+
+def scorecard(state: GCSState, evaluation: dict | None, terrain: dict | None) -> dict:
+    """The mission's headline numbers: people found, false alarms, pin error, map error, coverage, flight time
+    and the closest approach to obstacles (reported by the drone in END)."""
+    people = [o for o in state.tracker.confirmed() if o.cls == "person"]
+    ce, cp = state.coverage()
+    card: dict = {
+        "people_found": len(people),
+        "people_total": None,
+        "false_alarms": None,
+        "pin_error_m": None,
+        "people_pin_error_m": None,
+        "map_height_error_m": None,
+        "map_height_error_smooth_m": None,
+        "coverage_pct": round(100 * ce, 2),
+        "photo_coverage_pct": round(100 * cp, 2),
+        "flight_time_s": round(state.mission_time, 2),
+        "closest_approach_m": None,
+    }
+    if evaluation is not None:
+        person = evaluation["per_class"].get("person", {})
+        card["people_found"] = person.get("tp", 0)
+        card["people_total"] = person.get("ground_truth", 0)
+        card["false_alarms"] = evaluation["fp"]
+        card["pin_error_m"] = evaluation["mean_err_xy_m"]
+        card["people_pin_error_m"] = person.get("mean_err_xy")
+    if terrain is not None:
+        card["map_height_error_m"] = (terrain["all"] or {}).get("rmse_m")
+        card["map_height_error_smooth_m"] = (terrain["smooth"] or {}).get("rmse_m")
+    stats = state.end_fields.get("stats") or {}
+    card["closest_approach_m"] = (stats.get("closest_approach") or {}).get("closest_m")
+    return card
+
+
+def _fmt_duration(s: float) -> str:
+    m, sec = divmod(round(float(s)), 60)
+    return f"{m} min {sec:02d} s" if m else f"{sec} s"
+
+
+def _fmt_m(v, digits: int = 2) -> str:
+    return "-" if v is None else f"{v:.{digits}f} m"
+
+
+def report_markdown(summary: dict, confirmed: list[dict], gt_objects: list[dict] | None) -> str:
+    """The mission report as Markdown: scorecard, maps and the list of finds."""
+    card = summary["scorecard"]
+    m = summary["mission"]
+    lines = [f"# Mission report: {m['name']}", ""]
+    end = summary.get("end_reason") or "no END received"
+    flight = summary["flight"]
+    lines.append(
+        f"{summary['created'].replace('T', ' ')} · end: {end} · flight {_fmt_duration(flight['flight_time_s'])}, "
+        f"{flight['path_length_m']:.0f} m flown"
+    )
+    lines += ["", "| Scorecard | |", "|---|---|"]
+    found = f"**{card['people_found']}**"
+    if card["people_total"] is not None:
+        found = f"**{card['people_found']} / {card['people_total']}**"
+    pin = _fmt_m(card["pin_error_m"])
+    if card["people_pin_error_m"] is not None:
+        pin += f" (people {_fmt_m(card['people_pin_error_m'])})"
+    height = _fmt_m(card["map_height_error_m"], 3)
+    if card["map_height_error_m"] is not None:
+        height += f" RMSE ({_fmt_m(card['map_height_error_smooth_m'], 3)} away from steps)"
+    rows = [
+        ("People found", found),
+        ("False alarms", "-" if card["false_alarms"] is None else str(card["false_alarms"])),
+        ("Average pin error", pin),
+        ("Map height error", height),
+        ("Coverage", f"{card['coverage_pct']:.1f} % scanned, {card['photo_coverage_pct']:.1f} % photographed"),
+        ("Flight time", _fmt_duration(card["flight_time_s"])),
+        ("Closest approach to obstacles", _fmt_m(card["closest_approach_m"], 1)),
+    ]
+    lines += [f"| {k} | {v} |" for k, v in rows]
+    lines += [
+        "",
+        "![Photo map with the flight path and the pins](final_map_photo.png)",
+        "",
+        "![Elevation map with the flight path and the pins](final_map_elevation.png)",
+        "",
+        "## Finds",
+        "",
+        "| # | Class | x [m] | y [m] | z [m] | Confidence | Sightings | Ground truth | Pin error |",
+        "|---|---|---|---|---|---|---|---|---|",
+    ]
+    order = sorted(confirmed, key=lambda r: (r["class"] != "person", r["class"], r["id"]))
+    for r in order:
+        gt = r.get("gt_id")
+        lines.append(
+            f"| {r['id']} | {r['class']} | {r['x']:+.2f} | {r['y']:+.2f} | {r['z']:+.2f} | {r['confidence']:.2f} | "
+            f"{r['hits']} | {gt if gt is not None else ('false alarm' if gt_objects is not None else '-')} | "
+            f"{_fmt_m(r.get('err_xy_m'))} |"
+        )
+    if not order:
+        lines.append("| | no confirmed finds | | | | | | | |")
+    if gt_objects:
+        matched = {r.get("gt_id") for r in confirmed}
+        missed = [g for g in gt_objects if g.get("id") not in matched]
+        people = [g for g in missed if g.get("class") == "person"]
+        lines += ["", f"Not found: {len(missed)} of {len(gt_objects)} ground-truth objects"]
+        if people:
+            lines[-1] += ", people: " + ", ".join(str(g.get("id")) for g in people)
+        lines[-1] += "."
+    lines += [
+        "",
+        "Pins are matched to the ground truth by class within 2 m, nearest first; a confirmed pin without a match "
+        "is a false alarm. The pin error is horizontal. The map height error compares the elevation map with the "
+        "true terrain over the survey area; cells across a step are ambiguous, hence the second number. Coordinates "
+        "are local ENU metres (x east, y north).",
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def format_summary(s: dict) -> str:
@@ -212,11 +345,20 @@ def format_summary(s: dict) -> str:
     c = s["coverage"]
     lines.append(f"  coverage: scan {c['elevation_pct']:.1f} %, photo {c['photo_pct']:.1f} %  ({c['ray_hits']:,} hits)")
     d = s["detections"]
-    lines.append(f"  objects: {d['confirmed']} confirmed ({d['tentative']} tentative) from {d['raw_detections']} detections")
+    lines.append(
+        f"  objects: {d['confirmed']} confirmed ({d['tentative']} tentative) from {d['raw_detections']} detections"
+    )
     e = s.get("evaluation")
     if e:
         p = "-" if e["precision"] is None else f"{e['precision']:.2f}"
         r = "-" if e["recall"] is None else f"{e['recall']:.2f}"
         err = "-" if e["mean_err_xy_m"] is None else f"{e['mean_err_xy_m']:.3f} m"
         lines.append(f"  vs ground truth: precision {p}, recall {r}, mean horizontal error {err}")
+        card = s["scorecard"]
+        lines.append(
+            f"  people found {card['people_found']} / {card['people_total']}, false alarms {card['false_alarms']}"
+        )
+    t = (s.get("terrain_error") or {}).get("all")
+    if t:
+        lines.append(f"  map height error: RMSE {t['rmse_m']:.3f} m over {t['cells']:,} cells")
     return "\n".join(lines)

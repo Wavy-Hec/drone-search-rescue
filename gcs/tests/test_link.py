@@ -105,12 +105,15 @@ class TestLink(unittest.TestCase):
             depth = np.full((24, 32), 3.0, np.float32)
             self.assertTrue(tx.send_camera(0.3, rgb, np.eye(3), [1, 1, 3], [0, 1, 0, 0], depth, frame_id=5))
             self.assertTrue(tx.send_gt_objects([{"class": "car", "pos": [1, 2, 0]}, ("tent", (3, 4, 0))]))
+            terrain = np.arange(12, dtype=np.float32).reshape(3, 4)
+            self.assertTrue(tx.send_gt_terrain(terrain, -1.0, -2.0, 0.5))
             self.assertTrue(tx.send_end("complete", 0.4))
-            msgs = collect(rx, 7)
+            msgs = collect(rx, 8)
             tx.close()
             types = [m.type for m in msgs]
-            # everything in call order, MISSION and GT_OBJECTS included
-            self.assertEqual(types, [P.HELLO, P.MISSION, P.TELEMETRY, P.SCAN, P.CAMERA, P.GT_OBJECTS, P.END])
+            # everything in call order, the latched MISSION and ground truth included
+            expected = [P.HELLO, P.MISSION, P.TELEMETRY, P.SCAN, P.CAMERA, P.GT_OBJECTS, P.GT_TERRAIN, P.END]
+            self.assertEqual(types, expected)
             by = {m.type: m for m in msgs}
             mid = by[P.MISSION].fields["mission_id"]
             for t in (P.TELEMETRY, P.SCAN, P.CAMERA, P.END):  # data and END carry the mission they belong to
@@ -125,6 +128,8 @@ class TestLink(unittest.TestCase):
             self.assertEqual(cam.fields["convention"], "ros_optical")
             self.assertTrue(np.isinf(by[P.SCAN].arrays["points"][1]).all())
             self.assertEqual(by[P.GT_OBJECTS].fields["objects"][1]["class"], "tent")
+            np.testing.assert_array_equal(by[P.GT_TERRAIN].arrays["heights"], terrain)
+            self.assertEqual(by[P.GT_TERRAIN].fields, {"x_min": -1.0, "y_min": -2.0, "resolution": 0.5})
 
     def test_sender_without_gcs_never_blocks_or_raises(self):
         tx = Sender(f"unix:{self.tmp}/nobody.sock", camera_queue=2)
@@ -262,9 +267,8 @@ class TestLink(unittest.TestCase):
         self.assertEqual([m.type for m in msgs], [P.HELLO, P.SCAN])
 
     def test_second_receiver_on_same_path_refused_and_stale_socket_cleaned(self):
-        with Receiver(self.addr):
-            with self.assertRaises(RuntimeError):
-                Receiver(self.addr).start()
+        with Receiver(self.addr), self.assertRaises(RuntimeError):
+            Receiver(self.addr).start()
         # stale socket file (crashed GCS) is replaced
         stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         stale.bind(self.addr[5:])

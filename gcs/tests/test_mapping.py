@@ -13,6 +13,7 @@ from drone_gcs.mapping import (
     evaluate_detections,
     intersect_rays_with_map,
     path_length,
+    terrain_error,
 )
 
 
@@ -87,7 +88,9 @@ class TestElevation(unittest.TestCase):
     def test_invalid_points_ignored_and_coverage(self):
         g = GridSpec.from_bounds(0, 2, 0, 2, 1.0)
         em = ElevationMap(g)
-        pts = np.array([[0.5, 0.5, 1], [np.inf, np.inf, np.inf], [np.nan, 0.5, 1], [5, 5, 1], [1.5, 0.5, 2]], np.float32)
+        pts = np.array(
+            [[0.5, 0.5, 1], [np.inf, np.inf, np.inf], [np.nan, 0.5, 1], [5, 5, 1], [1.5, 0.5, 2]], np.float32
+        )
         n = em.add_points(pts, valid=[True, True, True, True, False])
         self.assertEqual(n, 1)
         self.assertAlmostEqual(em.coverage(), 0.25)
@@ -217,8 +220,12 @@ class TestTracker(unittest.TestCase):
 
     def test_two_objects_in_one_frame_are_not_merged(self):
         tr = ObjectTracker(merge_radius=2.0)
-        tr.update([{"cls": "person", "xyz": [0, 0, 0], "conf": 0.9}, {"cls": "person", "xyz": [1.2, 0, 0], "conf": 0.9}])
-        tr.update([{"cls": "person", "xyz": [0.1, 0, 0], "conf": 0.9}, {"cls": "person", "xyz": [1.1, 0, 0], "conf": 0.9}])
+        tr.update(
+            [{"cls": "person", "xyz": [0, 0, 0], "conf": 0.9}, {"cls": "person", "xyz": [1.2, 0, 0], "conf": 0.9}]
+        )
+        tr.update(
+            [{"cls": "person", "xyz": [0.1, 0, 0], "conf": 0.9}, {"cls": "person", "xyz": [1.1, 0, 0], "conf": 0.9}]
+        )
         self.assertEqual(len(tr.objects), 2)
 
 
@@ -229,13 +236,35 @@ class TestEvaluation(unittest.TestCase):
             {"class": "car", "x": 9, "y": 9, "z": 0},  # false positive
             {"class": "tent", "x": 5, "y": 5.2, "z": 1},
         ]
-        gt = [{"class": "car", "pos": [1, 0, 0]}, {"class": "tent", "pos": [5, 5, 0]}, {"class": "person", "pos": [0, 9, 0]}]
+        gt = [
+            {"class": "car", "pos": [1, 0, 0]},
+            {"class": "tent", "pos": [5, 5, 0]},
+            {"class": "person", "pos": [0, 9, 0]},
+        ]
         e = evaluate_detections(preds, gt, 2.0)
         self.assertEqual((e["tp"], e["fp"], e["fn"]), (2, 1, 1))
         self.assertAlmostEqual(e["precision"], 2 / 3)
         self.assertAlmostEqual(e["recall"], 2 / 3)
         self.assertAlmostEqual(e["mean_err_xy_m"], 0.15)
         self.assertEqual(path_length([[0, 0], [3, 4], [3, 5]]), 6.0)
+
+
+class TestTerrainError(unittest.TestCase):
+    def test_errors_and_steps(self):
+        truth = np.zeros((20, 20))
+        truth[:, 10:] = 2.0  # a 2 m wall between columns 9 and 10
+        est = truth + 0.01
+        est[:, 9] = 1.0  # the cells next to the wall straddle it
+        est[0, 0] = np.nan  # not mapped
+        mask = np.ones_like(truth, bool)
+        mask[-1] = False  # outside the area
+        e = terrain_error(est, truth, mask)
+        self.assertEqual(e["all"]["cells"], 19 * 20 - 1)
+        self.assertGreater(e["all"]["rmse_m"], 0.1)
+        # away from the wall (columns 9 and 10 are next to the step) only the 1 cm offset is left
+        self.assertAlmostEqual(e["smooth"]["rmse_m"], 0.01, places=6)
+        self.assertAlmostEqual(e["smooth"]["bias_m"], 0.01, places=6)
+        self.assertEqual(e["smooth"]["cells"], 19 * 18 - 1)
 
 
 if __name__ == "__main__":

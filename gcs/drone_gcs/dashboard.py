@@ -57,7 +57,22 @@ PAL = {
     "photo_only": (160, 110, 88),
 }
 
-CLASS_RGB = {"car": (214, 38, 38), "tent": (36, 92, 222), "person": (210, 40, 190), "tarp": (238, 206, 30)}
+SAR_CLASSES = ("person", "vehicle", "crate", "barrel", "pallet", "cone", "landing_pad")
+"""Classes of the search-and-rescue site (and of the fine-tuned detector), in legend order."""
+CLASS_RGB = {
+    # search-and-rescue site, the same colours as the simulator's label previews
+    "person": (230, 25, 75),
+    "vehicle": (245, 130, 48),
+    "crate": (255, 225, 25),
+    "barrel": (60, 180, 75),
+    "pallet": (145, 30, 180),
+    "cone": (70, 240, 240),
+    "landing_pad": (0, 130, 200),
+    # objects of the stand-in fake world
+    "car": (214, 38, 38),
+    "tent": (36, 92, 222),
+    "tarp": (238, 206, 30),
+}
 _HASH_COLORS = [PAL["orange"], PAL["cyan"], PAL["green"], PAL["magenta"], PAL["yellow"], PAL["blue"], PAL["red"]]
 
 
@@ -111,7 +126,7 @@ def nice_length(max_m: float) -> float:
 def dashed_polyline(img, pts, color, thickness=1, dash=9.0, gap=6.0) -> None:
     pts = np.asarray(pts, dtype=np.float64)
     on, remaining = True, dash
-    for a, b in zip(pts[:-1], pts[1:]):
+    for a, b in zip(pts[:-1], pts[1:], strict=True):
         seg = b - a
         L = float(np.hypot(*seg))
         if L < 1e-6:
@@ -123,7 +138,14 @@ def dashed_polyline(img, pts, color, thickness=1, dash=9.0, gap=6.0) -> None:
             if on:
                 p0 = a + u * pos
                 p1 = a + u * (pos + step)
-                cv2.line(img, (int(round(p0[0])), int(round(p0[1]))), (int(round(p1[0])), int(round(p1[1]))), color, thickness, cv2.LINE_AA)
+                cv2.line(
+                    img,
+                    (int(round(p0[0])), int(round(p0[1]))),
+                    (int(round(p1[0])), int(round(p1[1]))),
+                    color,
+                    thickness,
+                    cv2.LINE_AA,
+                )
             pos += step
             remaining -= step
             if remaining <= 1e-9:
@@ -337,7 +359,9 @@ class MapRenderer:
             ax0, ax1, ay0, ay1 = state.area
             p0, p1 = view.pt(ax0, ay1), view.pt(ax1, ay0)
             cv2.rectangle(img, p0, p1, PAL["fg2"], 1, aa)
-            txt.put(img, "survey area", p0[0] + 4, p0[1] + 3, 12, PAL["fg2"], "sans", bg=PAL["black"], pad=2, bg_alpha=0.45)
+            txt.put(
+                img, "survey area", p0[0] + 4, p0[1] + 3, 12, PAL["fg2"], "sans", bg=PAL["black"], pad=2, bg_alpha=0.45
+            )
         # planned path (dashed) + waypoint markers
         if state.planned_path is not None and len(state.planned_path) > 1:
             pp = view.pts(state.planned_path[:, :2])
@@ -363,15 +387,38 @@ class MapRenderer:
                 cv2.polylines(img, [pts], False, PAL["orange"], 2, aa)
         # current waypoint + carrot
         for d in state.drones.values():
-            if state.planned_path is not None and d.wp_index is not None and 0 <= d.wp_index < len(state.planned_path) and not report:
+            if (
+                state.planned_path is not None
+                and d.wp_index is not None
+                and 0 <= d.wp_index < len(state.planned_path)
+                and not report
+            ):
                 wp = state.planned_path[int(d.wp_index)]
                 c = view.pt(wp[0], wp[1])
                 cv2.circle(img, c, 9, (0, 0, 0), 3, aa)
                 cv2.circle(img, c, 9, PAL["yellow"], 2, aa)
-                txt.put(img, f"WP {int(d.wp_index) + 1}", c[0] + 12, c[1], 12, PAL["yellow"], "medium", anchor="lm", bg=PAL["black"], pad=2, bg_alpha=0.55)
+                txt.put(
+                    img,
+                    f"WP {int(d.wp_index) + 1}",
+                    c[0] + 12,
+                    c[1],
+                    12,
+                    PAL["yellow"],
+                    "medium",
+                    anchor="lm",
+                    bg=PAL["black"],
+                    pad=2,
+                    bg_alpha=0.55,
+                )
             if d.carrot is not None and not report:
                 c = view.pt(d.carrot[0], d.carrot[1])
                 cv2.drawMarker(img, c, PAL["magenta"], cv2.MARKER_CROSS, 9, 2, aa)
+        # landing pad
+        if state.home is not None:
+            c = view.pt(state.home[0], state.home[1])
+            cv2.circle(img, c, 11, (0, 0, 0), 3, aa)
+            cv2.circle(img, c, 11, PAL["white"], 1, aa)
+            txt.put(img, "H", c[0], c[1], 13, PAL["white"], "bold", anchor="mm")
         # ground truth (evaluation)
         if show_gt and state.gt_objects:
             for o in state.gt_objects:
@@ -395,7 +442,7 @@ class MapRenderer:
                 placed.append((c[0] - 9, c[1] - 9, c[0] + 9, c[1] + 9))
             else:
                 cv2.circle(img, c, 6, col, 2, aa)
-        for ob, c in zip(objs, centers):
+        for ob, c in zip(objs, centers, strict=True):
             if ob.hits < state.tracker.min_hits:
                 continue
             label = f"{ob.cls} {ob.conf:.2f}"
@@ -413,7 +460,19 @@ class MapRenderer:
                 spot = (c[0] + 12, c[1], "lm", (c[0] + 10, c[1] - lh // 2 - 1, c[0] + lw + 14, c[1] + lh // 2 + 1))
             if spot[1] != c[1]:
                 cv2.line(img, c, (spot[0], spot[1]), PAL["white"], 1, aa)
-            txt.put(img, label, spot[0], spot[1], 12, PAL["white"], "medium", anchor=spot[2], bg=(20, 20, 20), pad=2, bg_alpha=0.6)
+            txt.put(
+                img,
+                label,
+                spot[0],
+                spot[1],
+                12,
+                PAL["white"],
+                "medium",
+                anchor=spot[2],
+                bg=(20, 20, 20),
+                pad=2,
+                bg_alpha=0.6,
+            )
             placed.append(spot[3])
         # drones
         for d in state.drones.values():
@@ -484,7 +543,7 @@ class MapRenderer:
             y += 4
         else:
             mode = state.mosaic.mode if state.mosaic is not None else "-"
-            txt.put(img, f"camera pixels on", x, y, 12, PAL["fg2"])
+            txt.put(img, "camera pixels on", x, y, 12, PAL["fg2"])
             txt.put(img, f"the map ({mode} view)", x, y + 15, 12, PAL["fg2"])
             y += 36
             cv2.rectangle(img, (x, y), (x + 16, y + 12), PAL["fog"], -1)
@@ -522,16 +581,21 @@ class MapRenderer:
                 cv2.rectangle(img, (x + 5, cy - 6), (x + 17, cy + 6), PAL["white"], 1)
             txt.put(img, label, x + 30, cy, 12, PAL["fg2"], anchor="lm")
             y += 19
-        # classes present
-        classes = sorted({o.cls for o in state.tracker.objects})
+        # confirmed objects per class: the site's classes first, people on top
+        counts: dict[str, int] = {}
+        for o in state.tracker.confirmed():
+            counts[o.cls] = counts.get(o.cls, 0) + 1
+        classes = sorted(counts, key=lambda c: (SAR_CLASSES.index(c) if c in SAR_CLASSES else len(SAR_CLASSES), c))
         if classes:
             y += 6
             cv2.line(img, (x, y), (W - 10, y), PAL["border"], 1)
             y += 10
-            for c in classes[:8]:
+            for c in classes[:9]:
                 cv2.circle(img, (x + 11, y + 7), 6, class_color(c), -1, cv2.LINE_AA)
-                n = sum(1 for o in state.tracker.confirmed() if o.cls == c)
-                txt.put(img, f"{c}  x{n}", x + 30, y + 7, 12, PAL["fg2"], anchor="lm")
+                bold = c == "person"
+                col = PAL["fg"] if bold else PAL["fg2"]
+                txt.put(img, c.replace("_", " "), x + 30, y + 7, 12, col, "medium" if bold else "sans", anchor="lm")
+                txt.put(img, str(counts[c]), W - 14, y + 7, 12, col, "mono", anchor="rm")
                 y += 19
         # stats at the bottom
         if state.elevation is not None:
@@ -620,7 +684,7 @@ class Dashboard:
         cv2.circle(img, (bx + 11, 22), 4, PAL["bg"], -1, cv2.LINE_AA)
         t.put(img, pill, bx + 20, 22, 13, PAL["bg"], "bold", anchor="lm")
         x = bx + w + 40
-        addr = link.get("address", "")
+        addr = link.get("label") or link.get("address", "")
         if addr:
             t.put(img, addr, x, 22, 12, PAL["dim"], "mono", anchor="lm")
         rx = self.W - 16
@@ -630,7 +694,9 @@ class Dashboard:
         rx = t.put(img, keys, rx, 22, 12, PAL["dim"], anchor="rm")[0] - 18
         if ui.get("recording"):
             on = int(time.time() * 2) % 2 == 0
-            rx = t.put(img, f"REC {fmt_time(ui.get('rec_seconds', 0))[:-2]}", rx, 22, 13, PAL["red"], "bold", anchor="rm")[0]
+            rx = t.put(
+                img, f"REC {fmt_time(ui.get('rec_seconds', 0))[:-2]}", rx, 22, 13, PAL["red"], "bold", anchor="rm"
+            )[0]
             if on:
                 cv2.circle(img, (rx - 10, 22), 5, PAL["red"], -1, cv2.LINE_AA)
 
@@ -646,7 +712,8 @@ class Dashboard:
                 frame = d.det_frame
         hdr = "CAMERA"
         if frame is not None:
-            hdr += f"   drone {frame.drone_id}  {frame.name}  {frame.rgb.shape[1]}x{frame.rgb.shape[0]}  {d.cam_fps:4.1f} fps"
+            h, w = frame.rgb.shape[:2]
+            hdr += f"   drone {frame.drone_id}  {frame.name}  {w}x{h}  {d.cam_fps:4.1f} fps"
             hdr += f"   nadir {frame.cam.nadir_angle_deg():4.1f}°"
         t.put(img, hdr, x + 10, y + 13, 13, PAL["fg"], "medium", anchor="lm")
         ix, iy, iw, ih = x + 1, y + 27, w - 1, h - 27
@@ -666,7 +733,12 @@ class Dashboard:
         img[oy : oy + dh, ox : ox + dw] = bgr
         roi = img[oy : oy + dh, ox : ox + dw]
         cx, cy = dw // 2, dh // 2
-        for a, b in (((cx - 14, cy), (cx - 5, cy)), ((cx + 5, cy), (cx + 14, cy)), ((cx, cy - 14), (cx, cy - 5)), ((cx, cy + 5), (cx, cy + 14))):
+        for a, b in (
+            ((cx - 14, cy), (cx - 5, cy)),
+            ((cx + 5, cy), (cx + 14, cy)),
+            ((cx, cy - 14), (cx, cy - 5)),
+            ((cx, cy + 5), (cx, cy + 14)),
+        ):
             cv2.line(roi, a, b, PAL["white"], 1, cv2.LINE_AA)
         if frame.detections:
             for det, geo in frame.detections:
@@ -682,7 +754,18 @@ class Dashboard:
                 t.put(roi, label, x1 + 3, ly, 13, PAL["black"] if sum(col) > 380 else PAL["white"], "bold")
                 if geo.get("ok") and not geo.get("truncated"):
                     p = geo["xyz"]
-                    t.put(roi, f"({p[0]:.1f}, {p[1]:.1f})", x1 + 2, (y2 + 3) if ly < y1 else (ly + lh + 4), 11, PAL["white"], "mono", bg=(20, 20, 20), pad=2, bg_alpha=0.6)
+                    t.put(
+                        roi,
+                        f"({p[0]:.1f}, {p[1]:.1f})",
+                        x1 + 2,
+                        (y2 + 3) if ly < y1 else (ly + lh + 4),
+                        11,
+                        PAL["white"],
+                        "mono",
+                        bg=(20, 20, 20),
+                        pad=2,
+                        bg_alpha=0.6,
+                    )
         info = f"t {frame.t:7.2f} s   frame {frame.frame_id}   cam z {frame.cam.t[2]:5.1f} m"
         if frame.depth is None:
             info += "   (no depth)"
@@ -693,18 +776,31 @@ class Dashboard:
         x, y, w, h = self.r_obj
         conf = state.tracker.confirmed()
         n_tent = len(state.tracker.objects) - len(conf)
-        t.put(img, f"DETECTED OBJECTS   {len(conf)} confirmed   {n_tent} tentative", x + 10, y + 13, 13, PAL["fg"], "medium", anchor="lm")
-        det = ui.get("detector", {})
-        det_s = det.get("name", "detector off")
-        t.put(img, det_s, x + w - 10, y + 13, 12, PAL["dim"], anchor="rm")
-        cols = [("ID", 10), ("CLASS", 46), ("CONF", 150), ("HITS", 208), ("X [m]", 262), ("Y [m]", 338), ("Z [m]", 414), ("SEEN [s]", 486), ("SPREAD", 566)]
+        title = f"DETECTED OBJECTS   {len(conf)} confirmed   {n_tent} tentative"
+        x_end = t.put(img, title, x + 10, y + 13, 13, PAL["fg"], "medium", anchor="lm")[2]
+        det_s = ui.get("detector", {}).get("name", "detector off")
+        det_s = self._fit(det_s, x + w - 10 - (x_end + 20), 12)
+        if det_s:
+            t.put(img, det_s, x + w - 10, y + 13, 12, PAL["dim"], anchor="rm")
+        cols = [
+            ("ID", 10),
+            ("CLASS", 46),
+            ("CONF", 150),
+            ("HITS", 208),
+            ("X [m]", 262),
+            ("Y [m]", 338),
+            ("Z [m]", 414),
+            ("SEEN [s]", 486),
+            ("SPREAD", 566),
+        ]
         ty = y + 36
         for name, cx in cols:
             t.put(img, name, x + cx, ty, 11, PAL["dim"], "medium")
         ty += 17
         row_h = 17
         max_rows = max(0, (h - (ty - y) - 4) // row_h)
-        objs = sorted(state.tracker.objects, key=lambda o: (o.hits < state.tracker.min_hits, o.id))
+        # confirmed before tentative, people first
+        objs = sorted(state.tracker.objects, key=lambda o: (o.hits < state.tracker.min_hits, o.cls != "person", o.id))
         more = 0
         if len(objs) > max_rows:
             more = len(objs) - (max_rows - 1)
@@ -752,6 +848,24 @@ class Dashboard:
             if time.time() - when < 5.0:
                 t.put(img, msg, x + 16, y + 40, 13, PAL["fg"], "medium", bg=(20, 20, 20), pad=5, bg_alpha=0.75)
 
+    def _fit(self, text: str, width: int, size: int, kind: str = "sans") -> str:
+        """``text`` if it fits in ``width`` px, else its part before " (", else shortened with an ellipsis."""
+        for candidate in (text, text.split(" (")[0]):
+            if self.text.size(candidate, size, kind)[0] <= width:
+                return candidate
+        s = text.split(" (")[0]
+        while s and self.text.size(s + "…", size, kind)[0] > width:
+            s = s[:-1]
+        return s + "…" if s else ""
+
+    @staticmethod
+    def _detector_cell(det: dict) -> tuple[str, str, str]:
+        if not det.get("on"):
+            return ("DETECTOR", "off", "")
+        if det.get("kind") == "gt":
+            return ("DETECTOR", "truth", "boxes from the sim")
+        return ("DETECTOR", f"{det.get('ms', 0):4.0f} ms", f"{det.get('fps', 0):.1f} fps  {det.get('kind', '')}")
+
     def _hud(self, img, state: GCSState, ui: dict) -> None:
         t = self.text
         x, y, w, h = self.r_hud
@@ -763,16 +877,41 @@ class Dashboard:
         agl = state.agl(d) if d is not None else float("nan")
         n_wp = len(state.planned_path) if state.planned_path is not None else 0
         wp = f"{int(d.wp_index) + 1}/{n_wp}" if d is not None and d.wp_index is not None and n_wp else "-"
+        confirmed = state.tracker.confirmed()
         cells = [
-            ("MISSION TIME", f"T+{fmt_time(state.mission_time)}", f"sim t {state.t_now:.1f} s" if state.t_now is not None else ""),
-            ("ALTITUDE AGL", f"{agl:5.1f} m" if math.isfinite(agl) else "--", f"z {d.pos[2]:.1f} m" if d is not None and d.pos is not None else ""),
-            ("SPEED", f"{d.speed_h:4.1f} m/s" if d is not None and d.vel is not None else "--", f"vs {d.speed_v:+.1f} m/s" if d is not None and d.vel is not None else ""),
+            (
+                "MISSION TIME",
+                f"T+{fmt_time(state.mission_time)}",
+                f"sim t {state.t_now:.1f} s" if state.t_now is not None else "",
+            ),
+            (
+                "ALTITUDE AGL",
+                f"{agl:5.1f} m" if math.isfinite(agl) else "--",
+                f"z {d.pos[2]:.1f} m" if d is not None and d.pos is not None else "",
+            ),
+            (
+                "SPEED",
+                f"{d.speed_h:4.1f} m/s" if d is not None and d.vel is not None else "--",
+                f"vs {d.speed_v:+.1f} m/s" if d is not None and d.vel is not None else "",
+            ),
             ("HEADING", f"{d.heading_deg:03.0f}°" if d is not None and d.pos is not None else "--", "0 = north"),
-            ("WAYPOINT", wp, f"{state.flown_length():.0f} m flown"),
+            (
+                "WAYPOINT",
+                wp,
+                f"{d.phase + '  ' if d is not None and d.phase else ''}{state.flown_length():.0f} m flown",
+            ),
             ("COVERAGE", f"{100 * ce:5.1f} %", f"photo {100 * cp:.1f} %"),
-            ("OBJECTS", f"{len(state.tracker.confirmed())}", f"{state.tracker.n_detections} detections"),
-            ("LINK", f"{link.get('msg_rate', 0):4.0f} Hz", f"{link.get('byte_rate', 0) / 1e6:.1f} MB/s  drop {link.get('dropped', 0)}"),
-            ("DETECTOR", f"{det.get('ms', 0):4.0f} ms" if det.get("on") else "off", f"{det.get('fps', 0):.1f} fps  {det.get('kind', '')}" if det.get("on") else ""),
+            (
+                "PEOPLE FOUND",
+                f"{sum(1 for o in confirmed if o.cls == 'person')}",
+                f"{len(confirmed)} objects  {state.tracker.n_detections} dets",
+            ),
+            (
+                "LINK",
+                f"{link.get('msg_rate', 0):4.0f} Hz",
+                f"{link.get('byte_rate', 0) / 1e6:.1f} MB/s  drop {link.get('dropped', 0)}",
+            ),
+            self._detector_cell(det),
         ]
         cw = w / len(cells)
         for i, (label, value, sub) in enumerate(cells):
@@ -781,6 +920,8 @@ class Dashboard:
                 cv2.line(img, (cx, y + 10), (cx, y + h - 10), PAL["border"], 1)
             t.put(img, label, cx + 14, y + 10, 11, PAL["dim"], "medium")
             vcol = PAL["fg"]
+            if label == "PEOPLE FOUND" and value != "0":
+                vcol = class_color("person")
             if label == "COVERAGE":
                 vcol = PAL["green"] if ce > 0.95 else PAL["fg"]
             if label == "LINK" and not link.get("connected"):

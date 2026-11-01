@@ -203,5 +203,17 @@ class IsaacLabStreamer:
                 return self.sender._fail("IsaacLabStreamer.gt_objects", e)
         return self.sender.send_gt_objects(objects, drone_id=self.drone_id, **kw)
 
+    def gt_terrain(self, heights, x_min: float, y_min: float, resolution: float, *, world: bool = False) -> bool:
+        """True terrain height (ny, nx) for the map-error metric (evaluation only); grid origin and heights in the
+        local frame, or in world coordinates with ``world=True``."""
+        if world:
+            try:
+                ox, oy, oz = self.origin
+                heights = np.asarray(to_numpy(heights), dtype=np.float32) - np.float32(oz)
+                x_min, y_min = float(x_min) - ox, float(y_min) - oy
+            except Exception as e:  # noqa: BLE001
+                return self.sender._fail("IsaacLabStreamer.gt_terrain", e)
+        return self.sender.send_gt_terrain(heights, x_min, y_min, resolution, drone_id=self.drone_id)
+
     def end(self, reason: str = "complete", t: float | None = None, **kw) -> bool:
         return self.sender.send_end(reason, t, **kw)

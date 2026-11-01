@@ -1,7 +1,8 @@
 """Detectors for the GCS and the worker thread that keeps inference off the UI loop.
 
-* :class:`YoloDetector` - Ultralytics YOLO (default: the COCO nano weights in ``~/isaac_ws/assets/models``;
-  later a fine-tuned model). Ultralytics is AGPL-3.0, see the README.
+* :class:`YoloDetector` - Ultralytics YOLO. Default weights (:func:`default_weights`): ``$DRONE_GCS_WEIGHTS``, else
+  the YOLO26n fine-tuned on simulator images (``~/isaac_ws/assets/models/drone_sar_yolo26n.pt``) when it exists,
+  else the stock COCO model ``yolo26n.pt`` next to it. Ultralytics is AGPL-3.0, see the README.
 * :class:`ColorBlobDetector` - stand-in for the fake world (saturated colour blobs -> boxes). COCO YOLO does
   not know the synthetic shapes, so the end-to-end tests use this one.
 * :class:`DetectorWorker` - runs any detector in a background thread; ``submit()`` keeps only the newest
@@ -31,10 +32,20 @@ from pathlib import Path
 import numpy as np
 
 log = logging.getLogger("drone_gcs.detector")
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 AUTO_GPU_MIN_FREE_MIB = 2048
-DEFAULT_WEIGHTS = os.environ.get("DRONE_GCS_WEIGHTS", os.path.expanduser("~/isaac_ws/assets/models/yolo26n.pt"))
-FINETUNED_WEIGHTS = PROJECT_ROOT / "models" / "detector.pt"  # written by scripts/train_detector.py
+MODELS_DIR = Path("~/isaac_ws/assets/models").expanduser()
+COCO_WEIGHTS = MODELS_DIR / "yolo26n.pt"
+"""Stock YOLO26n (COCO classes)."""
+SAR_WEIGHTS = MODELS_DIR / "drone_sar_yolo26n.pt"
+"""YOLO26n fine-tuned on simulator images: person, vehicle, crate, barrel, pallet, cone, landing_pad."""
+
+
+def default_weights() -> Path:
+    """``$DRONE_GCS_WEIGHTS``, else :data:`SAR_WEIGHTS` when it exists, else :data:`COCO_WEIGHTS`."""
+    env = os.environ.get("DRONE_GCS_WEIGHTS")
+    if env:
+        return Path(env).expanduser()
+    return SAR_WEIGHTS if SAR_WEIGHTS.is_file() else COCO_WEIGHTS
 
 
 @dataclass
@@ -45,7 +56,12 @@ class Detection:
     box: tuple  # (x1, y1, x2, y2) [px]
 
     def to_dict(self) -> dict:
-        return {"class": self.cls, "class_id": self.cls_id, "conf": round(self.conf, 4), "box": [round(b, 1) for b in self.box]}
+        return {
+            "class": self.cls,
+            "class_id": self.cls_id,
+            "conf": round(self.conf, 4),
+            "box": [round(b, 1) for b in self.box],
+        }
 
 
 def _parse_class_map(class_map) -> dict:
@@ -115,7 +131,7 @@ class YoloDetector:
         os.environ.setdefault("YOLO_VERBOSE", "False")
         from ultralytics import YOLO  # noqa: PLC0415  (heavy, optional)
 
-        self.weights = str(weights or DEFAULT_WEIGHTS)
+        self.weights = str(Path(weights).expanduser() if weights else default_weights())
         if not Path(self.weights).exists():
             raise FileNotFoundError(f"YOLO weights not found: {self.weights}")
         self.model = YOLO(self.weights, task="detect")
@@ -187,7 +203,7 @@ class YoloDetector:
         conf = boxes.conf.cpu().numpy()
         cls = boxes.cls.cpu().numpy().astype(int)
         out = []
-        for b, p, c in zip(xyxy, conf, cls):
+        for b, p, c in zip(xyxy, conf, cls, strict=True):
             name = self.names.get(int(c), str(c))
             name = self.class_map.get(name, name)
             if name is None:
@@ -260,7 +276,9 @@ class ColorBlobDetector:
                 conf = 0.55 + 0.4 * min(1.0, fill / 0.8)
                 if x == 0 or y == 0 or x + w >= W or y + hh >= H:
                     conf *= 0.75  # truncated at the image border
-                out.append(Detection(cid, name, float(min(conf, 0.99)), (float(x), float(y), float(x + w), float(y + hh))))
+                out.append(
+                    Detection(cid, name, float(min(conf, 0.99)), (float(x), float(y), float(x + w), float(y + hh)))
+                )
         return out
 
 
@@ -278,8 +296,19 @@ class NullDetector:
         return []
 
 
+def detections_from_boxes(boxes: list[dict]) -> list[Detection]:
+    """Boxes the simulator sent with a frame (``[{"class", "box": [x1, y1, x2, y2]}, ...]``) as detections."""
+    return [
+        Detection(-1, str(b["class"]), float(b.get("conf", 1.0)), tuple(float(v) for v in b["box"]))
+        for b in boxes
+        if b.get("class") and len(b.get("box", ())) == 4
+    ]
+
+
 def make_detector(kind: str = "yolo", **kw):
-    """``"yolo"`` (kw: weights, device, conf, iou, imgsz, classes, class_map), ``"blob"`` or ``"none"``."""
+    """``"yolo"`` (kw: weights, device, conf, iou, imgsz, classes, class_map), ``"blob"`` or ``"none"``.
+
+    (``--detector gt`` needs no model: the app takes the boxes the simulator sends with each frame.)"""
     if kind == "yolo":
         return YoloDetector(**kw)
     if kind == "blob":

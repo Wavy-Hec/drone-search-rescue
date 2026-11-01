@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import shutil
@@ -16,7 +17,7 @@ import cv2
 import numpy as np
 
 from .dashboard import LAYERS, STATS, Dashboard
-from .detector import DetectorWorker, make_detector
+from .detector import DetectorWorker, detections_from_boxes, make_detector
 from .link import Receiver
 from .protocol import MISSION
 from .report import format_summary, write_report
@@ -134,6 +135,13 @@ def decode_key(key: int) -> str | None:
     return chr(k).lower()
 
 
+def link_label(address: str) -> str:
+    """Short form of a link address for the screen: ``unix:drone_gcs.sock`` for a socket path."""
+    if address.startswith("unix:"):
+        return "unix:" + Path(address[5:]).name
+    return address
+
+
 def resolve_run_dir(out_dir: Path, name: str | None) -> Path:
     base = Path(out_dir).expanduser()
     name = name or f"{datetime.now():%Y%m%d_%H%M%S}_gcs"
@@ -178,9 +186,24 @@ class GCSApp:
         c = self.cfg
         if c.detector == "none":
             return
+        if c.detector == "gt":
+            self.detector_desc = "ground-truth boxes from the simulator"
+            self.ui["detector_on"] = True
+            log.info(
+                "detector: %s (needs a simulator that sends them, e.g. sar_mission.py --gt_boxes)", self.detector_desc
+            )
+            return
         kw = {}
         if c.detector == "yolo":
-            kw = dict(weights=c.weights, device=c.device, conf=c.conf, iou=c.iou, imgsz=c.imgsz, classes=c.classes, class_map=c.class_map)
+            kw = dict(
+                weights=c.weights,
+                device=c.device,
+                conf=c.conf,
+                iou=c.iou,
+                imgsz=c.imgsz,
+                classes=c.classes,
+                class_map=c.class_map,
+            )
         det = make_detector(c.detector, **kw)
         det.warmup()
         self.worker = DetectorWorker(det)
@@ -210,10 +233,8 @@ class GCSApp:
             self.quit_reason = f"signal {signal.Signals(signum).name}"
 
         for s in (signal.SIGINT, signal.SIGTERM):
-            try:
+            with contextlib.suppress(ValueError):  # not in the main thread
                 signal.signal(s, handler)
-            except ValueError:  # not in the main thread
-                pass
 
     # ------------------------------------------------------------------ helpers
     def ui_dict(self) -> dict:
@@ -224,11 +245,12 @@ class GCSApp:
             "msg_rate": rate,
             "byte_rate": brate,
             "address": self.receiver.address_str,
+            "label": link_label(self.receiver.address_str),
             "dropped": int(sum(self.receiver.dropped.values())),
         }
         w = self.worker
         d["detector"] = {
-            "on": w is not None,
+            "on": w is not None or self.cfg.detector == "gt",
             "name": self.detector_desc,
             "kind": self.cfg.detector,
             "ms": w.avg_ms if w else 0.0,
@@ -277,6 +299,26 @@ class GCSApp:
             if gen == self.gen and frame.drone_id in self.state.drones:
                 self.state.apply_detections(frame, dets, ms)
 
+    def handle_message(self, msg) -> None:
+        """Apply one link message (archiving the current mission when a new one starts) and send camera frames
+        to the detector."""
+        st = self.state
+        if (
+            msg.type == MISSION
+            and st.mission is not None
+            and msg.fields.get("mission_id") != st.mission.get("mission_id")
+            and st.has_data
+        ):
+            self._rollover()
+            st = self.state
+        frame = st.apply(msg)
+        if frame is None:
+            return
+        if self.worker is not None:
+            self.worker.submit(frame.rgb, (self.gen, frame), key=frame.drone_id)  # every drone
+        elif self.cfg.detector == "gt" and frame.gt_boxes is not None:
+            st.apply_detections(frame, detections_from_boxes(frame.gt_boxes), 0.0)
+
     def _rollover(self) -> None:
         """A new MISSION (different mission_id) arrived: archive the current one and start fresh."""
         self._apply_detector_results()  # what finished so far still belongs to the old mission
@@ -293,6 +335,7 @@ class GCSApp:
         # GT_OBJECTS is latched on the sim side: it stays in force until the sim sends a new one (a GCS that
         # connects now would get the same one), so it carries over. So does what we know about the senders.
         self.state.gt_objects = old.gt_objects
+        self.state.gt_terrain = old.gt_terrain
         self.state.senders = dict(old.senders)
         self.gen += 1
         self.ui["active_drone"] = None
@@ -314,7 +357,9 @@ class GCSApp:
         self._init_window()
         if self.cfg.video:
             try:
-                self.recorder = VideoRecorder(self.run_dir / "dashboard.mp4", self.cfg.fps, self.cfg.size, self.cfg.transcode)
+                self.recorder = VideoRecorder(
+                    self.run_dir / "dashboard.mp4", self.cfg.fps, self.cfg.size, self.cfg.transcode
+                )
             except RuntimeError as e:
                 log.error("%s", e)
         shots_due = sorted(self.cfg.screenshot_at)
@@ -324,20 +369,10 @@ class GCSApp:
         try:
             while self.quit_reason is None:
                 t0 = time.monotonic()
-                st = self.state
                 for msg in self.receiver.drain():
-                    if (
-                        msg.type == MISSION
-                        and st.mission is not None
-                        and msg.fields.get("mission_id") != st.mission.get("mission_id")
-                        and st.has_data
-                    ):
-                        self._rollover()
-                        st = self.state
-                    frame = st.apply(msg)
-                    if frame is not None and self.worker is not None:
-                        self.worker.submit(frame.rgb, (self.gen, frame), key=frame.drone_id)  # every drone
+                    self.handle_message(msg)
                 self._apply_detector_results()
+                st = self.state
                 if self.ui["active_drone"] is None and st.drones:
                     self.ui["active_drone"] = min(st.drones)
                 canvas = self.dashboard.render(st, self.ui_dict())

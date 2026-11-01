@@ -10,6 +10,7 @@
   intersection).
 * :class:`ObjectTracker` - merges repeated detections of the same object (same class within a radius).
 * :func:`evaluate_detections` - precision / recall / localisation error against ground truth.
+* :func:`terrain_error` - height error of the elevation map against the true terrain.
 
 Map arrays have shape ``(ny, nx)``: row ``iy`` is the y index (south first), column ``ix`` the x index.
 """
@@ -665,6 +666,47 @@ def evaluate_detections(predictions: list[dict], ground_truth: list[dict], match
         "matches": matches,
         "unmatched_gt": [j for j in range(len(G)) if j not in used_g],
         "unmatched_pred": [i for i in range(len(P)) if i not in used_p],
+    }
+
+
+def terrain_error(estimate, truth, mask=None, step: float = 0.1) -> dict:
+    """Height error of a map against the true terrain on the same grid: cells known in both (inside ``mask``).
+
+    ``smooth`` repeats the statistics away from steps: cells whose true height is within ``step`` of all eight
+    neighbours (a cell across a wall is ambiguous by nature). Errors are estimate - truth [m].
+    """
+    est = np.asarray(estimate, dtype=np.float64)
+    tru = np.asarray(truth, dtype=np.float64)
+    ok = np.isfinite(est) & np.isfinite(tru)
+    if mask is not None:
+        ok &= np.asarray(mask, dtype=bool)
+    padded = np.pad(tru, 1, mode="edge")
+    stepped = np.zeros(tru.shape, bool)
+    ny, nx = tru.shape
+    with np.errstate(invalid="ignore"):
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                if dx or dy:
+                    stepped |= np.abs(padded[1 + dy : 1 + dy + ny, 1 + dx : 1 + dx + nx] - tru) > step
+
+    def stats(sel: np.ndarray) -> dict | None:
+        e = (est - tru)[sel]
+        if not e.size:
+            return None
+        return {
+            "cells": int(e.size),
+            "rmse_m": float(np.sqrt(np.mean(e * e))),
+            "mae_m": float(np.mean(np.abs(e))),
+            "bias_m": float(np.mean(e)),
+            "max_abs_m": float(np.max(np.abs(e))),
+        }
+
+    n = int(ok.sum())
+    return {
+        "all": stats(ok),
+        "smooth": stats(ok & ~stepped),
+        "smooth_fraction": float((ok & ~stepped).sum() / n) if n else None,
+        "step_threshold_m": step,
     }
 
 

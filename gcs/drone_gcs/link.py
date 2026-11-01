@@ -10,15 +10,16 @@ The GCS listens; the simulator connects (and keeps reconnecting). Addresses:
 ``Sender`` is built for a simulation loop: every ``send_*`` call validates and copies its arrays and fields,
 puts them in a bounded queue and returns at once. A background thread encodes and writes them in call order.
 When the GCS is slow or absent the oldest data messages are dropped (CAMERA keeps only the 2 newest by
-default); MISSION / GT_OBJECTS / END are never dropped. After every (re)connect the Sender first re-sends the
-MISSION / GT_OBJECTS that the next queued message belongs to, and every data message and END carries the
-``mission_id`` of the MISSION sent before it. ``send_*`` never raises: it returns ``False`` and logs (rate
-limited) instead.
+default); MISSION / GT_OBJECTS / GT_TERRAIN / END are never dropped. After every (re)connect the Sender first
+re-sends the latched MISSION / GT_OBJECTS / GT_TERRAIN that the next queued message belongs to, and every data
+message and END carries the ``mission_id`` of the MISSION sent before it. ``send_*`` never raises: it returns
+``False`` and logs (rate limited) instead.
 """
 
 from __future__ import annotations
 
 import collections
+import contextlib
 import itertools
 import logging
 import os
@@ -36,6 +37,7 @@ from .protocol import (
     CONTROL_TYPES,
     END,
     GT_OBJECTS,
+    GT_TERRAIN,
     HELLO,
     LATCHED_TYPES,
     MISSION,
@@ -115,10 +117,8 @@ class _RateLimitedLog:
             return
         n = self._suppressed.pop(key, 0)
         self._last[key] = now
-        try:
+        with contextlib.suppress(Exception):  # never let logging break the caller
             self.logger.log(level, msg + (f" (+{n} similar suppressed)" if n else ""), *args)
-        except Exception:  # never let logging break the caller
-            pass
 
 
 # ---------------------------------------------------------------------------------------------------- queue
@@ -304,7 +304,7 @@ def _area_dict(area: Any) -> dict:
         d = {k: float(getattr(area, k)) for k in ("x_min", "x_max", "y_min", "y_max")}
     else:
         v = _vec(area, 4, "area")
-        d = dict(zip(("x_min", "x_max", "y_min", "y_max"), v))
+        d = dict(zip(("x_min", "x_max", "y_min", "y_max"), v, strict=True))
     if not (d["x_max"] > d["x_min"] and d["y_max"] > d["y_min"]):
         raise ValueError(f"degenerate area {d}")
     return d
@@ -666,6 +666,22 @@ class Sender:
         except Exception as e:  # noqa: BLE001
             return self._fail("send_gt_objects", e)
 
+    def send_gt_terrain(
+        self, heights: Any, x_min: float, y_min: float, resolution: float, *, drone_id: int | None = None
+    ) -> bool:
+        """True terrain height for evaluation only: ``heights`` (ny, nx) [m, world z] on a regular grid whose
+        cell ``(iy, ix)`` spans ``[x_min + ix * resolution, ...)`` (row 0 = south; NaN = unknown). Latched."""
+        try:
+            h = _owned(heights, np.float32)
+            if h.ndim != 2:
+                raise ValueError(f"heights must be (ny, nx), got {h.shape}")
+            if resolution <= 0:
+                raise ValueError("resolution must be > 0")
+            f = {"x_min": float(x_min), "y_min": float(y_min), "resolution": float(resolution)}
+            return self._submit(GT_TERRAIN, f, {"heights": h}, drone_id)
+        except Exception as e:  # noqa: BLE001
+            return self._fail("send_gt_terrain", e)
+
     def send_end(
         self, reason: str = "complete", t: float | None = None, *, flush_timeout: float = 2.0, **extra
     ) -> bool:
@@ -718,10 +734,8 @@ class Sender:
             else:
                 s = socket.create_connection(self._sockaddr, timeout=self._connect_timeout)
                 s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            try:
+            with contextlib.suppress(OSError):
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, self._sndbuf)
-            except OSError:
-                pass
             s.settimeout(self._send_timeout)
             self._sock = s
             self._stats["connects"] += 1
@@ -729,10 +743,8 @@ class Sender:
             return True
         except OSError as e:
             if s is not None:
-                try:
+                with contextlib.suppress(OSError):
                     s.close()
-                except OSError:
-                    pass
             self.last_error = f"connect: {e}"
             self._rlog(
                 logging.INFO, "connect", "drone_gcs.link: GCS not reachable at %s (%s); retrying", self.address_str, e
@@ -742,10 +754,8 @@ class Sender:
     def _disconnect(self, quiet: bool = False) -> None:
         s, self._sock = self._sock, None
         if s is not None:
-            try:
+            with contextlib.suppress(OSError):
                 s.close()
-            except OSError:
-                pass
             if not quiet:
                 self._stats["disconnects"] += 1
                 self._rlog(logging.INFO, "disconnect", "drone_gcs.link: lost the GCS link (%s)", self.last_error)
@@ -913,17 +923,13 @@ class Receiver:
     def close(self) -> None:
         self._stop.set()
         if self._listener is not None:
-            try:
+            with contextlib.suppress(OSError):
                 self._listener.close()
-            except OSError:
-                pass
         with self._lock:
             conns = list(self._conns.values())
         for c in conns:
-            try:
+            with contextlib.suppress(OSError):
                 c.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
         for t in self._threads:
             t.join(timeout=2.0)
         if self._family == socket.AF_UNIX and self._unix_ino is not None:
@@ -984,10 +990,8 @@ class Receiver:
                 continue
             cid = next(self._conn_ids)
             conn.settimeout(0.5)
-            try:
+            with contextlib.suppress(OSError):
                 conn.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8 << 20)
-            except OSError:
-                pass
             with self._lock:
                 self._conns[cid] = conn
             t = threading.Thread(target=self._reader, args=(conn, cid), name=f"drone_gcs-rx{cid}", daemon=True)
@@ -1052,7 +1056,5 @@ class Receiver:
         finally:
             with self._lock:
                 self._conns.pop(cid, None)
-            try:
+            with contextlib.suppress(OSError):
                 conn.close()
-            except OSError:
-                pass

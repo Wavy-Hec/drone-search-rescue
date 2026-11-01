@@ -1,6 +1,6 @@
 # drone_gcs link protocol (v1)
 
-Simulator (Isaac Sim / Isaac Lab survey, or `scripts/fake_drone.py`) → GCS (`scripts/gcs.py`).
+Simulator (`drone_lab/scripts/sar_mission.py` in Isaac Sim, or `scripts/fake_drone.py`) → GCS (`scripts/gcs.py`).
 One direction only: the simulator sends, the GCS listens. Implementation: `drone_gcs/protocol.py`
 (framing) and `drone_gcs/link.py` (`Sender`, `Receiver`); both need only the Python standard library and numpy.
 
@@ -133,7 +133,8 @@ is ignored; a different id starts a new mission). END from any drone ends the mi
 | `padding` | m | map margin around `area` (default max(4 m, 15 % of the larger side)), rounded up to whole cells. Cell centres sit on `x_min + k·resolution` (same for y), so a ray grid of the same spacing hits cell centres, not cell edges, when the area bounds lie on that lattice (e.g. multiples of the resolution). Grids above 4 M cells get a coarser resolution (a whole multiple of the requested one) |
 | `photo_resolution` | m | orthomosaic cell size (default `resolution / 2`) |
 | `geo_origin` | `{lat, lon, alt}` | optional geodetic anchor of the world origin (carried through only) |
-| others | | e.g. `pattern`, `spacing`, `speed`, kept in the report |
+| `home` | [x, y, z] m, world | landing pad (top surface); drawn as "H" on the map |
+| others | | e.g. `pattern`, `spacing`, `speed`, `phases`, kept in the report |
 
 ### Mission scope of data messages
 `Sender` adds the `mission_id` of the last MISSION it was given to every TELEMETRY, SCAN, CAMERA and END
@@ -154,6 +155,7 @@ Vehicle state, typically 10 to 50 Hz.
 | `ang_vel` | [wx, wy, wz] rad/s | angular velocity (as given by the sim) |
 | `wp_index` | int | index into `planned_path` of the waypoint currently targeted |
 | `carrot` | [x, y, z] m, world | current tracking target (carrot) |
+| `phase` | str | mission phase, e.g. `takeoff`, `transit`, `survey`, `return`, `descent`, `touchdown` (shown in the HUD) |
 
 ### SCAN
 Mapping ray-caster hits, typically 5 to 20 Hz. Each scan updates the elevation map: per-cell count, sum,
@@ -183,6 +185,7 @@ The GCS keeps only the newest frames when it falls behind, as does the Sender (2
 | `convention` | `"ros_optical"` | written by `Sender` for clarity |
 | `camera` | str | camera name (default `cam0`) |
 | `frame_id` | int | frame counter (`IsaacLabStreamer`: Isaac Lab's capture index). Send each capture once: repeats count as extra sightings |
+| `gt_boxes` | list | evaluation only: the labelled objects in this frame from the simulator's instance segmentation, `[{"class", "box": [x1, y1, x2, y2], "name"?, "pixels"?}]` (continuous pixel coordinates, like detections). `gcs.py --detector gt` maps these instead of running a model, which checks the whole geometry chain with perfect boxes |
 
 ### GT_OBJECTS (latched, evaluation only)
 Ground truth for the report's precision / recall / localization error. The GCS never uses it for mapping or
@@ -199,14 +202,28 @@ Detections are matched to ground truth by class and **horizontal** distance ≤ 
 nearest pair. The report gives horizontal error (primary) and z error separately: the GCS geolocates the
 visible top surface of an object, while GT `pos` is at the ground.
 
+### GT_TERRAIN (latched, evaluation only)
+The true terrain height, for the report's map height error. The GCS never uses it for mapping.
+
+| field | type / unit | meaning |
+|---|---|---|
+| **`heights`** (buffer) | float32 (ny, nx) m, world z | true height per cell, row 0 = south (y_min); NaN = unknown |
+| **`x_min`**, **`y_min`** | m, world | lower edges of cell (0, 0); cell `(iy, ix)` spans `[x_min + ix·res, x_min + (ix+1)·res)` |
+| **`resolution`** | m | cell size |
+
+The report samples it at the centres of its own map cells (nearest cell), so a raster whose cell centres sit on
+the same lattice as the map (e.g. multiples of 0.25 m) compares like with like. Like GT_OBJECTS it stays in force
+across a mission change until the next GT_TERRAIN.
+
 ### END
 End of the mission. A headless GCS (or one started with `--exit-on-end`) writes its report and exits about
 `--linger` seconds later. `Sender.send_end()` waits up to `flush_timeout` (default 2 s) for the queue to drain.
 
 | field | type | meaning |
 |---|---|---|
-| **`reason`** | str | `complete`, `aborted`, `timeout`, ... |
+| **`reason`** | str | `complete`, `landed`, `crashed`, `aborted`, `timeout`, ... |
 | `t` | s | simulation time |
+| `stats` | dict | the drone's own mission statistics, kept in the report. `stats.closest_approach.closest_m` (closest distance to terrain or objects away from the pad [m]) goes into the scorecard |
 
 ## Delivery guarantees
 
@@ -215,15 +232,15 @@ End of the mission. A headless GCS (or one started with `--exit-on-end`) writes 
   JPEG) and socket writes happen in a background daemon thread. On bad input, a full queue or no GCS, it
   returns `False` or drops data. It never raises into the simulation loop and uses `MSG_NOSIGNAL`, so no SIGPIPE.
 * Queue limits per type, with the oldest dropped first: CAMERA 2, SCAN 256, TELEMETRY 512, others 256, plus a 256 MB byte
-  budget that drops CAMERA first. HELLO, MISSION, GT_OBJECTS and END are never dropped.
+  budget that drops CAMERA first. HELLO, MISSION, GT_OBJECTS, GT_TERRAIN and END are never dropped.
 * Order: messages are written in the order of the `send_*` calls, MISSION and GT_OBJECTS included (only
   dropped data is missing). A mission change while the GCS is away or behind therefore arrives as
   MISSION A, A's data, END A, MISSION B, B's data.
-* After every (re)connect the Sender writes HELLO, then the MISSION / GT_OBJECTS in force when the next
+* After every (re)connect the Sender writes HELLO, then the MISSION / GT_OBJECTS / GT_TERRAIN in force when the next
   queued message was sent (not necessarily the newest ones), then the queue. A GCS restarted mid-mission
   therefore starts a **new, empty map** for that mission: earlier data is not replayed, apart from what was
   still queued (sent while no GCS was listening, within the queue limits). The message being written when
-  the link broke is lost if it is data; MISSION, GT_OBJECTS and END are retried.
+  the link broke is lost if it is data; MISSION, GT_OBJECTS, GT_TERRAIN and END are retried.
 * If the GCS stops reading, the background thread blocks for at most `send_timeout` (5 s) per write call
   (one frame takes 3 or more calls: prefix, header, each buffer), so up to about 3 × 5 s per frame. Then the
   connection is reset and re-established. Meanwhile the queue keeps dropping old frames.

@@ -47,13 +47,14 @@ TELEMETRY = "TELEMETRY"
 SCAN = "SCAN"
 CAMERA = "CAMERA"
 GT_OBJECTS = "GT_OBJECTS"
+GT_TERRAIN = "GT_TERRAIN"
 END = "END"
-MESSAGE_TYPES = (HELLO, MISSION, TELEMETRY, SCAN, CAMERA, GT_OBJECTS, END)
+MESSAGE_TYPES = (HELLO, MISSION, TELEMETRY, SCAN, CAMERA, GT_OBJECTS, GT_TERRAIN, END)
 
-LATCHED_TYPES = frozenset({MISSION, GT_OBJECTS})
+LATCHED_TYPES = frozenset({MISSION, GT_OBJECTS, GT_TERRAIN})
 """Re-sent automatically by the Sender on every (re)connect, so the GCS can start or restart at any time."""
 
-CONTROL_TYPES = frozenset({HELLO, MISSION, GT_OBJECTS, END})
+CONTROL_TYPES = frozenset({HELLO, MISSION, GT_OBJECTS, GT_TERRAIN, END})
 """Never dropped by the bounded queues (data types are dropped oldest-first when a queue is full)."""
 
 _ALLOWED_KINDS = frozenset("biuf")  # bool, signed int, unsigned int, float

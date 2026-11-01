@@ -1,7 +1,8 @@
 """drone_gcs: ground-control-station side of the simulated drone survey.
 
 The simulator (Isaac Sim / Isaac Lab, or ``scripts/fake_drone.py``) streams MISSION / TELEMETRY / SCAN /
-CAMERA / GT_OBJECTS / END messages over a local socket (``drone_gcs.link``). The GCS builds the map
+CAMERA / END messages, plus GT_OBJECTS / GT_TERRAIN for the evaluation, over a local socket
+(``drone_gcs.link``). The GCS builds the map
 incrementally (``drone_gcs.mapping``), runs detection (``drone_gcs.detector``), shows a live dashboard
 (``drone_gcs.dashboard``) and writes a mission report (``drone_gcs.report``).
 
