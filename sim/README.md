@@ -64,6 +64,31 @@ Flown with the built-in tracking policy after 1300 training iterations (`exporte
 * **Start:** right after the spawn the drone dips about 15 cm and recovers within a second, so it first hovers
   `--settle` seconds (default 1.5) at the start of the path; the video starts after the hover.
 
+## Search-and-rescue site (`DroneLab-SAR-ARL-Robot-1-v0`)
+
+The same survey over a dressed disaster site: 6-10 people standing or lying (many of them next to the blocks of
+"collapsed buildings"), a forklift, crates, barrels, pallets, traffic cones, trees, textured ground and a landing
+pad at the start of the path. A seeded generator places every object on the exact terrain mesh (flat footing, no
+overlaps, nothing inside a block) and writes the ground truth: class, position, size and pose of each object. The
+drone carries a downward 640 x 480 RGB-D camera with instance segmentation, so every frame comes with exact labels
+and boxes for training a detector; a lying person is 26-29 px across the shoulders at survey altitude. The policy
+inputs are unchanged, so the same trained policy flies it (45 s test flight: no crash, 4 cm cross-track error).
+The camera costs about 35-50 ms per step and 2.4 GB of GPU memory.
+Details: [`src/drone_lab/sar/README.md`](src/drone_lab/sar/README.md).
+
+![The dressed disaster site (seed 0) rendered in Isaac Sim](docs/images/sar_overview.jpg)
+
+![A drone-camera frame with the boxes taken from the instance segmentation](docs/images/sar_drone_frame.jpg)
+
+*Seed 0 (`scripts/sar_preview.py`): the helipad with its cones, people among the blocks, the forklift. Below: a
+drone-camera frame at survey altitude with the boxes and classes from the instance segmentation (a lying person,
+the forklift, two crates).*
+
+```bash
+python scripts/sar_preview.py            # GPU, ~1 min: overview, photo map with GT pins, drone frames, checks
+python scripts/sar_preview.py --no_sim   # CPU, seconds: ground truth + object map
+```
+
 ## Layout
 
 ```
@@ -78,9 +103,11 @@ src/drone_lab/
   video.py          headless MP4 capture from a Kit visualizer, shared by the GPU scripts    (numpy only)
   reference.py      reference trajectories for the tracking task                            (torch only)
   register.py       task-registration callback for the isaaclab CLI without pip install
+  sar/              search-and-rescue site: assets, seeded scenario + ground truth, camera, spawner, labels
   tasks/
     physics.py      physics preset (Isaac Sim PhysX)
     survey/         DroneLab-Survey-ARL-Robot-1-v0          (flies the built-in policy, not for training)
+    sar/            DroneLab-SAR-ARL-Robot-1-v0             (the survey over the dressed site, with the camera)
     track_trajectory/ DroneLab-TrackTrajectory-ARL-Robot-1-v0 (new RL task: follow moving references)
 scripts/
   survey_map.py     GPU: fly the survey with a trained policy, map, score, plot, video
@@ -88,8 +115,9 @@ scripts/
   preview_area.py   CPU: terrain height map + planned path, no flight
   synthetic_survey.py CPU: full pipeline with a kinematic stand-in for the policy
   eval_trajectory.py  GPU: evaluate a trajectory-tracking policy (reference vs flown, RMSE)
+  sar_preview.py    GPU: render the SAR site (overview, photo map, drone frames) and check its scale and labels
 tests/              CPU tests (run_cpu_tests.py or pytest)
-docs/images/        Isaac Sim survey figures (isaac_*) and CPU-pipeline previews (synthetic_*, area_preview)
+docs/images/        Isaac Sim figures (isaac_*, sar_*) and CPU-pipeline previews (synthetic_*, area_preview)
 ```
 
 ## GPU phase: train, export, survey, plot
