@@ -156,6 +156,7 @@ scripts/
   synthetic_survey.py CPU: full pipeline with a kinematic stand-in for the policy
   eval_trajectory.py  GPU: evaluate a trajectory-tracking policy (reference vs flown, RMSE)
   sar_preview.py    GPU: render the SAR site (overview, photo map, drone frames) and check its scale and labels
+  gen_yolo_dataset.py GPU: render the detector dataset (RGB + instance segmentation over many seeded sites)
   rescue_finale.py  rescue finale: plan on the drone's map (CPU), walk it with the Go2 (GPU), follow-cam video
 tests/              CPU tests (run_cpu_tests.py or pytest)
 docs/images/        Isaac Sim figures (isaac_*, sar_*) and CPU-pipeline previews (synthetic_*, area_preview)

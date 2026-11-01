@@ -37,6 +37,7 @@ custom data `drone_lab:sar_ground_truth`). Without installing the project, use `
 | `scenario.py` | seeded placement on a CPU copy of the terrain (height queries, flatness, spacing) and the ground-truth JSON |
 | `scene.py` | Isaac Lab spawner of the whole site (`SarSiteCfg`), ground materials on face subsets, landing pad, camera / light configs, persistent asset cache |
 | `labels.py` | instance segmentation -> object names, classes, 2D boxes (numpy only; for auto-labelling) |
+| `capture.py` | drone views, lights and ground looks of the detector dataset (`scripts/gen_yolo_dataset.py`; numpy only) |
 | `topdown.py` | top-down object map figure |
 
 ## Placement rules (all checked by `tests/test_sar_scenario.py`)
