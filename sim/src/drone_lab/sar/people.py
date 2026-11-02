@@ -15,10 +15,14 @@ the CPU (pxr + numpy, no simulator):
 5. write a static copy of the character: the same meshes, UVs and materials with the posed points and normals,
    no skeleton (:func:`write_posed_usd`).
 
+Every pose also exists as its mirror image (``<key>_mirrored``, :meth:`PoseSpec.mirrored`): the clip frame and the
+edits swap left and right before skinning, so the other arm waves or the other knee is up, while the character's
+textures stay the right way round. Poses that show the same thing share a :attr:`PoseSpec.tag`.
+
 Static meshes look the same in every renderer and sensor (RGB, depth, segmentation), cost nothing per frame and
-have exact CPU geometry. ``people_poses.json`` (next to this module) holds the box and the under-side height map of
-every character in every pose; :mod:`drone_lab.sar.scenario` places people with it, without the assets. Regenerate
-it after changing :data:`POSES`::
+have exact CPU geometry. ``people_poses.json`` (next to this module) holds the box, the under-side height map and
+the face direction of every character in every pose; :mod:`drone_lab.sar.scenario` places people with it, without
+the assets. Regenerate it after changing :data:`POSES`::
 
     python -m drone_lab.sar.people --write-data [--preview runs/people_poses]
 
@@ -35,7 +39,7 @@ import math
 import os
 import tempfile
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
 
@@ -51,7 +55,7 @@ BIPED_RIG = "Isaac/People/Characters/Biped_Setup.usd"
 """Rig the clips were authored for (its rest pose is a T-pose, like the characters')."""
 
 DATA_FILE = Path(__file__).with_name("people_poses.json")
-DATA_FORMAT = "drone_lab.sar.people_poses/v1"
+DATA_FORMAT = "drone_lab.sar.people_poses/v2"
 CELL = 0.05
 """Cell size of the under-side height maps [m]."""
 
@@ -95,6 +99,21 @@ for _s in ("L", "R"):
             JOINT_MAP[f"{_s}_{_src}Finger{_k + 1}"] = f"{_s}_{_dst}{_k}"
 
 
+MIRROR_SUFFIX = "_mirrored"
+"""Key suffix of the mirror image of a pose (left and right swapped)."""
+
+
+def _mirror_name(joint: str) -> str:
+    """The joint on the other side (``L_*`` <-> ``R_*``); joints on the middle line stay."""
+    side = {"L_": "R_", "R_": "L_"}.get(joint[:2])
+    return side + joint[2:] if side else joint
+
+
+def _mirror_axis(axis: Axis) -> Axis:
+    """Axis of the mirror image of a rotation (reflection x -> -x): ``R(a) -> R((a_x, -a_y, -a_z))``."""
+    return (axis[0], -axis[1], -axis[2])
+
+
 @dataclass(frozen=True)
 class Turn:
     """Rotate ``joint`` and everything below it by ``degrees`` about a body axis through the joint."""
@@ -102,6 +121,9 @@ class Turn:
     joint: str
     axis: Axis
     degrees: float
+
+    def mirrored(self) -> Turn:
+        return Turn(_mirror_name(self.joint), _mirror_axis(self.axis), self.degrees)
 
 
 @dataclass(frozen=True)
@@ -117,6 +139,16 @@ class Ground:
     measure: str
     reference: tuple[str, ...] = ()
     offset: float = 0.0
+
+    def mirrored(self) -> Ground:
+        return Ground(
+            _mirror_name(self.joint),
+            _mirror_axis(self.axis),
+            self.limits,
+            _mirror_name(self.measure),
+            tuple(_mirror_name(r) for r in self.reference),
+            self.offset,
+        )
 
 
 @dataclass(frozen=True)
@@ -135,13 +167,30 @@ class PoseSpec:
     key: str
     role: str
     """``victim`` or ``responder``."""
+    tag: str
+    """What the pose shows ("lying", "on side", "sitting", "waving", ...): variants of a pose share it."""
     clip: str
     frame: float
     layers: tuple[Layer, ...] = ()
     edits: tuple[Turn | Ground, ...] = ()
     lay: tuple[tuple[Axis, float], ...] = ()
     """Rotations (axis, degrees) applied in order to the posed body; empty for upright poses."""
+    mirror: bool = False
+    """Retarget the mirror image of the clip frame (left and right swapped); see :meth:`mirrored`."""
     description: str = ""
+
+    def mirrored(self) -> PoseSpec:
+        """The mirror image of this pose (key ``<key>_mirrored``): the clip frame is mirrored before it is
+        retargeted, and the edits and the lay rotations swap sides, so e.g. the other arm waves. The character
+        itself is not mirrored (its textures, badges and lettering stay the right way round)."""
+        return replace(
+            self,
+            key=f"{self.key}{MIRROR_SUFFIX}",
+            edits=tuple(e.mirrored() for e in self.edits),
+            lay=tuple((_mirror_axis(a), d) for a, d in self.lay),
+            mirror=not self.mirror,
+            description=f"{self.description} (mirrored)",
+        )
 
     def digest(self) -> str:
         """Short hash of the definition (``people_poses.json`` and the baked files are keyed by it)."""
@@ -149,92 +198,132 @@ class PoseSpec:
         return hashlib.sha1(blob.encode()).hexdigest()[:12]
 
 
-POSES: dict[str, PoseSpec] = {
-    p.key: p
-    for p in (
-        PoseSpec(
-            "lying_back",
-            "victim",
-            "stand_idle_loop",
-            0,
-            edits=(
-                Turn("Head", Z, 28.0),
-                Ground("NeckTwist01", X, (-35.0, 15.0), "Head"),
-                Ground("R_Thigh", X, (-10.0, 20.0), "R_Foot"),
-                Turn("L_Thigh", X, -18.0),
-                Ground("L_Calf", X, (0.0, 60.0), "L_Foot"),
-                Turn("L_Upperarm", Y, -10.0),
-                Turn("R_Upperarm", Y, 14.0),
-                Ground("L_Upperarm", X, (-10.0, 40.0), "L_Forearm"),
-                Ground("R_Upperarm", X, (-10.0, 40.0), "R_Forearm"),
-            ),
-            lay=((X, -90.0),),
-            description="on the back, arms by the sides, one knee bent, head turned",
+_BASE_POSES = (
+    PoseSpec(
+        "lying_back",
+        "victim",
+        "lying",
+        "stand_idle_loop",
+        0,
+        edits=(
+            Turn("Head", Z, 28.0),
+            Ground("NeckTwist01", X, (-35.0, 15.0), "Head"),
+            Ground("R_Thigh", X, (-10.0, 20.0), "R_Foot"),
+            Turn("L_Thigh", X, -18.0),
+            Ground("L_Calf", X, (0.0, 60.0), "L_Foot"),
+            Turn("L_Upperarm", Y, -10.0),
+            Turn("R_Upperarm", Y, 14.0),
+            Ground("L_Upperarm", X, (-10.0, 40.0), "L_Forearm"),
+            Ground("R_Upperarm", X, (-10.0, 40.0), "R_Forearm"),
         ),
-        PoseSpec(
-            "lying_side",
-            "victim",
-            "stand_idle_loop",
-            0,
-            edits=(
-                Turn("R_Upperarm", X, -85.0),
-                Turn("R_Forearm", X, -30.0),
-                Turn("L_Upperarm", X, -75.0),
-                Turn("L_Forearm", X, -40.0),
-                Ground("L_Upperarm", Z, (-80.0, 10.0), "L_Hand"),
-                Turn("L_Thigh", X, -70.0),
-                Turn("L_Calf", X, 85.0),
-                Ground("L_Thigh", Z, (-60.0, 10.0), "L_Calf"),
-                Turn("R_Thigh", X, -15.0),
-                Turn("R_Calf", X, 20.0),
-                Ground("R_Thigh", Y, (-10.0, 25.0), "R_Calf"),
-                Ground("NeckTwist01", Y, (-40.0, 5.0), "Head", offset=0.04),
-            ),
-            lay=((X, -90.0), (Y, -90.0)),
-            description="recovery position on the right side: top knee and hand on the ground",
+        lay=((X, -90.0),),
+        description="on the back, arms by the sides, one knee bent, head turned",
+    ),
+    PoseSpec(
+        "lying_side",
+        "victim",
+        "on side",
+        "stand_idle_loop",
+        0,
+        edits=(
+            Turn("R_Upperarm", X, -85.0),
+            Turn("R_Forearm", X, -30.0),
+            Turn("L_Upperarm", X, -75.0),
+            Turn("L_Forearm", X, -40.0),
+            Ground("L_Upperarm", Z, (-80.0, 10.0), "L_Hand"),
+            Turn("L_Thigh", X, -70.0),
+            Turn("L_Calf", X, 85.0),
+            Ground("L_Thigh", Z, (-60.0, 10.0), "L_Calf"),
+            Turn("R_Thigh", X, -15.0),
+            Turn("R_Calf", X, 20.0),
+            Ground("R_Thigh", Y, (-10.0, 25.0), "R_Calf"),
+            Ground("NeckTwist01", Y, (-40.0, 5.0), "Head", offset=0.04),
         ),
-        PoseSpec(
-            "sitting",
-            "victim",
-            "Sit",
-            30,
-            edits=(
-                Turn("R_Calf", X, -80.0),
-                Ground("R_Thigh", X, (-25.0, 20.0), "R_Calf", SEAT, 0.01),
-                Turn("L_Thigh", X, -35.0),
-                Ground("L_Calf", X, (-70.0, 40.0), "L_Foot", SEAT, 0.0),
-                Turn("L_Upperarm", X, -28.0),
-            ),
-            description="sitting on the ground, one leg out, the other knee up",
+        lay=((X, -90.0), (Y, -90.0)),
+        description="recovery position on the right side: top knee and hand on the ground, face forward",
+    ),
+    PoseSpec(
+        "sitting",
+        "victim",
+        "sitting",
+        "Sit",
+        30,
+        edits=(
+            Turn("R_Calf", X, -80.0),
+            Ground("R_Thigh", X, (-25.0, 20.0), "R_Calf", SEAT, 0.01),
+            Turn("L_Thigh", X, -35.0),
+            Ground("L_Calf", X, (-70.0, 40.0), "L_Foot", SEAT, 0.0),
+            Turn("L_Upperarm", X, -28.0),
         ),
-        PoseSpec(
-            "standing_waving",
-            "victim",
-            "stand_idle_wave_loop",
-            36,
-            description="waving one arm above the head",
+        description="sitting on the ground, one leg out, the other knee up",
+    ),
+    PoseSpec(
+        "standing_waving",
+        "victim",
+        "waving",
+        "stand_idle_wave_loop",
+        36,
+        description="waving one arm above the head",
+    ),
+    PoseSpec(
+        "standing_waving_wide",
+        "victim",
+        "waving",
+        "stand_idle_wave_loop",
+        54,
+        description="waving one arm out to the side",
+    ),
+    PoseSpec(
+        "standing_looking",
+        "responder",
+        "looking",
+        "stand_idle_loop",
+        0,
+        layers=(Layer("LookAround", 108, ("Neck1", "Neck2", "Head")),),
+        edits=(
+            Turn("L_Upperarm", Y, -7.0),
+            Turn("R_Upperarm", Y, 6.0),
+            Turn("L_Forearm", X, -22.0),
+            Turn("R_Forearm", X, -12.0),
+            Turn("R_Thigh", X, -9.0),
+            Turn("R_Calf", X, 18.0),
+            Ground("R_Foot", X, (-25.0, 10.0), "R_ToeBase", ("L_Foot", "L_ToeBase")),
         ),
-        PoseSpec(
-            "standing_idle",
-            "responder",
-            "stand_idle_loop",
-            60,
-            description="standing at ease",
-        ),
-        PoseSpec(
-            "standing_looking",
-            "responder",
-            "stand_idle_loop",
-            0,
-            layers=(Layer("LookAround", 108, ("Neck1", "Neck2", "Head")),),
-            description="standing, looking up and to the side",
-        ),
-    )
-}
-"""Natural poses by key. Victims lie, sit or wave; responders stand."""
+        description="standing at ease, one knee relaxed, looking up and to the side",
+    ),
+    PoseSpec(
+        "standing_pointing",
+        "responder",
+        "pointing",
+        "push_button",
+        36,
+        description="pointing ahead",
+    ),
+    PoseSpec(
+        "walking",
+        "responder",
+        "walking",
+        "stand_walk_loop",
+        8,
+        description="walking, mid-stride",
+    ),
+)
+
+POSES: dict[str, PoseSpec] = {p.key: p for base in _BASE_POSES for p in (base, base.mirrored())}
+"""Natural poses by key, each with its mirror image. Victims lie, sit or wave; responders stand, point or walk."""
 
 VICTIM_POSES = tuple(k for k, p in POSES.items() if p.role == "victim")
 RESPONDER_POSES = tuple(k for k, p in POSES.items() if p.role == "responder")
+VICTIM_TAGS = tuple(dict.fromkeys(POSES[k].tag for k in VICTIM_POSES))
+RESPONDER_TAGS = tuple(dict.fromkeys(POSES[k].tag for k in RESPONDER_POSES))
+
+
+def variants(tag: str) -> tuple[str, ...]:
+    """Keys of the poses that show ``tag`` (a pose and its mirror image, sometimes another clip frame)."""
+    keys = tuple(k for k, p in POSES.items() if p.tag == tag)
+    if not keys:
+        raise KeyError(f"no pose shows {tag!r}")
+    return keys
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -250,6 +339,8 @@ class PoseGeometry:
     bbox_max: tuple[float, float, float]
     origin: tuple[float, float]
     """Lower corner (x, y) of the height map [m]."""
+    face: tuple[float, float, float]
+    """Unit vector the face looks along (e.g. a camera that should see the face looks back along it)."""
     underside: np.ndarray = field(repr=False)
     """(nx, ny) lowest point of the body above each :data:`CELL` square [m] (0 where it touches the ground,
     NaN where there is no body)."""
@@ -280,7 +371,7 @@ def pose_geometry(asset_key: str, pose: str) -> PoseGeometry:
     mm = np.asarray(rec["underside_mm"], dtype=np.float64)
     under = np.where(mm < 0, np.nan, mm / 1000.0)
     under.setflags(write=False)
-    return PoseGeometry(tuple(rec["bbox_min"]), tuple(rec["bbox_max"]), tuple(rec["origin"]), under)
+    return PoseGeometry(tuple(rec["bbox_min"]), tuple(rec["bbox_max"]), tuple(rec["origin"]), tuple(rec["face"]), under)
 
 
 def data_digests() -> dict[str, str]:
@@ -412,6 +503,8 @@ class PosedCharacter:
     meshes: list[PosedMesh]
     bbox_min: np.ndarray
     bbox_max: np.ndarray
+    face: np.ndarray
+    """Unit vector the face looks along (the head's forward axis)."""
 
     def points(self) -> np.ndarray:
         """All mesh points (N, 3)."""
@@ -485,15 +578,22 @@ class CharacterRig:
             stack.extend(self.children[j])
         return out
 
-    def retarget(self, rig: SourceRig, source_world: np.ndarray) -> np.ndarray:
-        """World transforms (row-vector, character frame) of this character in the source pose."""
+    def retarget(self, rig: SourceRig, source_world: np.ndarray, mirror: bool = False) -> np.ndarray:
+        """World transforms (row-vector, character frame) of this character in the source pose (or in its mirror
+        image: each joint takes the reflected rotation of its partner on the other side)."""
+        flip = np.diag([-1.0, 1.0, 1.0])
         delta = {}
         for src, dst in JOINT_MAP.items():
+            src = _mirror_name(src) if mirror else src
             if src in rig.index and dst in self.index:
                 i = rig.index[src]
-                delta[self.index[dst]] = np.linalg.inv(rig.rest_world[i][:3, :3]) @ source_world[i][:3, :3]
+                d = np.linalg.inv(rig.rest_world[i][:3, :3]) @ source_world[i][:3, :3]
+                delta[self.index[dst]] = flip @ d @ flip if mirror else d
         hip, pelvis = self.index["Hip"], rig.index["Pelvis"]
         scale = self.ref_world[hip][3, 2] / rig.rest_world[pelvis][3, 2]
+        move = source_world[pelvis][3, :3] - rig.rest_world[pelvis][3, :3]
+        if mirror:
+            move = move @ flip
         world = np.zeros_like(self.ref_local)
         for j, p in enumerate(self.parents):
             local = self.ref_local[j]
@@ -501,7 +601,7 @@ class CharacterRig:
                 world[j] = local
                 continue
             if j == hip:  # the root motion, scaled to this character's leg length
-                pos = self.ref_world[hip][3, :3] + scale * (source_world[pelvis][3, :3] - rig.rest_world[pelvis][3, :3])
+                pos = self.ref_world[hip][3, :3] + scale * move
             else:
                 pos = local[3, :3] @ world[p][:3, :3] + world[p][3, :3]
             rot = self.ref_world[j][:3, :3] @ delta[j] if j in delta else local[:3, :3] @ world[p][:3, :3]
@@ -580,7 +680,7 @@ class CharacterRig:
         for axis, deg in spec.lay:
             lay = _rotation(axis, deg) @ lay
         lay_row = lay.T
-        world = self.retarget(rig, rig.world(spec.clip, spec.frame, spec.layers))
+        world = self.retarget(rig, rig.world(spec.clip, spec.frame, spec.layers), spec.mirror)
         for edit in spec.edits:
             if isinstance(edit, Turn):
                 self.turn(world, edit.joint, edit.axis, edit.degrees)
@@ -596,7 +696,9 @@ class CharacterRig:
             PosedMesh(m["path"], p @ lay_row + shift, n @ lay_row)
             for m, (p, n) in zip(self.meshes, skinned, strict=True)
         ]
-        return PosedCharacter(meshes, lo + shift, hi + shift)
+        head = self.index["Head"]  # the characters' reference pose faces -Y
+        face = np.array([0.0, -1.0, 0.0]) @ np.linalg.inv(self.ref_world[head][:3, :3]) @ world[head][:3, :3]
+        return PosedCharacter(meshes, lo + shift, hi + shift, face @ lay_row)
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -731,6 +833,7 @@ def geometry_record(posed: PosedCharacter, cell: float = CELL) -> dict:
         "bbox_min": [round(float(v), 4) for v in posed.bbox_min],
         "bbox_max": [round(float(v), 4) for v in posed.bbox_max],
         "origin": [round(origin[0], 4), round(origin[1], 4)],
+        "face": [round(float(v), 3) for v in posed.face],
         "underside_mm": mm.tolist(),
     }
 

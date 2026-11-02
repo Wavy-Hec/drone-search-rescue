@@ -48,6 +48,7 @@ def _scenario(seed: int, style: str = "natural"):
 def test_pose_data_matches_the_pose_definitions():
     from drone_lab.sar.assets import assets_of
     from drone_lab.sar.people import CELL, POSES, data_digests, pose_geometry
+    from drone_lab.sar.scenario import pose_family
 
     assert data_digests() == {k: p.digest() for k, p in POSES.items()}, "rerun: python -m drone_lab.sar.people"
     for spec in assets_of("person"):
@@ -62,9 +63,49 @@ def test_pose_data_matches_the_pose_definitions():
             nx, ny = under.shape
             assert g.origin[0] <= lo[0] + 1e-9 and g.origin[0] + nx * CELL >= hi[0] - 1e-9, (spec.key, pose)
             assert g.origin[1] <= lo[1] + 1e-9 and g.origin[1] + ny * CELL >= hi[1] - 1e-9, (spec.key, pose)
-            height, family = hi[2], POSES[pose].key.split("_")[0]
-            expect = {"lying": (0.25, 0.6), "sitting": (0.75, 1.1), "standing": (1.5, 2.05)}[family]
+            height = hi[2]
+            expect = {"lying": (0.25, 0.6), "sitting": (0.75, 1.1), "standing": (1.5, 2.05)}[pose_family(pose)]
             assert expect[0] < height < expect[1], (spec.key, pose, height)
+            assert abs(np.linalg.norm(g.face) - 1.0) < 0.01, (spec.key, pose, g.face)
+            if pose_family(pose) != "lying":  # upright people look ahead (-Y), not at the ground or the sky
+                assert g.face[1] < -0.6 and abs(g.face[2]) < 0.6, (spec.key, pose, g.face)
+    on_side = pose_geometry("female_business_02", "lying_side").face  # recovery position: face forward, not down
+    assert on_side[0] < -0.9 and on_side[2] > -0.3, on_side
+
+
+def test_mirrored_poses_are_mirror_images():
+    """Each pose and its mirror image: the same box, the face and the under-side reflected left to right."""
+    from drone_lab.sar.assets import assets_of
+    from drone_lab.sar.people import MIRROR_SUFFIX, POSES, RESPONDER_TAGS, VICTIM_TAGS, pose_geometry
+
+    bases = [k for k in POSES if not k.endswith(MIRROR_SUFFIX)]
+    assert sorted(POSES) == sorted(bases + [k + MIRROR_SUFFIX for k in bases])
+    assert set(VICTIM_TAGS) == {"lying", "on side", "sitting", "waving"}
+    assert set(RESPONDER_TAGS) == {"looking", "pointing", "walking"}
+    for key in bases:
+        a, b = POSES[key], POSES[key + MIRROR_SUFFIX]
+        assert (a.role, a.tag, a.clip, a.frame, a.mirror, b.mirror) == (b.role, b.tag, b.clip, b.frame, False, True)
+        for spec in assets_of("person"):
+            g, m = pose_geometry(spec.key, key), pose_geometry(spec.key, b.key)
+            assert np.allclose(g.size, m.size, atol=0.03), (spec.key, key, g.size, m.size)
+            # the head finds its own rest on the ground on either side: within 15 deg of the reflected direction
+            cos = float(np.dot(g.face, np.multiply(m.face, (-1, 1, 1))))
+            assert cos > math.cos(math.radians(15.0)), (spec.key, key, g.face, m.face)
+            overlap = min(_mirrored_overlap(g, m), _mirrored_overlap(m, g))
+            assert overlap > 0.9, (spec.key, key, overlap)
+
+
+def _mirrored_overlap(g, m) -> float:
+    """Share of the body squares of ``g`` whose reflection (x -> -x) is a body square of ``m``."""
+    from drone_lab.sar.people import CELL
+
+    ix, iy = np.nonzero(~np.isnan(g.underside))
+    jx = np.floor((-(g.origin[0] + (ix + 0.5) * CELL) - m.origin[0]) / CELL).astype(int)
+    jy = np.floor((g.origin[1] + (iy + 0.5) * CELL - m.origin[1]) / CELL).astype(int)
+    inside = (jx >= 0) & (jx < m.underside.shape[0]) & (jy >= 0) & (jy < m.underside.shape[1])
+    hit = np.zeros(len(ix), dtype=bool)
+    hit[inside] = ~np.isnan(m.underside[jx[inside], jy[inside]])
+    return float(hit.mean())
 
 
 def test_tpose_sites_are_unchanged():
@@ -99,7 +140,7 @@ def test_natural_keeps_the_rest_of_the_site():
 
 def test_natural_poses_labels_and_roles():
     from drone_lab.sar.assets import CLASS_IDS
-    from drone_lab.sar.people import POSES, RESPONDER_POSES, VICTIM_POSES
+    from drone_lab.sar.people import MIRROR_SUFFIX, POSES, RESPONDER_POSES, VICTIM_POSES
     from drone_lab.sar.scenario import RESPONDER_ASSETS, RESPONDER_GROUP, pose_family
 
     seen = set()
@@ -120,10 +161,13 @@ def test_natural_poses_labels_and_roles():
             seen.add(o.pose)
         names = [o.name for o in people]
         assert names == [f"person_{i:02d}" for i in range(len(people))], seed
+        tags = [POSES[o.pose].tag for o in people if o.group == RESPONDER_GROUP]
+        assert len(set(tags)) == len(tags), (seed, tags)  # every responder does something else
         for rec in sc.ground_truth()["objects"]:
             if rec["category"] == "person":
                 assert (rec["class"], rec["class_id"]) == ("person", CLASS_IDS["person"]) and rec["pose"] in POSES
-    assert seen == set(POSES), seen
+    assert {POSES[k].tag for k in seen} == {p.tag for p in POSES.values()}, seen
+    assert any(k.endswith(MIRROR_SUFFIX) for k in seen) and any(not k.endswith(MIRROR_SUFFIX) for k in seen), seen
 
 
 def test_natural_people_rest_on_the_terrain_and_not_inside_blocks():
@@ -199,15 +243,12 @@ def test_natural_spacing_area_and_determinism():
 def test_seed0_natural_people():
     """Seed 0 is the demo site: its victims keep their names and stay where the T-pose ones were (person_08 still
     lies in the crater), with every victim pose among them, plus responders by the forklift and the helipad."""
+    from drone_lab.sar.topdown import person_tag
+
     sc, tpose = _scenario(0), _scenario(0, "tpose")
     people = {o.name: o for o in sc.by_category("person")}
     assert people["person_08"].pose.startswith("lying") and people["person_08"].ground_z < -1.2
-    assert {o.pose for o in people.values() if o.group is None} == {
-        "lying_back",
-        "lying_side",
-        "sitting",
-        "standing_waving",
-    }
+    assert {person_tag(o) for o in people.values() if o.group is None} == {"lying", "on side", "sitting", "waving"}
     for o in tpose.by_category("person"):
         assert math.dist(people[o.name].center[:2], o.center[:2]) <= 1.0 + 1e-6
     responders = [o for o in people.values() if o.group]
@@ -238,7 +279,7 @@ def test_baked_meshes_match_the_pose_data():
     with tempfile.TemporaryDirectory() as out:
         try:
             baker = PoseBaker(lambda url: retrieve_file_path(url, download_dir=cache), asset_root(), out)
-            for pose in ("sitting", "lying_side"):
+            for pose in ("sitting", "lying_side_mirrored", "walking"):
                 rec = geometry_record(baker.pose(spec.path, pose))
                 ref = pose_geometry(spec.key, pose)
                 assert np.allclose(rec["bbox_min"], ref.bbox_min, atol=1e-3) and np.allclose(

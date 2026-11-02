@@ -94,7 +94,8 @@ class SarSiteCfg(SpawnerCfg):
     near_block_fraction: float = 0.4
     people_style: str = "tpose"
     """``tpose``: the characters' rest T-pose; ``natural``: victims lying, sitting or waving and responders
-    standing (``env.scene.sar_site.spawn.people_style=natural``). The other objects are the same either way."""
+    looking around, pointing or walking (``env.scene.sar_site.spawn.people_style=natural``). The other objects are
+    the same either way."""
     num_responders: tuple[int, int] = (2, 3)
     """Responders by the vehicle and the landing pad (``natural`` only)."""
     num_crates: tuple[int, int] = (7, 10)

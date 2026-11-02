@@ -18,7 +18,8 @@ traffic cones at its corners.
 
 ``people_style="natural"`` keeps that layout and then re-poses every person (:mod:`drone_lab.sar.people`): the
 victims lie on their back or side, sit or wave, at their place or slid towards their step (a sitting victim leans
-its back towards it), and a few responders stand by the vehicle and the landing pad. A posed person rests on the
+its back towards it), and a few responders look around, point or walk by the vehicle and the landing pad; each
+person shows its pose in one of its variants (mirror image, clip frame). A posed person rests on the
 terrain through the under-side height map of its pose: nothing pokes into the body, and the parts that carry it
 (back, seat, feet) are at most a few centimetres above the ground. The rest of the site is the T-pose site's.
 
@@ -46,7 +47,7 @@ from .assets import (
     assets_of,
 )
 from .camera import SAR_CAMERA
-from .people import CELL, PEOPLE_STYLES, POSES, RESPONDER_POSES, pose_geometry
+from .people import CELL, PEOPLE_STYLES, POSES, RESPONDER_TAGS, pose_geometry, variants
 
 GROUND_TRUTH_FORMAT = "drone_lab.sar.ground_truth/v1"
 """Identifier written into the ground-truth JSON."""
@@ -73,7 +74,7 @@ class ScenarioCfg:
     """``tpose``: the characters' rest T-pose, standing or lying flat. ``natural``: the same places, re-posed as
     victims lying on their back or side, sitting or waving, plus responders (see the module docstring)."""
     num_responders: tuple[int, int] = (2, 3)
-    """Responders standing by the vehicle and the landing pad (``natural`` only)."""
+    """Responders by the vehicle and the landing pad (``natural`` only)."""
     num_vehicles: int = 1
     num_crates: tuple[int, int] = (7, 10)
     num_barrels: tuple[int, int] = (4, 6)
@@ -122,11 +123,12 @@ _NEAR_STEP = 0.6
 _NATURAL_ONLY = ("people_style", "num_responders")
 """Scenario settings that only exist for natural people (T-pose ground truth leaves them out, unchanged)."""
 _VICTIM_MIX = {
-    "lying": {"lying_back": 0.4, "lying_side": 0.35, "sitting": 0.25},
-    "standing": {"standing_waving": 0.65, "sitting": 0.35},
+    "lying": {"lying": 0.4, "on side": 0.35, "sitting": 0.25},
+    "standing": {"waving": 0.65, "sitting": 0.35},
 }
-"""Natural pose of a victim by the pose of its T-pose place (probabilities)."""
-_VICTIM_FALLBACK = {"lying": ("lying_back", "lying_side", "sitting"), "standing": ("standing_waving", "sitting")}
+"""Natural pose of a victim (a :attr:`drone_lab.sar.people.PoseSpec.tag`) by the pose of its T-pose place
+(probabilities); which variant of it (mirror image, clip frame) is drawn per victim."""
+_VICTIM_FALLBACK = {"lying": ("lying", "on side", "sitting"), "standing": ("waving", "sitting")}
 _SUPPORT_GAP = {"lying": 0.06, "sitting": 0.05, "standing": 0.05}
 """Largest drop of the ground under the parts that carry a posed person (back, seat, feet) [m]."""
 _SUPPORT = 0.02
@@ -179,10 +181,10 @@ def _quat_to_matrix(q: np.ndarray) -> np.ndarray:
 
 
 def pose_family(pose: str) -> str:
-    """``lying``, ``sitting`` or ``standing`` (``upright`` objects count as standing)."""
+    """``lying``, ``sitting`` or ``standing`` (``upright`` objects and walking people count as standing)."""
     if pose.startswith("lying"):
         return "lying"
-    return "sitting" if pose == "sitting" else "standing"
+    return "sitting" if pose.startswith("sitting") else "standing"
 
 
 def pose_quaternion(pose: str) -> np.ndarray:
@@ -226,7 +228,7 @@ class SceneObject:
     """Heading about world z [rad] (applied after the pose rotation)."""
     pose: str
     """"upright", "standing", "lying_face_up" or "lying_face_down"; natural people: a key of
-    :data:`drone_lab.sar.people.POSES` ("lying_back", "lying_side", "sitting", "standing_waving", ...)."""
+    :data:`drone_lab.sar.people.POSES` ("lying_back", "lying_side_mirrored", "sitting", "walking", ...)."""
     scale: float
     """Size multiplier; the asset's unit scale (0.01 for centimetre assets) comes on top."""
     unit_scale: float
@@ -799,20 +801,21 @@ class _Placer:
         k = int(high[0])  # rows are radii: the first hit is the nearest
         return np.array([math.cos(aa.ravel()[k]), math.sin(aa.ravel()[k])]), float(rr.ravel()[k])
 
-    def repose(self, index: int, rng: np.random.Generator) -> SceneObject:
+    def repose(self, index: int, rng: np.random.Generator, variant: int = 0) -> SceneObject:
         """Natural pose for the T-pose person ``objects[index]``.
 
         Tries the poses of the victim mix (the drawn one first) inside the old footprint circle, so every spacing
         rule still holds; near a step, slid towards it (a sitting victim turns its back to it). If none rests within
         the support tolerance there, it moves up to 1 m away (with the spacing checked again); failing that, it
-        takes the best fit.
+        takes the best fit. ``variant`` picks the variant of every pose (mirror image, clip frame).
         """
         old = self.objects[index]
         spec = ASSETS[old.asset]
         slot = "lying" if old.pose.startswith("lying") else "standing"
         mix = _VICTIM_MIX[slot]
         first = list(mix)[int(rng.choice(len(mix), p=np.array(list(mix.values())) / sum(mix.values())))]
-        order = [first] + [q for q in _VICTIM_FALLBACK[slot] if q != first]
+        tags = [first] + [q for q in _VICTIM_FALLBACK[slot] if q != first]
+        order = [variants(t)[variant % len(variants(t))] for t in tags]
         step = self.step_direction(old.center[0], old.center[1], old.ground_z) if old.near_step else None
         jitter = float(rng.uniform(-0.35, 0.35))
         best = None
@@ -855,7 +858,7 @@ class _Placer:
                         yield yaw, (r * math.cos(a), r * math.sin(a))
             return
         preferred = [old.yaw, old.yaw + math.pi]
-        if pose == "sitting" and step is not None:  # the sitting body's back is its local +Y
+        if pose_family(pose) == "sitting" and step is not None:  # the sitting body's back is its local +Y
             back = math.atan2(-step[0][0], step[0][1])
             preferred = [back + jitter, back - jitter, back]
         slides = [0.0]
@@ -871,10 +874,13 @@ class _Placer:
             for yaw in headings:
                 yield yaw, move
 
-    def place_responders(self, n: int, rng: np.random.Generator, tries: int = 600) -> list[SceneObject]:
+    def place_responders(
+        self, n: int, rng: np.random.Generator, tags: tuple[str, ...] = RESPONDER_TAGS, tries: int = 600
+    ) -> list[SceneObject]:
         """Up to ``n`` responders: the first by the vehicle, the others around the landing pad (outside its apron),
-        on the same level as what they stand by and facing it (the vehicle) or the survey area (the pad); standing
-        poses, uniformed characters (each responder a different one, if possible not a victim's)."""
+        on the same level as what they stand by and facing it (the vehicle) or the survey area (the pad). Responder
+        ``k`` shows ``tags[k]`` (looks around, points, walks) and each wears another uniform (if possible not a
+        victim's)."""
         vehicle = next((o for o in self.objects if o.category == "vehicle"), None)
         pad = next(o for o in self.objects if o.category == "landing_pad")
         victims = {o.asset for o in self.objects if o.category == "person"}
@@ -883,6 +889,7 @@ class _Placer:
         keep = self.cfg.apron_half * 1.2
         placed: list[SceneObject] = []
         for k in range(n):
+            options = variants(tags[k % len(tags)])
             taken = {o.asset for o in placed}
             keys = [c for c in RESPONDER_ASSETS if c not in victims | taken] or [
                 c for c in RESPONDER_ASSETS if c not in taken
@@ -892,7 +899,7 @@ class _Placer:
                 obj = None
                 for _ in range(tries):
                     spec = ASSETS[keys[int(rng.integers(len(keys)))]]
-                    pose = RESPONDER_POSES[int(rng.integers(len(RESPONDER_POSES)))]
+                    pose = options[int(rng.integers(len(options)))]
                     scale = float(rng.uniform(*spec.scale_range))
                     hx, hy = self.natural_half(spec, pose, scale)
                     r = math.hypot(hx, hy)
@@ -1109,14 +1116,17 @@ def generate_scenario(cfg: ScenarioCfg | None = None, site: TerrainSite | None =
         region = "area" if i < cfg.trees_inside_area else "border"
         p.place_random(trees, UNLABELED, region=region, gap=0.3)
 
-    # 6) natural people: the same places, re-posed, plus responders (own random stream: the layout above is kept)
+    # 6) natural people: the same places, re-posed, plus responders (own random streams: the layout above is kept,
+    #    and drawing the variants does not change the pose drawn for each victim)
     if cfg.people_style == "natural":
         rng_people = np.random.default_rng([int(cfg.seed), 0x5A12, 0x9E0])
+        rng_variants = np.random.default_rng([int(cfg.seed), 0x5A12, 0x9E1])
         for i, o in enumerate(list(p.objects)):
             if o.category == "person":
-                p.objects[i] = p.repose(i, rng_people)
+                p.objects[i] = p.repose(i, rng_people, int(rng_variants.integers(1 << 16)))
         lo, hi = cfg.num_responders
-        p.place_responders(int(rng_people.integers(int(lo), int(hi) + 1)), rng_people)
+        tags = tuple(RESPONDER_TAGS[int(k)] for k in rng_variants.permutation(len(RESPONDER_TAGS)))
+        p.place_responders(int(rng_people.integers(int(lo), int(hi) + 1)), rng_people, tags)
 
     zmin, zmax = site.terrain_z_range()
     return Scenario(

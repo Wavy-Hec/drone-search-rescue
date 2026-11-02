@@ -12,17 +12,15 @@ from pathlib import Path
 import numpy as np
 
 from .labels import CLASS_COLORS
+from .people import POSES
 from .scenario import RESPONDER_GROUP, Scenario, TerrainSite, pose_family
-
-_POSE_TAGS = {"lying_side": "on side", "standing_waving": "waving"}
-"""Map label of a pose when it is not simply its family (lying / sitting / standing)."""
 
 
 def person_tag(obj) -> str:
     """Short label of a person on the map: lying, on side, sitting, waving, standing or responder."""
     if obj.group == RESPONDER_GROUP:
         return "responder"
-    return _POSE_TAGS.get(obj.pose, pose_family(obj.pose))
+    return POSES[obj.pose].tag if obj.pose in POSES else pose_family(obj.pose)
 
 
 def terrain_raster(site: TerrainSite, resolution: float = 0.1):

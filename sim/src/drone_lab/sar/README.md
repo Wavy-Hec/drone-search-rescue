@@ -35,7 +35,7 @@ custom data `drone_lab:sar_ground_truth`). Without installing the project, use `
 | `assets.py` | verified asset URLs (Isaac Sim 6.2 bucket), measured sizes, unit fixes (trees and DigitalTwin assets are in cm), classes, ground materials |
 | `camera.py` | camera intrinsics and mount, and the pixel-budget math (below) |
 | `scenario.py` | seeded placement on a CPU copy of the terrain (height queries, flatness, spacing) and the ground-truth JSON |
-| `people.py` | natural poses: animation frames retargeted onto the characters and baked into static meshes; `people_poses.json` holds their boxes and under-side height maps |
+| `people.py` | natural poses: animation frames retargeted onto the characters and baked into static meshes, each also mirrored; `people_poses.json` holds their boxes, under-side height maps and face directions |
 | `scene.py` | Isaac Lab spawner of the whole site (`SarSiteCfg`), ground materials on face subsets, landing pad, camera / light configs, persistent asset cache |
 | `labels.py` | instance segmentation -> object names, classes, 2D boxes (numpy only; for auto-labelling) |
 | `capture.py` | drone views, lights and ground looks of the detector dataset (`scripts/gen_yolo_dataset.py`; numpy only) |
@@ -50,21 +50,39 @@ custom data `drone_lab:sar_ground_truth`). Without installing the project, use `
   option existed (`tests/test_sar_people.py`).
 * `natural`: the same layout, re-posed. Victims lie on their back or in the recovery position, sit on the ground or
   wave; a victim next to a step slides up to it (a sitting one with its back to the block), at most 1 m from its
-  T-pose place. Two or three responders in uniform stand by the forklift and around the helipad (`group`
-  `responders` in the ground truth). Every other object stays exactly where it was.
+  T-pose place. Two or three responders in uniform are by the forklift and around the helipad, each doing
+  something else: looking around, pointing ahead or walking (`group` `responders` in the ground truth). Every
+  other object stays exactly where it was.
+
+| Pose (`pose` in the ground truth) | Who | Clip frame and edits |
+|---|---|---|
+| `lying_back` | victim | idle; on the back, one knee bent, arms by the sides, head turned and resting on the ground |
+| `lying_side` | victim | idle; recovery position: top knee and hand on the ground, face forward |
+| `sitting` | victim | `Sit`; one leg out, the other knee up, a hand on the knee |
+| `standing_waving`, `standing_waving_wide` | victim | `stand_idle_wave_loop`: the hand above the head, or the arm out to the side |
+| `standing_looking` | responder | idle with the head of `LookAround`; arms loose, one knee relaxed |
+| `standing_pointing` | responder | `push_button`: pointing ahead |
+| `walking` | responder | `stand_walk_loop`: mid-stride |
+
+Every pose also comes as its mirror image, `<pose>_mirrored`: the other arm waves, the other knee is up, the victim
+lies on the other side. Each person draws its variant (from a random stream of its own, so the pose drawn for a
+victim does not depend on it), and three waving people in one site are not copies of each other.
 
 Switch it with `env.scene.sar_site.spawn.people_style=natural` (any SAR task or script) or
-`scripts/sar_preview.py --people_style natural`; `--closeups` adds a low oblique close-up of every pose.
+`scripts/sar_preview.py --people_style natural`; `--closeups` adds a low oblique close-up of one person per pose
+(`--closeup_people person_03 ...` picks them), taken from the side the face looks to.
 
 How the poses are made (`people.py`): the clips of `Isaac/People/Animations` drive the Biped rig of
 `Characters/Biped_Setup.usd`, not the characters' own (Reallusion) skeletons, and Isaac Lab's apps do not load
-`omni.anim.graph` that retargets them at runtime. So one clip frame (idle, wave, sit, look-around) is retargeted on
-the CPU (world-space joint rotations from the Biped's T-pose applied to the character's T-pose), adjusted with a few
-joint turns (bent knees, the recovery position) and ground searches that put a heel, a hand or a knee on the
-floor, skinned with the character's own weights and written as a static copy of the character: same meshes,
-UVs and materials, no skeleton. The copies are baked on first use into `<asset cache>/posed_people` (about 1 s
-each). `people_poses.json` holds every character's box and under-side height map in every pose, so placement needs
-no assets; regenerate it after changing the poses with `python -m drone_lab.sar.people --write-data`.
+`omni.anim.graph` that retargets them at runtime. So one clip frame is retargeted on the CPU (world-space joint
+rotations from the Biped's T-pose applied to the character's T-pose; for a mirror image, the reflected rotation of
+the joint on the other side), adjusted with a few joint turns (bent knees, loose arms, the recovery position) and
+ground searches that put a heel, a hand or a knee on the floor, skinned with the character's own weights and
+written as a static copy of the character: same meshes, UVs and materials, no skeleton, nothing mirrored on the
+character itself (badges and lettering stay readable). The copies are baked on first use into
+`<asset cache>/posed_people` (about 1 s each). `people_poses.json` holds every character's box, under-side height
+map and face direction in every pose, so placement needs no assets; regenerate it after changing the poses with
+`python -m drone_lab.sar.people --write-data`.
 
 Placement of a posed person: its under-side height map (5 cm squares) is laid over the terrain; it rests on the
 highest terrain point under it, so nothing pokes into the body, and it must rest on the parts that carry it (back,

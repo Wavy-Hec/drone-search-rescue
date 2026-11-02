@@ -9,7 +9,9 @@ Scene additions:
 * ``sar_site`` -- the whole dressed site as one entity (:class:`drone_lab.sar.scene.SarSiteCfg`): 6-10 people
   standing or lying (some next to blocks), a forklift, crates, barrels, pallets, traffic cones, a few trees, a
   landing pad at the start, all with ``class`` semantic labels (trees unlabelled), plus MDL ground materials.
-  ``env.scene.sar_site.spawn.seed=<n>`` gives another site.
+  ``env.scene.sar_site.spawn.seed=<n>`` gives another site. The people are in their rest T-pose by default;
+  ``env.scene.sar_site.spawn.people_style=natural`` poses the victims lying, sitting or waving and adds two or
+  three responders (also class ``person``).
 * ``sar_camera`` -- downward 640 x 480 RGB-D camera under the drone (f = 480 px, 67 x 53 deg; the pixel budget is
   derived in :mod:`drone_lab.sar.camera`) with ``rgb``, ``distance_to_image_plane`` and raw
   ``instance_segmentation`` (one id per labelled object; ``camera.data.info["instance_segmentation"]`` maps ids
