@@ -26,8 +26,10 @@ import shutil
 import subprocess
 import threading
 import time
+from collections.abc import Hashable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Protocol
 
 import numpy as np
 
@@ -50,12 +52,15 @@ def default_weights() -> Path:
 
 @dataclass
 class Detection:
+    """One detected object: class id and name, confidence and pixel box."""
+
     cls_id: int
     cls: str
     conf: float
-    box: tuple  # (x1, y1, x2, y2) [px]
+    box: tuple[float, float, float, float]  # (x1, y1, x2, y2) [px]
 
     def to_dict(self) -> dict:
+        """JSON record (``class``, ``class_id``, ``conf``, ``box``)."""
         return {
             "class": self.cls,
             "class_id": self.cls_id,
@@ -64,7 +69,7 @@ class Detection:
         }
 
 
-def _parse_class_map(class_map) -> dict:
+def _parse_class_map(class_map: str | dict[str, str | None] | None) -> dict:
     """``{"truck": "car", "bench": None}`` or ``"truck=car,bench="`` -> dict (``None`` = drop the class)."""
     if not class_map:
         return {}
@@ -122,8 +127,8 @@ class YoloDetector:
         conf: float = 0.25,
         iou: float = 0.45,
         imgsz: int = 640,
-        classes=None,
-        class_map=None,
+        classes: str | Sequence[str] | None = None,
+        class_map: str | dict[str, str | None] | None = None,
         half: bool = False,
         max_det: int = 100,
     ):
@@ -144,7 +149,7 @@ class YoloDetector:
         self.class_map = _parse_class_map(class_map)
         self.class_ids, self.ignored_classes = self._class_filter(classes)
 
-    def _class_filter(self, classes) -> tuple[list[int] | None, list[str]]:
+    def _class_filter(self, classes: str | Sequence[str] | None) -> tuple[list[int] | None, list[str]]:
         """Model class ids to keep: a wanted name matches a class by its model name or by its name after
         ``class_map`` (``--classes car --class-map truck=car`` keeps cars and trucks; ``--classes person
         --class-map person=human`` keeps persons, reported as "human"). Raises ``ValueError`` when nothing
@@ -173,16 +178,19 @@ class YoloDetector:
         return ids, missing
 
     def describe(self) -> str:
+        """Weights, device and thresholds, for the dashboard and the log."""
         s = f"YOLO {Path(self.weights).name} on {self.device}"
         s += f" (conf {self.conf:.2f}, iou {self.iou:.2f}, {self.imgsz}px)"
         if self.ignored_classes:
             s += f", unknown classes ignored: {','.join(self.ignored_classes)}"
         return s
 
-    def warmup(self, shape=(480, 640)) -> None:
+    def warmup(self, shape: tuple[int, int] = (480, 640)) -> None:
+        """One inference on a blank (H, W) frame, so the first real frame is not slow."""
         self.detect(np.zeros((shape[0], shape[1], 3), np.uint8))
 
     def detect(self, rgb: np.ndarray) -> list[Detection]:
+        """Detections in an RGB image (H, W, 3), class names mapped through ``class_map``."""
         bgr = np.ascontiguousarray(np.asarray(rgb)[..., ::-1])
         kw = {"half": True} if self.half else {}  # only when asked: newer Ultralytics warn about 'half'
         res = self.model.predict(
@@ -248,12 +256,14 @@ class ColorBlobDetector:
         self._kernel = np.ones((open_px, open_px), np.uint8) if open_px > 1 else None
 
     def describe(self) -> str:
+        """Name and classes, for the dashboard and the log."""
         return f"colour-blob stand-in ({', '.join(self.classes)})"
 
-    def warmup(self, shape=(480, 640)) -> None:
-        pass
+    def warmup(self, shape: tuple[int, int] = (480, 640)) -> None:
+        """Nothing to warm up."""
 
     def detect(self, rgb: np.ndarray) -> list[Detection]:
+        """One box per connected blob of each class colour in an RGB image (H, W, 3)."""
         cv2 = self._cv2
         img = np.ascontiguousarray(rgb)
         hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
@@ -283,17 +293,37 @@ class ColorBlobDetector:
 
 
 class NullDetector:
+    """Detects nothing (``--detector none``)."""
+
     name = "none"
     names: dict = {}
 
     def describe(self) -> str:
+        """Shown on the dashboard."""
         return "no detector"
 
-    def warmup(self, shape=(480, 640)) -> None:
-        pass
+    def warmup(self, shape: tuple[int, int] = (480, 640)) -> None:
+        """Nothing to warm up."""
 
-    def detect(self, rgb):
+    def detect(self, rgb: np.ndarray) -> list[Detection]:
+        """No detections."""
         return []
+
+
+class Detector(Protocol):
+    """What the GCS needs of a detector (:class:`YoloDetector`, :class:`ColorBlobDetector`, :class:`NullDetector`)."""
+
+    name: str
+    names: dict
+
+    def describe(self) -> str:
+        """One line for the dashboard and the log."""
+
+    def warmup(self, shape: tuple[int, int] = (480, 640)) -> None:
+        """Prepare for frames of ``shape`` (H, W)."""
+
+    def detect(self, rgb: np.ndarray) -> list[Detection]:
+        """Detections in an RGB image (H, W, 3) uint8."""
 
 
 def detections_from_boxes(boxes: list[dict]) -> list[Detection]:
@@ -305,7 +335,7 @@ def detections_from_boxes(boxes: list[dict]) -> list[Detection]:
     ]
 
 
-def make_detector(kind: str = "yolo", **kw):
+def make_detector(kind: str = "yolo", **kw: Any) -> Detector:
     """``"yolo"`` (kw: weights, device, conf, iou, imgsz, classes, class_map), ``"blob"`` or ``"none"``.
 
     (``--detector gt`` needs no model: the app takes the boxes the simulator sends with each frame.)"""
@@ -322,7 +352,7 @@ class DetectorWorker:
     """Runs ``detector.detect`` in a daemon thread. Per ``key`` (drone) only the newest submitted frame waits
     (older ones drop); keys are served in turn, so every drone's camera gets detection."""
 
-    def __init__(self, detector, name: str = "drone_gcs-detector"):
+    def __init__(self, detector: Detector, name: str = "drone_gcs-detector"):
         self.detector = detector
         self._pending: dict = {}  # key -> (rgb, context); insertion order = service order
         self._cond = threading.Condition()
@@ -340,9 +370,10 @@ class DetectorWorker:
 
     @property
     def busy(self) -> bool:
+        """A frame is being detected or waiting."""
         return self._busy or bool(self._pending)
 
-    def submit(self, rgb: np.ndarray, context=None, key=0) -> None:
+    def submit(self, rgb: np.ndarray, context: Any = None, key: Hashable = 0) -> None:
         """Queue a frame for ``key`` (e.g. the drone id), replacing that key's older pending frame."""
         with self._cond:
             if key in self._pending:
@@ -359,6 +390,7 @@ class DetectorWorker:
         return out
 
     def close(self, timeout: float = 2.0) -> None:
+        """Stop the thread (waits up to ``timeout`` seconds for the frame in progress)."""
         with self._cond:
             self._stop = True
             self._cond.notify()

@@ -38,12 +38,16 @@ Example (inside the survey script, after ``env.step``)::
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from .geometry import camera_quat_to_ros, quat_xyzw_to_wxyz
 from .protocol import is_proxy_array, to_numpy
+
+if TYPE_CHECKING:
+    from .link import Sender
 
 __all__ = ["IsaacLabStreamer", "row"]
 
@@ -64,7 +68,7 @@ class IsaacLabStreamer:
 
     def __init__(
         self,
-        sender,
+        sender: Sender,
         env_id: int = 0,
         drone_id: int | None = None,
         origin: Any = None,
@@ -91,7 +95,16 @@ class IsaacLabStreamer:
         a = a.reshape(-1, a.shape[-1]) if a.ndim > 1 else a.reshape(1, -1)
         return a - self.origin[: a.shape[1]]
 
-    def mission(self, area, resolution, planned_path=None, survey_altitude=None, *, world: bool = False, **kw) -> bool:
+    def mission(
+        self,
+        area: Any,
+        resolution: float,
+        planned_path: Any = None,
+        survey_altitude: float | None = None,
+        *,
+        world: bool = False,
+        **kw: Any,
+    ) -> bool:
         """Announce the survey. ``area`` ``(x_min, x_max, y_min, y_max)``, ``planned_path`` (N, 2|3) and
         ``survey_altitude`` are in the local frame, or in world coordinates with ``world=True``."""
         try:
@@ -117,7 +130,7 @@ class IsaacLabStreamer:
             return self.sender._fail("IsaacLabStreamer.mission", e)
         return self.sender.send_mission(area, resolution, planned_path, survey_altitude, drone_id=self.drone_id, **kw)
 
-    def telemetry(self, t: float, robot, wp_index: int | None = None, carrot: Any = None, **extra) -> bool:
+    def telemetry(self, t: float, robot: Any, wp_index: int | None = None, carrot: Any = None, **extra: Any) -> bool:
         """Root state of ``robot`` for env ``env_id``. ``carrot`` (the tracking target) is in world
         coordinates, like the robot state."""
         try:
@@ -133,7 +146,8 @@ class IsaacLabStreamer:
         except Exception as e:  # noqa: BLE001  (never raise into the sim loop)
             return self.sender._fail("IsaacLabStreamer.telemetry", e)
 
-    def scan(self, t: float, ray_caster, **extra) -> bool:
+    def scan(self, t: float, ray_caster: Any, **extra: Any) -> bool:
+        """Ray hits of ``ray_caster`` (a ``RayCaster``) for env ``env_id``, with the sensor position as origin."""
         try:
             d, i = ray_caster.data, self.env_id
             hits = np.asarray(row(d.ray_hits_w, i), dtype=np.float32).reshape(-1, 3) - self.origin.astype(np.float32)
@@ -142,7 +156,13 @@ class IsaacLabStreamer:
             return self.sender._fail("IsaacLabStreamer.scan", e)
 
     def camera(
-        self, t: float, camera, frame_id: int | None = None, with_depth: bool = True, force: bool = False, **extra
+        self,
+        t: float,
+        camera: Any,
+        frame_id: int | None = None,
+        with_depth: bool = True,
+        force: bool = False,
+        **extra: Any,
     ) -> bool:
         """Send env ``env_id``'s current image if it is a new capture. Returns ``False`` when nothing new was
         captured since the last call (``force=True`` sends anyway) or on error.
@@ -185,7 +205,7 @@ class IsaacLabStreamer:
         except Exception as e:  # noqa: BLE001
             return self.sender._fail("IsaacLabStreamer.camera", e)
 
-    def gt_objects(self, objects, *, world: bool = False, **kw) -> bool:
+    def gt_objects(self, objects: Iterable[dict | tuple], *, world: bool = False, **kw: Any) -> bool:
         """Ground truth for evaluation: ``[{"class", "pos": [x, y, z]}, ...]`` in the local frame, or in world
         coordinates with ``world=True`` (e.g. straight from ``scene[name].data.root_pos_w``)."""
         if world:
@@ -203,7 +223,7 @@ class IsaacLabStreamer:
                 return self.sender._fail("IsaacLabStreamer.gt_objects", e)
         return self.sender.send_gt_objects(objects, drone_id=self.drone_id, **kw)
 
-    def gt_terrain(self, heights, x_min: float, y_min: float, resolution: float, *, world: bool = False) -> bool:
+    def gt_terrain(self, heights: Any, x_min: float, y_min: float, resolution: float, *, world: bool = False) -> bool:
         """True terrain height (ny, nx) for the map-error metric (evaluation only); grid origin and heights in the
         local frame, or in world coordinates with ``world=True``."""
         if world:
@@ -215,5 +235,6 @@ class IsaacLabStreamer:
                 return self.sender._fail("IsaacLabStreamer.gt_terrain", e)
         return self.sender.send_gt_terrain(heights, x_min, y_min, resolution, drone_id=self.drone_id)
 
-    def end(self, reason: str = "complete", t: float | None = None, **kw) -> bool:
+    def end(self, reason: str = "complete", t: float | None = None, **kw: Any) -> bool:
+        """End of the mission (see :meth:`~drone_gcs.link.Sender.send_end`)."""
         return self.sender.send_end(reason, t, **kw)

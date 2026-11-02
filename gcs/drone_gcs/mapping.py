@@ -19,13 +19,15 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
+from numpy.typing import ArrayLike
 
 from .geometry import PinholeCamera
 
 
-def area_tuple(area) -> tuple[float, float, float, float]:
+def area_tuple(area: Any) -> tuple[float, float, float, float]:
     """``(x_min, x_max, y_min, y_max)`` from a dict, an object with those attributes or a 4-sequence."""
     if isinstance(area, dict):
         return tuple(float(area[k]) for k in ("x_min", "x_max", "y_min", "y_max"))  # type: ignore[return-value]
@@ -48,6 +50,7 @@ class GridSpec:
 
     @classmethod
     def from_bounds(cls, x_min: float, x_max: float, y_min: float, y_max: float, resolution: float) -> GridSpec:
+        """Smallest grid with cell size ``resolution`` that covers the bounds (anchored at the minimum corner)."""
         if resolution <= 0:
             raise ValueError("resolution must be > 0")
         nx = max(1, int(math.ceil((x_max - x_min) / resolution - 1e-9)))
@@ -56,25 +59,31 @@ class GridSpec:
 
     @classmethod
     def from_dict(cls, d: dict) -> GridSpec:
+        """Inverse of :meth:`to_dict`."""
         return cls(float(d["x_min"]), float(d["y_min"]), float(d["resolution"]), int(d["nx"]), int(d["ny"]))
 
     def to_dict(self) -> dict:
+        """JSON-ready fields (``maps/grid.json``)."""
         return {"x_min": self.x_min, "y_min": self.y_min, "resolution": self.resolution, "nx": self.nx, "ny": self.ny}
 
     @property
     def x_max(self) -> float:
+        """Upper x edge of the last column [m]."""
         return self.x_min + self.nx * self.resolution
 
     @property
     def y_max(self) -> float:
+        """Upper y edge of the last row [m]."""
         return self.y_min + self.ny * self.resolution
 
     @property
     def shape(self) -> tuple[int, int]:
+        """Array shape ``(ny, nx)``."""
         return (self.ny, self.nx)
 
     @property
     def size(self) -> int:
+        """Number of cells."""
         return self.nx * self.ny
 
     @property
@@ -87,23 +96,24 @@ class GridSpec:
         return GridSpec(self.x_min, self.y_min, self.resolution / k, self.nx * k, self.ny * k)
 
     def cell_centers(self) -> tuple[np.ndarray, np.ndarray]:
+        """Cell centre coordinates ``(xs (nx,), ys (ny,))``."""
         xs = self.x_min + (np.arange(self.nx) + 0.5) * self.resolution
         ys = self.y_min + (np.arange(self.ny) + 0.5) * self.resolution
         return xs, ys
 
-    def cell_index(self, x, y) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def cell_index(self, x: ArrayLike, y: ArrayLike) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Integer indices ``(ix, iy)`` of points and the mask of points inside the grid."""
         ix = np.floor((np.asarray(x, dtype=np.float64) - self.x_min) / self.resolution).astype(np.int64)
         iy = np.floor((np.asarray(y, dtype=np.float64) - self.y_min) / self.resolution).astype(np.int64)
         valid = (ix >= 0) & (ix < self.nx) & (iy >= 0) & (iy < self.ny)
         return ix, iy, valid
 
-    def flat_index(self, x, y) -> tuple[np.ndarray, np.ndarray]:
+    def flat_index(self, x: ArrayLike, y: ArrayLike) -> tuple[np.ndarray, np.ndarray]:
         """Row-major flat index ``iy * nx + ix`` (garbage where invalid) and the inside mask."""
         ix, iy, valid = self.cell_index(x, y)
         return iy * self.nx + ix, valid
 
-    def area_mask(self, area) -> np.ndarray:
+    def area_mask(self, area: Any) -> np.ndarray:
         """Boolean ``(ny, nx)`` mask of cells whose centre lies inside the area rectangle."""
         x0, x1, y0, y1 = area_tuple(area)
         xs, ys = self.cell_centers()
@@ -129,7 +139,7 @@ class ElevationMap:
         self.version = 0
         self.n_points = 0
 
-    def add_points(self, points, valid=None, t: float | None = None) -> int:
+    def add_points(self, points: ArrayLike, valid: ArrayLike | None = None, t: float | None = None) -> int:
         """Add ray hits (N, 3) [m, world]. Non-finite points, ``valid == False`` and out-of-grid points are
         ignored. Returns the number of points used."""
         P = np.asarray(points, dtype=np.float64).reshape(-1, 3)
@@ -164,18 +174,22 @@ class ElevationMap:
         return self.count > 0
 
     def mean(self) -> np.ndarray:
+        """Mean hit height per cell (NaN where unknown)."""
         with np.errstate(invalid="ignore", divide="ignore"):
             m = self.sum / self.count
         m[self.count == 0] = np.nan
         return m.astype(np.float32)
 
     def max(self) -> np.ndarray:
+        """Highest hit per cell (NaN where unknown)."""
         return np.where(self.count > 0, self.zmax, np.nan).astype(np.float32)
 
     def min(self) -> np.ndarray:
+        """Lowest hit per cell (NaN where unknown)."""
         return np.where(self.count > 0, self.zmin, np.nan).astype(np.float32)
 
     def std(self) -> np.ndarray:
+        """Standard deviation of the hit heights per cell (NaN where unknown)."""
         with np.errstate(invalid="ignore", divide="ignore"):
             m = self.sum / self.count
             v = np.maximum(self.sumsq / self.count - m * m, 0.0)
@@ -183,6 +197,7 @@ class ElevationMap:
         return np.sqrt(v).astype(np.float32)
 
     def layer(self, stat: str = "mean") -> np.ndarray:
+        """One statistic of :data:`STATS` as a float32 ``(ny, nx)`` array."""
         if stat == "count":
             return self.count.astype(np.float32)
         if stat not in self.STATS:
@@ -197,7 +212,7 @@ class ElevationMap:
         n = int(mask.sum())
         return float((k & mask).sum() / n) if n else 0.0
 
-    def heights_at(self, x, y, stat: str = "mean") -> np.ndarray:
+    def heights_at(self, x: ArrayLike, y: ArrayLike, stat: str = "mean") -> np.ndarray:
         """Per-point height of the containing cell (NaN where unknown or outside the grid)."""
         x = np.asarray(x, dtype=np.float64)
         ix, iy, ok = self.grid.cell_index(x, y)
@@ -238,8 +253,8 @@ class ElevationMap:
 
 # ---------------------------------------------------------------------------------------------------- rays
 def intersect_rays_with_map(
-    origin,
-    rays,
+    origin: ArrayLike,
+    rays: ArrayLike,
     elevation: ElevationMap | None = None,
     ground_z: float = 0.0,
     iterations: int = 8,
@@ -295,7 +310,7 @@ class Orthomosaic:
         self.n_frames = 0
         self.last_stride = 0
 
-    def add_samples(self, x, y, colors, quality) -> int:
+    def add_samples(self, x: ArrayLike, y: ArrayLike, colors: ArrayLike, quality: ArrayLike) -> int:
         """Add coloured ground samples: positions (N,), (N,) [m], RGB (N, 3) uint8, quality (N,) in (0, 1]."""
         idx, ok = self.grid.flat_index(x, y)
         if not np.any(ok):
@@ -328,6 +343,7 @@ class Orthomosaic:
         return int(idx.size)
 
     def coverage(self, mask: np.ndarray | None = None) -> float:
+        """Fraction of cells (inside ``mask`` if given) with a colour."""
         if mask is None:
             return float(self.filled.mean())
         n = int(mask.sum())
@@ -417,8 +433,11 @@ class Geolocator:
         self.max_range = float(max_range)
         self.min_range = max(0.0, float(min_range))  # nearer depth = the vehicle itself: use the map instead
 
-    def locate(self, box, cam: PinholeCamera, depth: np.ndarray | None = None) -> dict:
-        """Returns ``{"xyz": (3,), "ok": bool, "method": "depth"|"map"|"plane", "ref": ..., "pixel": (u, v)}``."""
+    def locate(self, box: ArrayLike, cam: PinholeCamera, depth: np.ndarray | None = None) -> dict:
+        """World position of a detection box (x1, y1, x2, y2) [px].
+
+        Returns ``{"xyz": (3,), "ok": bool, "method": "depth"|"map"|"plane", "ref": ..., "pixel": (u, v)}``.
+        """
         x1, y1, x2, y2 = (float(b) for b in box)
         ref = self.ref
         if ref == "auto":
@@ -473,9 +492,11 @@ class TrackedObject:
 
     @property
     def conf(self) -> float:
+        """Mean confidence of the detections."""
         return self.conf_sum / max(1, self.hits)
 
     def to_dict(self) -> dict:
+        """JSON record (``detections.json``; the matched ground truth is added by the report)."""
         return {
             "id": self.id,
             "class": self.cls,
@@ -508,6 +529,7 @@ class ObjectTracker:
         self.n_detections = 0
 
     def radius(self, cls: str) -> float:
+        """Merge radius of class ``cls`` [m]."""
         return float(self.class_radius.get(cls, self.merge_radius))
 
     def update(self, detections: list[dict]) -> list[TrackedObject]:
@@ -597,6 +619,7 @@ class ObjectTracker:
                     break
 
     def confirmed(self) -> list[TrackedObject]:
+        """Objects seen at least ``min_hits`` times."""
         return [o for o in self.objects if o.hits >= self.min_hits]
 
 
@@ -669,7 +692,7 @@ def evaluate_detections(predictions: list[dict], ground_truth: list[dict], match
     }
 
 
-def terrain_error(estimate, truth, mask=None, step: float = 0.1) -> dict:
+def terrain_error(estimate: ArrayLike, truth: ArrayLike, mask: ArrayLike | None = None, step: float = 0.1) -> dict:
     """Height error of a map against the true terrain on the same grid: cells known in both (inside ``mask``).
 
     ``smooth`` repeats the statistics away from steps: cells whose true height is within ``step`` of all eight
@@ -710,7 +733,7 @@ def terrain_error(estimate, truth, mask=None, step: float = 0.1) -> dict:
     }
 
 
-def path_length(points) -> float:
+def path_length(points: ArrayLike) -> float:
     """Length of a polyline (N, 2|3) [m]."""
     p = np.asarray(points, dtype=np.float64)
     if len(p) < 2:

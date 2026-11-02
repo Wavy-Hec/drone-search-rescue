@@ -10,9 +10,11 @@ from __future__ import annotations
 import math
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import Any
 
 import cv2
 import numpy as np
+from numpy.typing import ArrayLike
 
 from ..geometry import PinholeCamera
 from ..mapping import GridSpec, area_tuple
@@ -29,6 +31,8 @@ DEFAULT_COUNTS = {"car": 3, "tent": 2, "person": 3, "tarp": 2}
 
 @dataclass
 class FakeObject:
+    """One coloured stand-in object of the fake world."""
+
     id: int
     cls: str
     x: float
@@ -40,6 +44,7 @@ class FakeObject:
     shape: str
 
     def to_gt(self) -> dict:
+        """Ground-truth record in the ``GT_OBJECTS`` format."""
         return {
             "id": self.id,
             "class": self.cls,
@@ -62,7 +67,7 @@ class FakeWorld:
 
     def __init__(
         self,
-        area=(-20.0, 20.0, -20.0, 20.0),
+        area: Any = (-20.0, 20.0, -20.0, 20.0),
         margin: float = 16.0,
         resolution: float = 0.05,
         seed: int = 0,
@@ -271,7 +276,7 @@ class FakeWorld:
             np.float32
         )
 
-    def height_at(self, x, y) -> np.ndarray:
+    def height_at(self, x: ArrayLike, y: ArrayLike) -> np.ndarray:
         """Bilinear terrain height at world (x, y) (same shape as x)."""
         x = np.asarray(x, dtype=np.float64)
         y = np.asarray(y, dtype=np.float64)
@@ -299,10 +304,19 @@ class FakeWorld:
         return h.mean(axis=(1, 3)).astype(np.float32)
 
     def gt_objects(self) -> list[dict]:
+        """Every object in the ``GT_OBJECTS`` format."""
         return [o.to_gt() for o in self.objects]
 
     # ------------------------------------------------------------------ sensors
-    def scan_grid(self, origin, yaw: float, size=(5.0, 5.0), resolution: float = 0.25, noise: float = 0.0, rng=None):
+    def scan_grid(
+        self,
+        origin: ArrayLike,
+        yaw: float,
+        size: tuple[float, float] = (5.0, 5.0),
+        resolution: float = 0.25,
+        noise: float = 0.0,
+        rng: np.random.Generator | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Vertical rays on a yaw-aligned grid around ``origin`` (Isaac Lab ``GridPatternCfg``, ray_alignment
         "yaw"). Returns hits (N, 3) float32 and the valid mask (rays that start above the terrain)."""
         o = np.asarray(origin, dtype=np.float64)
@@ -414,5 +428,6 @@ class FakeWorld:
         rgb[~hit] = (150, 175, 205)  # sky (never seen by a nadir camera)
         return rgb, t_hit
 
-    def close(self):
+    def close(self) -> None:
+        """Stop the render thread pool."""
         self._pool.shutdown(wait=False)

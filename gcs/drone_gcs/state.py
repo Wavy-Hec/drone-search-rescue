@@ -7,6 +7,7 @@ import logging
 import math
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 
@@ -22,6 +23,8 @@ MISSION_SCOPED = frozenset({TELEMETRY, SCAN, CAMERA, END})
 
 @dataclass
 class GCSConfig:
+    """Mapping, geolocation and tracking settings of the ground station."""
+
     photo_mode: str = "nadir"  # orthomosaic: nadir | latest | blend
     photo_subdiv: int = 2  # photo cells per elevation cell (per axis)
     depth_elevation: bool = False  # also feed back-projected depth pixels into the elevation map
@@ -49,6 +52,8 @@ class GCSConfig:
 
 @dataclass
 class CameraFrame:
+    """One received camera frame: image, depth, camera model and, once detected, its detections."""
+
     drone_id: int
     t: float
     frame_id: int
@@ -64,6 +69,8 @@ class CameraFrame:
 
 @dataclass
 class DroneState:
+    """Latest telemetry, flown trail and camera frames of one drone."""
+
     drone_id: int
     trail: list = field(default_factory=list)  # (t, x, y, z)
     t: float | None = None
@@ -83,17 +90,21 @@ class DroneState:
 
     @property
     def heading_deg(self) -> float:
+        """Compass heading [deg] (0 = north, clockwise)."""
         return compass_heading_deg(self.yaw)
 
     @property
     def speed_h(self) -> float:
+        """Horizontal speed [m/s] (NaN before the first telemetry)."""
         return float(math.hypot(self.vel[0], self.vel[1])) if self.vel is not None else float("nan")
 
     @property
     def speed_v(self) -> float:
+        """Vertical speed [m/s], up positive (NaN before the first telemetry)."""
         return float(self.vel[2]) if self.vel is not None else float("nan")
 
     def trail_array(self) -> np.ndarray:
+        """The trail as an (N, 4) array of (t, x, y, z) (cached until it grows)."""
         if self._trail_n != len(self.trail):
             self._trail_np = np.asarray(self.trail, dtype=np.float64).reshape(-1, 4)
             self._trail_n = len(self.trail)
@@ -101,6 +112,7 @@ class DroneState:
 
     @property
     def cam_fps(self) -> float:
+        """Camera frame rate over the last 20 frames [1/s]."""
         if len(self.cam_times) < 2:
             return 0.0
         dt = self.cam_times[-1] - self.cam_times[0]
@@ -116,6 +128,7 @@ class TerrainTruth:
 
     @classmethod
     def from_message(cls, msg: Message) -> TerrainTruth:
+        """From a GT_TERRAIN message."""
         h = np.asarray(msg.arrays["heights"], dtype=np.float32)
         f = msg.fields
         grid = GridSpec(float(f["x_min"]), float(f["y_min"]), float(f["resolution"]), h.shape[1], h.shape[0])
@@ -172,26 +185,30 @@ class GCSState:
 
     # ------------------------------------------------------------------ helpers
     def event(self, text: str) -> None:
+        """Log ``text`` and add it to the event list (shown on the dashboard and in the report)."""
         self.events.append((time.time(), text))
         log.info(text)
 
     @property
     def has_data(self) -> bool:
+        """Any telemetry, scan or camera message has arrived."""
         return bool(self.counts[TELEMETRY] or self.counts[SCAN] or self.counts[CAMERA])
 
     @property
     def mission_time(self) -> float:
+        """Sim time since the first message of the mission [s]."""
         if self.t_first is None or self.t_now is None:
             return 0.0
         return max(0.0, self.t_now - self.t_first)
 
     def drone(self, drone_id: int) -> DroneState:
+        """State of drone ``drone_id`` (created on first use)."""
         d = self.drones.get(drone_id)
         if d is None:
             d = self.drones[drone_id] = DroneState(drone_id)
         return d
 
-    def _touch_time(self, t) -> None:
+    def _touch_time(self, t: float | None) -> None:
         if t is None:
             return
         t = float(t)
@@ -200,7 +217,10 @@ class GCSState:
         self.t_now = t if self.t_now is None else max(self.t_now, t)
 
     # ------------------------------------------------------------------ grid setup
-    def setup_grid(self, area, resolution: float, padding: float | None = None, photo_resolution: float | None = None):
+    def setup_grid(
+        self, area: Any, resolution: float, padding: float | None = None, photo_resolution: float | None = None
+    ) -> None:
+        """Create the maps for ``area`` (x_min, x_max, y_min, y_max) with cells of ``resolution`` [m]."""
         x0, x1, y0, y1 = area_tuple(area)
         if padding is None:  # room for the turns outside the survey area
             padding = max(4.0, 0.15 * max(x1 - x0, y1 - y0))
@@ -264,7 +284,7 @@ class GCSState:
         mid = msg.fields.get("mission_id")
         return mid is not None and str(mid) != str(self.mission.get("mission_id"))
 
-    def apply(self, msg: Message):
+    def apply(self, msg: Message) -> CameraFrame | None:
         """Apply one message. Returns a :class:`CameraFrame` for CAMERA messages (to feed the detector)."""
         if self.is_stale(msg):
             mid = str(msg.fields.get("mission_id"))
@@ -455,6 +475,7 @@ class GCSState:
 
     # ------------------------------------------------------------------ derived values
     def ground_level(self) -> float:
+        """Ground height estimate of the map so far (MISSION ``ground_z`` while the map is empty)."""
         if self.elevation is not None and self.elevation.n_points:
             return self.elevation.ground_estimate(self.ground_z)
         return self.ground_z
@@ -489,6 +510,7 @@ class GCSState:
         self.coverage_timeline.append((t, ce, cp, len(self.tracker.confirmed())))
 
     def flown_length(self) -> float:
+        """Distance flown by all drones [m]."""
         total = 0.0
         for d in self.drones.values():
             a = d.trail_array()
