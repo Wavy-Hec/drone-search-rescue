@@ -142,6 +142,11 @@ class TestDashboardAndReport(unittest.TestCase):
         self.assertGreater(waypoint_pixels(live), 20)
         self.assertEqual(waypoint_pixels(landed), 0)
 
+    def test_link_cell_shows_the_data_received_once_the_mission_has_ended(self):
+        link = {"connected": False, "msg_rate": 0.0, "byte_rate": 0.0, "bytes": 8.1e9, "dropped": 0}
+        self.assertEqual(Dashboard._link_cell(link, ended=False), ("LINK", "   0 Hz", "0.0 MB/s  drop 0"))
+        self.assertEqual(Dashboard._link_cell(link, ended=True), ("LINK", "8.1 GB", "received  drop 0"))
+
     def test_people_outside_the_survey_area_are_counted_apart(self):
         st = self.state
         saved = st.gt_objects

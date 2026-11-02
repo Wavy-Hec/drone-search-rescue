@@ -252,6 +252,7 @@ class GCSApp:
             "connected": self.receiver.connected,
             "msg_rate": rate,
             "byte_rate": brate,
+            "bytes": self.receiver.total_bytes,
             "address": self.receiver.address_str,
             "label": link_label(self.receiver.address_str),
             "dropped": int(sum(self.receiver.dropped.values())),

@@ -955,6 +955,14 @@ class Dashboard:
             return ("DETECTOR", "truth", "boxes from the sim")
         return ("DETECTOR", f"{det.get('ms', 0):4.0f} ms", f"{det.get('fps', 0):.1f} fps  {det.get('kind', '')}")
 
+    @staticmethod
+    def _link_cell(link: dict, ended: bool) -> tuple[str, str, str]:
+        """Message rate while the mission runs; after its END, the data received (the rate only decays to 0)."""
+        drop = f"drop {link.get('dropped', 0)}"
+        if ended:
+            return ("LINK", f"{link.get('bytes', 0) / 1e9:.1f} GB", f"received  {drop}")
+        return ("LINK", f"{link.get('msg_rate', 0):4.0f} Hz", f"{link.get('byte_rate', 0) / 1e6:.1f} MB/s  {drop}")
+
     def _hud(self, img, state: GCSState, ui: dict) -> None:
         t = self.text
         x, y, w, h = self.r_hud
@@ -995,11 +1003,7 @@ class Dashboard:
                 f"{sum(1 for o in confirmed if o.cls == 'person')}",
                 f"{len(confirmed)} objects  {state.tracker.n_detections} dets",
             ),
-            (
-                "LINK",
-                f"{link.get('msg_rate', 0):4.0f} Hz",
-                f"{link.get('byte_rate', 0) / 1e6:.1f} MB/s  drop {link.get('dropped', 0)}",
-            ),
+            self._link_cell(link, state.ended),
             self._detector_cell(det),
         ]
         cw = w / len(cells)

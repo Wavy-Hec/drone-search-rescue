@@ -173,7 +173,7 @@ HUD (bottom bar):
 | Waypoint | waypoint i/N, mission phase (take-off, survey, landing, ...) and distance flown |
 | Coverage | scan % and photo %, inside the survey area |
 | People found | confirmed people (red once there is one), all confirmed objects and raw detections |
-| Link | message rate, MB/s, inbound frames dropped |
+| Link | message rate, MB/s, inbound frames dropped; after the mission's END, the data received |
 | Detector | detector ms and fps |
 
 ## Connecting a simulator
@@ -398,7 +398,7 @@ DRONE_GCS_SKIP_E2E=1 ./run_tests.sh # without the end-to-end run
 | Detectors | The blob detector finds every object. The worker keeps the newest frame. Default weights: `$DRONE_GCS_WEIGHTS`, else the fine-tuned model if present, else COCO. YOLO wrapper: 2 CPU inferences on Ultralytics' `bus.jpg`; class filters validated (typos raise) and matched after `--class-map` |
 | Dataset tools | `seg_to_yolo` on synthetic segmentation gives exact labels, keeps cut-off boxes, paints over tiny ones. Split capture folders stay the splits, and the full box of a cut-off object decides whether it stays. Block split gives train data and ~15 % val from 8 to 2000 frames. `train_detector --dry-run`. `eval_detector` counts found, missed and false alarms from the station detector's boxes, and the people it finds in each frame |
 | Sender import | The sender imports without cv2, torch or PIL. **A sender process in env_isaaclab** sends to a receiver in vision, and arrays arrive bit-exact |
-| Dashboard and report | All three layers render. Labels take the first spot inside the image that hides nothing (else the one that hides least); map labels keep clear of each other and of a landed drone. Once the drone has landed, the camera panel shows the LANDED card and the map drops the waypoint marker. All report files are written, `report.md` included; the scorecard counts people (in the survey area, the ones outside it apart) and false alarms against the ground truth, and the map height error against the true terrain is under 5 cm on smooth ground |
+| Dashboard and report | All three layers render. Labels take the first spot inside the image that hides nothing (else the one that hides least); map labels keep clear of each other and of a landed drone. Once the drone has landed, the camera panel shows the LANDED card and the map drops the waypoint marker; after the END the link cell shows the data received instead of a rate falling to 0. All report files are written, `report.md` included; the scorecard counts people (in the survey area, the ones outside it apart) and false alarms against the ground truth, and the map height error against the true terrain is under 5 cm on smooth ground |
 | End to end | Fake drone process → socket → headless GCS process. Coverage grows monotonically to over 98 %. Elevation error is under 1 cm RMSE on smooth cells (measured 2.6 mm) and under 5 mm median. All synthetic objects are found with no false positives and a mean horizontal error under 25 cm |
 
 ## Results
