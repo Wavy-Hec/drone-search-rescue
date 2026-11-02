@@ -1,8 +1,8 @@
 """Pure-pursuit path follower that turns a planned path into body-frame velocity commands (numpy only).
 
-The locomotion policy (Isaac Lab's Go2 rough-terrain velocity task) takes a command ``(vx, vy, yaw_rate)`` in its
-base frame and was trained with every component in [-1, 1] (``UniformVelocityCommandCfg.Ranges``), so every
-output here is clipped to those ranges (:class:`VelocityLimits`).
+The locomotion policies of the finale (Isaac Lab rough-terrain velocity tasks) take a command ``(vx, vy, yaw_rate)``
+in their base frame and were trained with every component in [-1, 1] (``UniformVelocityCommandCfg.Ranges``), so
+every output here is clipped to those ranges (:class:`VelocityLimits`).
 
 Per step, given the robot pose ``(x, y, yaw)``:
 

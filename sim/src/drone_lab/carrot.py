@@ -90,8 +90,8 @@ def advance_carrot(
     ``slow_lead`` and falls linearly to 0 at ``max_lead``. A step that would put the carrot more than
     ``max_lead`` away from the drone is shortened to ``max_lead - distance``: the carrot moves at most that far
     along the path, and a chord is never longer than its arc, so it stays within ``max_lead``. (Rejecting the
-    whole step instead made the carrot stop-and-go once ``speed * dt > max_lead - slow_lead``, e.g. above 3 m/s
-    with the defaults, and stall for good at ``speed * dt >= max_lead``.)
+    whole step instead would make the carrot stop and go once ``speed * dt > max_lead - slow_lead``, e.g. above
+    3 m/s with the defaults, and stall for good at ``speed * dt >= max_lead``.)
 
     Args:
         s: (E,) current carrot arclength.

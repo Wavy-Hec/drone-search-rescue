@@ -82,13 +82,15 @@ def _follow_fast_carrot(c, speed: float, max_lead: float, steps: int = 300, dt: 
 
 
 def test_carrot_keeps_moving_at_high_commanded_speed():
-    """Regression (survey flights, 2026-11-01): once ``speed * dt > max_lead - slow_lead`` (3 m/s with the
-    defaults) the whole step overshot ``max_lead`` and was rejected, so the carrot went stop-and-go (waiting on
-    84 % of the steps at --speed 6 on the GPU) and stalled for good at ``speed * dt >= max_lead``. The step is now
-    shortened to the remaining lead: the carrot keeps moving and still never gets more than max_lead ahead."""
+    """A fast carrot keeps moving and still never gets more than ``max_lead`` ahead.
+
+    Once ``speed * dt > max_lead - slow_lead`` (3 m/s with the defaults) a whole step would overshoot ``max_lead``;
+    it is shortened to the remaining lead. Rejecting such steps instead makes the carrot stop and go (waiting on
+    84 % of the steps at --speed 6 on the GPU) and stall for good at ``speed * dt >= max_lead``.
+    """
     c = _carrot()
 
-    # before the fix: waited on 231 / 270 / 200 of the 270 counted steps, carrot at 26.4 / 1.0 / 15.8 m after 30 s
+    # rejecting whole steps: waits on 231 / 270 / 200 of the 270 counted steps, carrot at 26.4 / 1.0 / 15.8 m after 30 s
     for speed, max_lead in ((6.0, 1.0), (10.0, 1.0), (2.0, 0.5)):
         stalled, worst, s = _follow_fast_carrot(c, speed, max_lead)
         assert stalled == 0, (speed, max_lead, f"carrot waited on {stalled} steps")
