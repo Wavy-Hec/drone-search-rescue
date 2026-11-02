@@ -1,203 +1,161 @@
 # quadruped_lab
 
-Hector's custom 12-DOF quadruped velocity-tracking tasks, ported from Isaac Lab 2.3.2 (Isaac Sim 5.1) to
-**Isaac Lab 3.0 (Isaac Sim 6.2)** as an external Isaac Lab project (template: `isaaclab --new`, external, blank).
+Rough-terrain locomotion for a custom 12-DOF quadruped in **Isaac Lab 3.0 / Isaac Sim 6.2**, ported from Isaac Lab
+2.3. The height-scan policy trained in Isaac Lab 2.x walks again at its original level: on Isaac Sim PhysX, and
+through a generated Newton asset on Newton MJWarp.
 
-The port details and the evidence behind each decision are in [PORT_NOTES.md](PORT_NOTES.md); the GPU validation of
-2026-11-01 (metrics, verified commands, open issues) is its [section 14](PORT_NOTES.md#14-gpu-validation-2026-11-01).
+<p align="center">
+  <img src="docs/media/quadruped_followcam.jpg" width="720"
+       alt="The custom quadruped starting down a flight of stairs in Isaac Lab 3.0">
+</p>
+<p align="center"><em>The converted 2.x policy in Isaac Lab 3.0: rough terrain, flat ground, then down a flight of
+stairs (follow-cam on one of 32 robots).</em></p>
 
-[![The converted 2.x policy walking in Isaac Lab 3.0: follow-cam, rough terrain to stairs](docs/media/quadruped_followcam.jpg)](docs/media/quadruped_followcam.mp4)
+## Highlights
 
-*The converted 2.x height-scan policy in Isaac Lab 3.0 (Isaac Sim PhysX, follow-cam on one of 32 robots, 20 s
-episode: rough terrain, flat ground, then down a flight of stairs). Click the picture for the clip.*
+* **Three tasks** on the Isaac Lab 3.0 velocity base: rough terrain with a 187-ray height scan, flat ground, and an
+  experimental depth-camera task with a CNN actor.
+* **The 2.x policy, converted** from rsl-rl 3.x to the rsl-rl 5.5 checkpoint format with bit-identical actions,
+  values and TorchScript export.
+* **Walking parity, measured.** Two execution changes in Isaac Lab 3.0 cost the converted policy a quarter of its
+  reward. Isaac Sim PhysX runs with the 2.x settings by default here; the 3.0 defaults are one override away.
+* **Newton support.** A generated Newton-compatible asset and a joint-order remap let the same policy walk on Newton
+  MJWarp, which trains 3.9x faster than Isaac Sim PhysX on this robot.
+* **Tooling** for the port: a static 2.x/3.0 configuration parity check (214 settings), a checkpoint converter with
+  verification, a joint-order check, a play-mode evaluator and a depth-camera self-occlusion study.
 
-| Task ID | Policy input | rsl_rl | skrl | Status |
+## Results
+
+The converted 2.x checkpoint on the rough task, play mode, 768 episodes (seeds 42-44), Isaac Sim PhysX:
+
+| Execution settings | Falls | Tilt > 60° | Tracking error lin / yaw | Reward / episode |
 |---|---|---|---|---|
-| `Isaac-Velocity-Rough-Custom-Quad-v0` | 48 proprio + 187 height scan = 235 | MLP | yes | ported and GPU-validated; the converted 2.x checkpoint (`checkpoints_2x/height_scanner_model_rslrl5.pt`) walks at its 2.x level with the parity switches below |
-| `Isaac-Velocity-Flat-Custom-Quad-v0` | 48 proprio | MLP | yes | ported, trains (no 2.x checkpoint) |
-| `Isaac-Velocity-Rough-Depth-Custom-Quad-v0` | 48 proprio + 64x48 depth image (camera on the trunk's front face) | CNN | no | **experimental** 3.0 redesign, retrain from scratch; camera checked on the GPU |
+| Isaac Lab 3.0 defaults | 21.7 % | 5.9 % | 0.258 m/s / 0.157 rad/s | 1.117 |
+| **Isaac Lab 2.x (default here)** | **18.9 %** | **3.6 %** | **0.196 / 0.102** | **1.471** |
 
-The 2.x `-Play-v0` IDs are gone: `isaaclab play` applies the env config's `play_mode()` automatically
-(`--train_env_cfg` skips it).
+In Isaac Lab 2.3.2 the same checkpoint falls in 18.8 % of its first episodes, with tracking errors 0.187 / 0.103.
+On Newton MJWarp it walks zero-shot (reward 1.285 vs 1.491 on PhysX, seed 42), and training runs at 56k env-steps/s
+with 1.4 GB of GPU memory vs 14k and 4.0 GB on Isaac Sim PhysX (1024 envs, RTX 5080). The method, the Isaac Lab 3.0
+differences behind these numbers and the full validation are in [PORT_NOTES.md](PORT_NOTES.md).
 
-## Physics backend
+## Tasks
 
-All three tasks default to **Isaac Sim PhysX** (`physics=isaacsim_physx`), the backend the 2.x checkpoints were trained
-on. The Isaac Lab 3.0 velocity base would otherwise default to Newton MJWarp. Newton stays available with
-`physics=newton_mjwarp`. `physics=physx` (an auto preset that would pick the uninstalled OvPhysX for headless runs) is
-aliased to Isaac Sim PhysX in these configs; still prefer the explicit `physics=isaacsim_physx`.
+| Task ID | Policy input | Agents | Status |
+|---|---|---|---|
+| `Isaac-Velocity-Rough-Custom-Quad-v0` | 48 proprioceptive + 187 height-scan values | rsl-rl (MLP), skrl | converted 2.x policy, validated |
+| `Isaac-Velocity-Flat-Custom-Quad-v0` | 48 proprioceptive values | rsl-rl (MLP), skrl | trains; no 2.x checkpoint |
+| `Isaac-Velocity-Rough-Depth-Custom-Quad-v0` | 48 proprioceptive values + 64x48 depth image | rsl-rl (CNN) | experimental, train from scratch |
 
-### 2.x execution settings (default on Isaac Sim PhysX)
+`isaaclab play` applies each task's play mode itself, so there are no separate `-Play` task IDs.
 
-Two Isaac Lab 3.0 execution defaults change how the 2.x policy behaves on Isaac Sim PhysX, so the tasks use the 2.x
-values there (Newton keeps the 3.0 defaults):
+## Quick start
 
-```
-env.sim.use_newton_actuators=false env.sim.physics.enable_external_forces_every_iteration=false
-```
-
-* `use_newton_actuators=false`: 3.0's native actuator path feeds the DC-motor PD joint positions that are 1-3 physics
-  substeps old on Isaac Sim PhysX (an Isaac Lab 3.0 defect); the legacy path uses fresh ones, as 2.x did.
-* `enable_external_forces_every_iteration=false`: the 2.3.2 TGS setting (3.0 flipped the default).
-
-With both, the replay matches the same checkpoint run in Isaac Lab 2.3.2 (about 19 % of 20 s episodes end in a fall in
-both; tracking error 0.19 m/s); without them its velocity-tracking error is about a third higher. Passing the two
-tokens above is now redundant; `=true` for both restores the Isaac Lab 3.0 defaults. Numbers: PORT_NOTES section 14.2.
-
-### Newton (opt-in)
-
-`physics=newton_mjwarp` (or `newton_kamino`) also switches the robot through the `CustomQuadRobotCfg` preset
-(`rough_env_cfg.py`); the PhysX default is untouched (identical resolved config, `robot.usd`, native order):
-
-* **Asset**: `robot.usd` puts its collision APIs on the Xform above each collision mesh. Isaac Sim PhysX accepts that;
-  Newton's importer skips all 17 colliders, and the scene does not even build (the contact sensor fails with
-  `No local entities but world_count=...`). The Newton preset loads `robot_newton.usd`, a small text layer over
-  `robot.usd` that moves the APIs onto the meshes as convex hulls (17 shapes, at most 64 vertices each). It is generated
-  by `scripts/make_newton_asset.py` (`--check` compares it with `robot.usd`, `--newton` imports both with Newton);
-  don't edit it by hand.
-* **Ordering**: Newton lists joints and bodies per leg (FL hip, thigh, calf, FR ...), Isaac Sim PhysX breadth-first
-  (FL/FR/RL/RR hips, then thighs, then calves). The Newton preset pins `joint_ordering` / `body_ordering` to the PhysX
-  order, so observations and actions have the same layout on both backends: the converted 2.x checkpoint walks on
-  Newton zero-shot (and falls within a second without the remap), and a Newton-trained policy has the layout PhysX
-  expects. Newton's own order: `env.scene.robot.joint_ordering=null env.scene.robot.body_ordering=null`.
-* `env.scene.robot.spawn.usd_path=<path>` still overrides the preset's asset. A list override must be quoted, e.g.
-  `"env.scene.robot.joint_ordering=['FL_hip_joint', ...]"` (unquoted names are kept as one string).
-* Kit-less (Newton) runs print no `INFO` records even with `--info` (no log handler is installed), so
-  `scripts/check_joint_order.py` cannot read a Newton log; `robot.joint_names` / `robot.backend_joint_names` show the
-  public / Newton order.
-* **Speed** (rough task, 1024 envs, 30 PPO iterations, idle GPU, 2026-11-01): Newton 56k env-steps/s and 1.4 GB VRAM
-  vs Isaac Sim PhysX 14k and 4.0 GB (3.9x faster, 2.9x less memory). With other jobs on the GPU, Newton ran at
-  24-57k and PhysX at 10-14k. `newton_kamino` loads the same asset (zero-action stand check only).
-
-## Setup (conda env `env_isaaclab`)
-
-The generated `pyproject.toml` depends on `isaaclab-dev`, which exists only as the local source checkout
-(`../../IsaacLab`), so install with `--no-deps` into the env that already has Isaac Lab 3.0:
+Requirements: Isaac Lab 3.0 with Isaac Sim 6.2 (Python 3.12) and an NVIDIA RTX GPU. Validated on an RTX 5080 (16 GB).
+Run everything from this folder.
 
 ```bash
-source ~/anaconda3/etc/profile.d/conda.sh && conda activate env_isaaclab
-cd ~/isaac_ws/projects/quadruped_lab
-git lfs fsck                              # USD assets and checkpoints are Git LFS objects; checks the local copies
-python -m pip install --no-deps -e .      # registers the isaaclab.tasks entry point
-isaaclab list_envs                        # run from the project root: lists only this project's tasks
+git lfs pull                            # robot USD files and checkpoints are Git LFS objects
+python -m pip install --no-deps -e .    # registers the tasks with the isaaclab CLI (Isaac Lab is already installed)
+isaaclab list_envs                      # the three Custom-Quad tasks
 ```
 
-This repository has no remote yet, so its working tree already holds the binaries. In a fresh clone from an
-LFS-capable remote, run `git lfs install --local && git lfs pull` first.
-
-## Run
-
-Quick start, verified on the RTX 5080 on 2026-11-01 (PORT_NOTES section 14.9 has the full list). Run from the project
-root with `env_isaaclab` active. `train` and `play` are headless unless `--viz` is given; `zero_agent` and
-`random_agent` open a `newton_gl` window by default, so pass `--viz none` for headless smoke tests. `--headless` /
-`--enable_cameras` no longer exist in 3.0. Windows need `DISPLAY=:1 XAUTHORITY=/run/user/1000/gdm/Xauthority` when
-started from a shell without them.
+If the checkpoints are distributed as release assets instead, place them in `checkpoints_2x/`.
 
 ```bash
-# watch the converted 2.x policy walk (Kit window, real time; close the window or Ctrl+C to stop)
+# watch the converted policy walk (Kit window, real time; close the window or Ctrl+C to stop)
 isaaclab play --rl_library rsl_rl --task Isaac-Velocity-Rough-Custom-Quad-v0 --num_envs 32 \
-    --checkpoint "$PWD/checkpoints_2x/height_scanner_model_rslrl5.pt" --viz kit --real-time physics=isaacsim_physx \
-    env.sim.use_newton_actuators=false env.sim.physics.enable_external_forces_every_iteration=false
-#   the IsaacLab panel's Viewer Settings can follow one robot; play also exports exported/policy.{pt,onnx}
-#   next to the checkpoint (git-ignored)
+    --checkpoint "$PWD/checkpoints_2x/height_scanner_model_rslrl5.pt" --viz kit --real-time
 
-# record the demo clip instead (headless, stops after the clip: checkpoints_2x/videos/play/clip_<n>.mp4)
+# record the demo clip headless, follow-cam on one robot (checkpoints_2x/videos/play/clip_<n>.mp4)
 isaaclab play --rl_library rsl_rl --task Isaac-Velocity-Rough-Custom-Quad-v0 --num_envs 32 --seed 42 \
     --checkpoint "$PWD/checkpoints_2x/height_scanner_model_rslrl5.pt" --video --video_length 990 \
-    physics=isaacsim_physx env.sim.use_newton_actuators=false \
-    env.sim.physics.enable_external_forces_every_iteration=false \
     env.viewer.origin_type=asset_root env.viewer.asset_name=robot env.viewer.env_index=30 \
     'env.viewer.eye=(1.9,-1.9,1.0)' 'env.viewer.lookat=(0.0,0.0,-0.2)'
-#   without the five env.viewer.* tokens: the default fixed camera
 
-# measure it: episode length, falls (base_contact) vs time-outs, tracking error, per-term rewards (about 1 min)
+# measure it: falls vs time-outs, tracking error, rewards per term (about a minute)
 python scripts/eval_policy.py --task Isaac-Velocity-Rough-Custom-Quad-v0 --num_envs 128 --episodes 2 \
     --policy checkpoint --checkpoint "$PWD/checkpoints_2x/height_scanner_model_rslrl5.pt" --seed 42 \
-    --out logs/eval/best_s42.json physics=isaacsim_physx \
-    env.sim.use_newton_actuators=false env.sim.physics.enable_external_forces_every_iteration=false
-#   expect: base_contact 0.18, time_out 0.82, lin_vel_err 0.187 m/s, episode_reward_total 1.491 (deterministic here)
+    --out logs/eval/rough_s42.json
+#   expect: base_contact 0.180, lin_vel_err 0.187 m/s, episode_reward_total 1.491 (deterministic)
 
-# smoke test (zero actions: the robots sit down within 0.6 s, that is expected) + joint-order check
-mkdir -p logs
-isaaclab zero_agent --task Isaac-Velocity-Rough-Custom-Quad-v0 --num_envs 16 --max_steps 500 --viz none --info \
-    physics=isaacsim_physx 2>&1 | tee logs/zero_agent_rough.log
-python scripts/check_joint_order.py logs/zero_agent_rough.log    # "joint order OK": FL/FR/RL/RR hips, thighs, calves
+# fine-tune the 2.x policy (resumes with its optimizer state), or train from scratch on either backend
+isaaclab train --task Isaac-Velocity-Rough-Custom-Quad-v0 --num_envs 1024 --max_iterations 100 \
+    --checkpoint "$PWD/checkpoints_2x/height_scanner_model_rslrl5.pt"
+isaaclab train --task Isaac-Velocity-Rough-Custom-Quad-v0 --num_envs 1024 --max_iterations 1500
+isaaclab train --task Isaac-Velocity-Rough-Custom-Quad-v0 --num_envs 1024 --max_iterations 1500 physics=newton_mjwarp
 
-# fine-tune the 2.x policy (resumes with its optimizer state; logs in ./logs/rsl_rl/custom_quad_rough)
-isaaclab train --rl_library rsl_rl --task Isaac-Velocity-Rough-Custom-Quad-v0 --num_envs 1024 --max_iterations 20 \
-    --checkpoint "$PWD/checkpoints_2x/height_scanner_model_rslrl5.pt" physics=isaacsim_physx \
-    env.sim.use_newton_actuators=false env.sim.physics.enable_external_forces_every_iteration=false
-
-# train from scratch: Isaac Sim PhysX, or Newton MJWarp (3.9x faster here); add --max_iterations N
-isaaclab train --rl_library rsl_rl --task Isaac-Velocity-Rough-Custom-Quad-v0 --num_envs 1024 physics=isaacsim_physx \
-    env.sim.use_newton_actuators=false env.sim.physics.enable_external_forces_every_iteration=false
-isaaclab train --rl_library rsl_rl --task Isaac-Velocity-Rough-Custom-Quad-v0 --num_envs 1024 physics=newton_mjwarp
-
-# experimental depth task (Newton Warp depth renderer by default; renderer=isaacsim_rtx for RTX)
-isaaclab train --rl_library rsl_rl --task Isaac-Velocity-Rough-Depth-Custom-Quad-v0 --num_envs 1024 \
-    physics=isaacsim_physx agent.check_for_nan=false
+# experimental depth task (Newton Warp depth renderer; renderer=isaacsim_rtx for RTX)
+isaaclab train --task Isaac-Velocity-Rough-Depth-Custom-Quad-v0 --num_envs 1024 --max_iterations 1500 \
+    agent.check_for_nan=false
 ```
 
-The depth runner uses a fixed learning rate (7e-5, 8 mini-batches), as the Isaac Lab 3.0 camera tasks do. The depth
-camera follows the trunk through the `body_mounted_image_depth` observation term: on Isaac Sim PhysX with Newton Warp
-the 3.0 camera would otherwise render from its spawn pose for the whole run (the log prints
-`pose refresh from 'trunk' on (...)`). 1024 depth envs need about 5.5 GB of GPU memory (7.3 GB with RTX).
-`agent.check_for_nan=false` removes the per-step NaN scan of the image (about 30 % faster; the GPU runs were NaN-free).
+Logs and checkpoints of training runs go to `logs/rsl_rl/<experiment>/<run>/`. `train` and `play` run headless
+unless `--viz` is given; `zero_agent` and `random_agent` open a window unless `--viz none`. Windowed runs need a
+display. Training with 1024 envs needs about 4 GB of GPU memory on Isaac Sim PhysX and 1.4 GB on Newton.
 
-Useful overrides: `--max_iterations N`, `--seed N`, `--video --video_length N`, `env.scene.robot.joint_ordering=...`,
-the two parity switches above. The GPU is shared: check `nvidia-smi` before launching, Isaac Sim needs a few GB free.
+### Physics backends and execution settings
 
-## Checkpoints
+* **Isaac Sim PhysX** is the default (the backend of the 2.x checkpoints). It runs with Isaac Lab's actuator path and
+  the 2.3.2 TGS setting, under which the converted policy walks as it did in 2.x. For the Isaac Lab 3.0 execution
+  defaults, add `env.sim.use_newton_actuators=true env.sim.physics.enable_external_forces_every_iteration=true`.
+* **Newton** (`physics=newton_mjwarp` or `physics=newton_kamino`) keeps the Isaac Lab 3.0 defaults and loads
+  `robot_newton.usd` with joints and bodies in the PhysX order, so a policy sees the same observation and action
+  layout on both backends.
+* `physics=physx` is aliased to Isaac Sim PhysX, so headless training and windowed play never switch backends.
 
-`checkpoints_2x/` holds copies of the 2.x checkpoints (originals in `~/quadruped_rough_terrain/logs` are untouched):
-
-* `height_scanner_model.pt`: rsl-rl 3.x format, iteration 13900 (235 obs, 12 actions).
-* `height_scanner_model_rslrl5.pt`: the same weights in rsl-rl 5.5 format, bit-identical outputs on CPU.
-* `depth_camera_model.pt`: kept for reference only; its 240-dim input matches no recorded camera config.
-
-Re-run the conversion and its CPU verification with:
-
-```bash
-PYTHONPATH=src python scripts/convert_rslrl_checkpoint.py checkpoints_2x/height_scanner_model.pt \
-    checkpoints_2x/height_scanner_model_rslrl5.pt --force --verify
-```
-
-## Project layout
+## Project structure
 
 ```
 src/quadruped_lab/
-  assets/custom_quad.py                      # ArticulationCfg (DC motors, package-relative USD path) + Newton variant
-  assets/data/robots/custom_quad/            # robot.usd (canonical, Jan 15), robot_feb23.usd (alternative), configuration/,
-                                             # robot_newton.usd + configuration/robot_physics_newton.usd (generated, Newton)
+  assets/custom_quad.py                    robot config: DC motors, PhysX and Newton variants
+  assets/data/robots/custom_quad/          robot.usd (+ configuration/), robot_newton.usd (generated), robot_feb23.usd
   tasks/locomotion/config/custom_quad/
-    __init__.py                              # gym.register for the three task IDs
-    rough_env_cfg.py, flat_env_cfg.py        # height-scan rough / flat tasks; CustomQuadRobotCfg (robot per backend)
-    rough_env_depth_cfg.py                   # EXPERIMENTAL depth-camera task
-    agents/rsl_rl_ppo_cfg.py                 # rsl-rl 5.5 runner cfgs (MLP, CNN for depth)
-    agents/skrl_{rough,flat}_ppo_cfg.yaml    # skrl >= 2.1 configs
-scripts/convert_rslrl_checkpoint.py          # rsl-rl 3.x -> 5.x checkpoint converter + CPU verification
-scripts/check_obs_parity.py                  # 2.x vs 3.0 parity: observations, action, timing, MDP terms, terrain (CPU)
-scripts/check_joint_order.py                 # joint order in a run log vs the order the 2.x policy expects
-scripts/eval_policy.py                       # play-mode metrics: falls vs time-outs, tracking error, rewards (GPU)
-scripts/make_newton_asset.py                 # writes / checks robot_newton.usd (collision APIs on the meshes)
-scripts/depth_camera_study.py                # depth-camera self-occlusion and ground coverage, ray-cast on the CPU
-scripts/list_envs.py                         # wrapper for `isaaclab list_envs`
-checkpoints_2x/                              # 2.x checkpoints and the converted one (Git LFS)
-docs/media/                                  # demo clip + poster frame for this README (Git LFS)
-tests/                                       # kit-less tests (registration, configs, conversion, Newton asset)
+    __init__.py                            task registration
+    rough_env_cfg.py, flat_env_cfg.py      height-scan rough task and flat task; robot and actuator presets per backend
+    rough_env_depth_cfg.py                 experimental depth-camera task
+    agents/                                rsl-rl 5.5 runners (MLP; CNN for depth) and skrl configs
+scripts/
+  eval_policy.py                           play-mode metrics for a policy (GPU)
+  convert_rslrl_checkpoint.py              rsl-rl 3.x -> 5.x checkpoint converter with CPU verification
+  check_obs_parity.py                      2.x vs 3.0 configuration parity, read statically from the 2.x sources
+  check_joint_order.py                     joint order of a run log vs the order the 2.x policy expects
+  make_newton_asset.py                     writes and checks robot_newton.usd
+  depth_camera_study.py                    depth-camera self-occlusion and ground coverage (CPU ray cast)
+checkpoints_2x/                            the 2.x checkpoints and the converted one
+docs/media/                                README media
+tests/                                     CPU tests (no Isaac Sim launch)
+PORT_NOTES.md                              engineering notes: port, measurements, findings, validation
+```
+
+## Checkpoints
+
+| File | Contents |
+|---|---|
+| `checkpoints_2x/height_scanner_model_rslrl5.pt` | the rough-terrain policy in rsl-rl 5.5 format (use this one) |
+| `checkpoints_2x/height_scanner_model.pt` | the original Isaac Lab 2.x checkpoint (rsl-rl 3.x, iteration 13,900) |
+| `checkpoints_2x/depth_camera_model.pt` | the 2.x depth checkpoint, for reference only (its input matches no recorded camera config) |
+
+Re-run the conversion and its verification on the CPU:
+
+```bash
+python scripts/convert_rslrl_checkpoint.py checkpoints_2x/height_scanner_model.pt \
+    checkpoints_2x/height_scanner_model_rslrl5.pt --force --verify
 ```
 
 ## Development
 
 ```bash
-python -m pip install pytest               # not installed by ./isaaclab.sh -i
-PYTHONPATH=src python -m pytest tests -q   # 22 kit-less tests: run on the CPU without Isaac Sim
-PYTHONPATH=src python scripts/check_obs_parity.py --markdown   # add --verbose to list all 214 compared 2.x settings
-PYTHONPATH=src python scripts/depth_camera_study.py --markdown
+python -m pip install pytest pre-commit
+python -m pytest              # CPU only; without Isaac Lab installed the pure-Python tests run and the rest skip
+pre-commit run --all-files    # ruff check + format, codespell, file hygiene
 ```
 
-VS Code: run the `setup_python_env` task (it calls `isaaclab --editor` inside `env_isaaclab`); the launch template has
-Train/Play entries for the three tasks.
+Other checks that run on the CPU: `python scripts/check_obs_parity.py` (needs the 2.x sources),
+`python scripts/make_newton_asset.py --check --newton` and `python scripts/depth_camera_study.py --markdown`.
 
-USD files, `*.pt`, `*.onnx`, `*.mp4` and `*.jpg` go through Git LFS (`.gitattributes`); `git lfs install --local` is
-already set up in this clone.
+## Acknowledgements
+
+Built on [NVIDIA Isaac Lab](https://github.com/isaac-sim/IsaacLab) and Isaac Sim, with
+[rsl-rl](https://github.com/leggedrobotics/rsl_rl), [skrl](https://github.com/Toni-SM/skrl) and
+[Newton](https://github.com/newton-physics/newton). The project layout comes from the Isaac Lab external-project
+template.

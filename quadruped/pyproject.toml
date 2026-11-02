@@ -10,7 +10,7 @@ build-backend = "uv_build"
 [project]
 name = "quadruped_lab"
 version = "0.1.0"
-description = "Isaac Lab 3.0 port of Hector's custom quadruped velocity-tracking tasks (rough, flat, depth)."
+description = "Rough-terrain, flat and depth-camera locomotion tasks for a custom 12-DOF quadruped in Isaac Lab 3.0."
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [
