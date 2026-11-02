@@ -92,17 +92,19 @@ python scripts/gen_yolo_dataset.py       # GPU, ~7 min: detector dataset, 2118 l
 
 **Natural people (opt-in).** By default the people are Isaac Sim's characters in their rest T-pose, which the
 detector dataset and the missions here were made with. `people_style=natural` poses them: victims lie on their
-back or in the recovery position, sit against the rubble or wave for help, and two or three responders stand by the
-forklift and the helipad. Each pose is a frame of Isaac Sim's own animation clips (idle, wave, sit, look-around),
-retargeted onto the character's skeleton on the CPU and baked into a static mesh
-([`people.py`](src/drone_lab/sar/people.py)), so it looks the same in RGB, depth and segmentation (class `person`)
-and costs nothing per frame. The rest of the site does not change; the victims keep their names and stay within
-1 m of their old places, resting on the terrain through the under-side height map of their pose.
+back or in the recovery position, sit against the rubble or wave for help, and two or three responders by the
+forklift and the helipad look around, point or walk. Each pose is a frame of Isaac Sim's own animation clips (idle,
+wave, sit, look-around, point, walk), retargeted onto the character's skeleton on the CPU and baked into a static
+mesh ([`people.py`](src/drone_lab/sar/people.py)), so it looks the same in RGB, depth and segmentation (class
+`person`) and costs nothing per frame. Every pose also comes mirrored (the other arm waves, the other knee is up),
+so two people in the same pose are not copies. The rest of the site does not change; the victims keep their names
+and stay within 1 m of their old places, resting on the terrain through the under-side height map of their pose.
 
-![Natural people on the demo site: sitting, lying on the back and on the side, waving](docs/images/sar_people_natural.jpg)
+![Natural people on the demo site: sitting, waving, in the recovery position, on the back, pointing, walking](docs/images/sar_people_natural.jpg)
 
-*Close-ups from `sar_preview.py --people_style natural --closeups` (seeds 0 and 1): a worker sitting against a block,
-a woman waving next to a police responder, an officer on her back by the forklift, a woman in the recovery position.*
+*Close-ups from `sar_preview.py --people_style natural --closeups` (seeds 0 and 1). Top: a worker sitting against a
+block, a woman waving from a sand hill, an officer in the recovery position. Bottom: a worker on his back, and two
+responders, one pointing ahead (a victim lies behind him) and one walking.*
 
 ```bash
 python scripts/sar_preview.py --people_style natural --closeups   # GPU, ~2 min: + close-ups of every pose
