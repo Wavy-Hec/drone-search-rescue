@@ -1,0 +1,8 @@
+# Light dependencies of the CPU checks (scripts/check.sh), pinned to the versions CI was set up with.
+# Isaac Lab, PyTorch and Ultralytics are not installed: the tests that need them skip.
+numpy==2.5.4
+scipy==1.18.1
+matplotlib==3.11.2
+opencv-python-headless==5.0.0.93
+pytest==9.2.0
+ruff==0.17.3

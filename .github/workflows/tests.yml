@@ -1,0 +1,47 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cpu:
+    name: Lint and CPU tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      # The CPU tests read no Git LFS file (robot models, README images), so LFS stays off.
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: .github/requirements-ci.txt
+
+      - name: Install the CI dependencies
+        run: python -m pip install -r .github/requirements-ci.txt
+
+      - name: Lint (ruff)
+        run: scripts/check.sh lint
+
+      - name: Simulation tests (sim/)
+        if: ${{ !cancelled() }}
+        run: scripts/check.sh sim
+
+      - name: Ground station tests (gcs/)
+        if: ${{ !cancelled() }}
+        run: scripts/check.sh gcs
+
+      - name: Quadruped tests (quadruped/)
+        if: ${{ !cancelled() }}
+        run: scripts/check.sh quadruped
