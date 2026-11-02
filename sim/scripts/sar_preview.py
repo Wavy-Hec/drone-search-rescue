@@ -8,8 +8,8 @@ Writes to ``runs/<out>/`` (default ``runs/sar_preview_seed<seed>``):
 * ``photo_map.png`` / ``photo_map_pins.png``  -- nadir photo of the whole site from 75 m, and with GT pins on it
 * ``drone/NN_<target>_{rgb,depth,classes,boxes}.png`` + ``.npz`` + ``_labels.json`` -- drone-camera frames above
   chosen objects (RGB, distance-to-image-plane, instance-id segmentation, boxes from the segmentation)
-* ``closeups/NN_<pose>_<name>_{rgb,boxes}.png`` -- with ``--closeups``: one person per pose, seen from a low oblique
-  camera about 3 m away
+* ``closeups/NN_<pose>_<name>_{rgb,boxes,classes}.png`` -- with ``--closeups``: one person per pose, seen from a
+  low oblique camera about 3 m away, from the side the face looks to
 * ``checks.json``           -- stage vs scenario boxes (scale / placement), how the people's meshes rest on the
   terrain, labels on the prims and in the frames, segmentation boxes vs the projected meshes, stage terrain vs CPU
   terrain, pixel size of people in the drone frames
@@ -680,19 +680,45 @@ def mesh_box_check(boxes, fr: dict, shape, people_points: dict | None) -> list[d
 
 def closeup_view(obj, site: TerrainSite, objects) -> tuple[list[float], list[float]] | None:
     """Eye and target of a low oblique view of a person (about 3 m away, 0.9 m above the target point) with a
-    clear line of sight over the terrain and past the other objects' boxes; None if every direction is blocked."""
+    clear line of sight over the terrain and past the other objects' boxes; None if every direction is blocked.
+
+    Natural people are seen from where their face looks (upright people from 30 deg aside), or as close to it as
+    the line of sight allows, preferring views with the site rather than its edge behind the person. A lying person
+    is seen along the body from the feet only if nothing else is free, and then from 0.6 m higher, so the head
+    shows above the chest.
+    """
+    from drone_lab.sar.people import POSES, pose_geometry
     from drone_lab.sar.scenario import pose_family
 
-    family = "lying" if obj.pose.startswith("lying") else pose_family(obj.pose)
+    family = pose_family(obj.pose)
     height = obj.aabb_max[2] - obj.aabb_min[2]
     target = np.array([obj.center[0], obj.center[1], obj.ground_z + (0.5 if family == "lying" else 0.55) * height])
     dist = {"lying": 2.8, "sitting": 2.8, "standing": 3.8}[family]
-    facing = obj.yaw - 0.5 * math.pi  # standing / sitting people face their local -Y
+    feet = obj.yaw - 0.5 * math.pi  # standing people face their local -Y; lying people have their feet there
+    facing, offsets = feet, [0.6, -0.6, 0.0, 1.2, -1.2, math.pi + 0.6, math.pi - 0.6, 1.8, -1.8, math.pi]
     if family == "lying":
-        facing = obj.yaw  # look at the body from its side
-    for da in (0.6, -0.6, 0.0, 1.2, -1.2, math.pi + 0.6, math.pi - 0.6, 1.8, -1.8, math.pi):
-        a = facing + da
-        eye = target + np.array([dist * math.cos(a), dist * math.sin(a), 0.9])
+        facing = obj.yaw  # T-pose: look at the body from its side
+    if obj.pose in POSES:
+        fx, fy, _ = pose_geometry(obj.asset, obj.pose).face
+        c, s = math.cos(obj.yaw), math.sin(obj.yaw)
+        if math.hypot(fx, fy) > 0.2:
+            facing = math.atan2(s * fx + c * fy, c * fx - s * fy)
+        best = 0.0 if family == "lying" else math.pi / 6.0
+        offsets = sorted(np.linspace(-math.pi, math.pi, 12, endpoint=False), key=lambda d: abs(abs(d) - best))
+
+    def end_on(a: float) -> bool:
+        return family == "lying" and abs(math.remainder(a - feet, 2.0 * math.pi)) < math.radians(35.0)
+
+    def edge_behind(a: float) -> bool:  # the view would end at the edge of the site, 12 m behind the person
+        return not site.in_bounds(target[0] - 12.0 * math.cos(a), target[1] - 12.0 * math.sin(a))
+
+    def rank(k: int) -> tuple:
+        a = facing + offsets[k]
+        return end_on(a), abs(offsets[k]) > 1.75, edge_behind(a), k
+
+    for k in sorted(range(len(offsets)), key=rank):
+        a = facing + offsets[k]
+        eye = target + np.array([dist * math.cos(a), dist * math.sin(a), 1.5 if end_on(a) else 0.9])
         line = target[None] + np.linspace(0.12, 1.0, 40)[:, None] * (eye - target)[None]
         if np.any(site.heights(line[:, :2]) > line[:, 2] - 0.15):
             continue
