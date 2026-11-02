@@ -224,14 +224,25 @@ def write_report(
     return summary
 
 
+def in_area(obj: dict, area: tuple[float, float, float, float] | None) -> bool:
+    """Whether a ground-truth object (``pos`` or ``x, y``) lies inside the survey area (x_min, x_max, y_min, y_max);
+    True when there is no area."""
+    if area is None:
+        return True
+    x, y = obj["pos"][:2] if "pos" in obj else (obj["x"], obj["y"])
+    return area[0] <= x <= area[1] and area[2] <= y <= area[3]
+
+
 def scorecard(state: GCSState, evaluation: dict | None, terrain: dict | None) -> dict:
-    """The mission's headline numbers: people found, false alarms, pin error, map error, coverage, flight time
-    and the closest approach to obstacles (reported by the drone in END)."""
+    """The mission's headline numbers: people found (in the survey area; the people outside it are counted
+    apart), false alarms, pin error, map error, coverage, flight time and the closest approach to obstacles
+    (reported by the drone in END)."""
     people = [o for o in state.tracker.confirmed() if o.cls == "person"]
     ce, cp = state.coverage()
     card: dict = {
         "people_found": len(people),
         "people_total": None,
+        "people_outside_area": None,
         "false_alarms": None,
         "pin_error_m": None,
         "people_pin_error_m": None,
@@ -244,8 +255,13 @@ def scorecard(state: GCSState, evaluation: dict | None, terrain: dict | None) ->
     }
     if evaluation is not None:
         person = evaluation["per_class"].get("person", {})
-        card["people_found"] = person.get("tp", 0)
-        card["people_total"] = person.get("ground_truth", 0)
+        found = {m["gt"] for m in evaluation["matches"]}
+        truth = [(j, in_area(g, state.area)) for j, g in enumerate(state.gt_objects) if g.get("class") == "person"]
+        card["people_found"] = sum(j in found for j, inside in truth if inside)
+        card["people_total"] = sum(inside for _, inside in truth)
+        outside = [j for j, inside in truth if not inside]
+        if outside:
+            card["people_outside_area"] = {"found": sum(j in found for j in outside), "total": len(outside)}
         card["false_alarms"] = evaluation["fp"]
         card["pin_error_m"] = evaluation["mean_err_xy_m"]
         card["people_pin_error_m"] = person.get("mean_err_xy")
@@ -281,6 +297,9 @@ def report_markdown(summary: dict, confirmed: list[dict], gt_objects: list[dict]
     found = f"**{card['people_found']}**"
     if card["people_total"] is not None:
         found = f"**{card['people_found']} / {card['people_total']}**"
+    outside = card.get("people_outside_area")
+    if outside:
+        found += f" in the survey area; outside it {outside['found']} / {outside['total']}"
     pin = _fmt_m(card["pin_error_m"])
     if card["people_pin_error_m"] is not None:
         pin += f" (people {_fmt_m(card['people_pin_error_m'])})"
@@ -320,16 +339,26 @@ def report_markdown(summary: dict, confirmed: list[dict], gt_objects: list[dict]
         lines.append("| | no confirmed finds | | | | | | | |")
     if gt_objects:
         matched = {r.get("gt_id") for r in confirmed}
-        missed = [g for g in gt_objects if g.get("id") not in matched]
+        a = m["area"]
+        area = None if a is None else (a["x_min"], a["x_max"], a["y_min"], a["y_max"])
+        inside = [g for g in gt_objects if in_area(g, area)]
+        outside = [g for g in gt_objects if not in_area(g, area)]
+        missed = [g for g in inside if g.get("id") not in matched]
         people = [g for g in missed if g.get("class") == "person"]
-        lines += ["", f"Not found: {len(missed)} of {len(gt_objects)} ground-truth objects"]
+        where = " in the survey area" if outside else ""
+        lines += ["", f"Not found: {len(missed)} of {len(inside)} ground-truth objects{where}"]
         if people:
             lines[-1] += ", people: " + ", ".join(str(g.get("id")) for g in people)
         lines[-1] += "."
+        if outside:
+            lost = [str(g.get("id")) for g in outside if g.get("id") not in matched]
+            lines[-1] += f" Outside it: {len(outside) - len(lost)} of {len(outside)} found"
+            lines[-1] += f" (not found: {', '.join(lost)})." if lost else "."
     lines += [
         "",
         "Pins are matched to the ground truth by class within 2 m, nearest first; a confirmed pin without a match "
-        "is a false alarm. The pin error is horizontal. The map height error compares the elevation map with the "
+        "is a false alarm. People found counts the people inside the survey area, the area the drone was sent to "
+        "search. The pin error is horizontal. The map height error compares the elevation map with the "
         "true terrain over the survey area; cells across a step are ambiguous, hence the second number. Coordinates "
         "are local ENU metres (x east, y north).",
         "",

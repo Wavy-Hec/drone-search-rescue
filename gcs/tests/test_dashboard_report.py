@@ -142,6 +142,24 @@ class TestDashboardAndReport(unittest.TestCase):
         self.assertGreater(waypoint_pixels(live), 20)
         self.assertEqual(waypoint_pixels(landed), 0)
 
+    def test_people_outside_the_survey_area_are_counted_apart(self):
+        st = self.state
+        saved = st.gt_objects
+        outsider = {"id": "walker", "class": "person", "pos": [st.area[1] + 3.0, st.area[2] - 3.0, 0.0]}
+        st.gt_objects = [*saved, outsider]
+        tmp = Path(short_tmpdir("dgcs_out"))
+        try:
+            card = write_report(st, tmp / "run")["scorecard"]
+            people = [g for g in saved if g["class"] == "person"]
+            self.assertEqual(card["people_total"], len(people))
+            self.assertEqual(card["people_outside_area"], {"found": 0, "total": 1})
+            report = (tmp / "run" / "report.md").read_text()
+            self.assertIn("in the survey area; outside it 0 / 1 |", report)
+            self.assertIn("Outside it: 0 of 1 found (not found: walker).", report)
+        finally:
+            st.gt_objects = saved
+            rmtree(tmp)
+
     def test_report_files(self):
         tmp = Path(short_tmpdir("dgcs_rep"))
         try:
