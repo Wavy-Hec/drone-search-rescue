@@ -12,12 +12,12 @@ The drone is either the search-and-rescue mission of the sibling project `drone_
 3.0: an RL-flown quadrotor over a disaster site with people, a forklift, crates, barrels, pallets and cones) or a
 CPU stand-in (`scripts/fake_drone.py`) for development and tests.
 
-![The ground station 80 s into the search-and-rescue mission in Isaac Sim](docs/images/dashboard_isaac.png)
+![The ground station 75 s into the search-and-rescue mission in Isaac Sim](docs/images/dashboard_isaac.png)
 
-*80 s into the Isaac Sim mission: the fine-tuned detector's boxes on the drone camera (a person, the forklift,
-crates; "edge" boxes touch the image border and are not mapped), the elevation map uncovered so far (grey =
-not scanned yet) with the flown trail, the planned path, the camera footprint and the pins, and the HUD with
-five people found.*
+*75 s into the Isaac Sim mission: the fine-tuned detector's boxes on the drone camera (three people, sitting,
+pointing and lying, and the forklift; "edge" boxes touch the image border and are not mapped), the elevation map
+uncovered so far (grey = not scanned yet) with the flown trail, the planned path, the camera footprint and the
+pins, and the HUD with five people found.*
 
 ## Live demo: the search-and-rescue mission in Isaac Sim
 
@@ -41,9 +41,9 @@ python scripts/compose_video.py --gcs runs/sar_live --sim ~/isaac_ws/projects/dr
 
 ![The demo video: the Isaac Sim chase view next to the ground station](docs/images/sar_mission_demo.jpg)
 
-*Frame of the demo video, 81 s into the mission: the Isaac Sim window (a follow camera over the drone, its
-mapping rays glowing on the ground) and the ground station, whose detector has just boxed a person and three
-crates and pinned five people so far.*
+*Frame of the demo video, 75 s into the mission: the Isaac Sim window (a follow camera over the drone, its
+mapping rays glowing on the ground) and the ground station, whose detector has just boxed three people and the
+forklift and pinned five people so far.*
 
 The drone takes off from its landing pad, flies a lawnmower over the 40 × 40 m site (8 lines, 5 m apart, 7.5 m
 up), comes back and lands on the pad: about 6 minutes of flight. The flight plan and its camera-overlap math are
@@ -407,17 +407,18 @@ DRONE_GCS_SKIP_E2E=1 ./run_tests.sh # without the end-to-end run
 
 The same policy flies the same plan every time: 428 m in 6 min 16 s from take-off to touchdown, 7 mm from the
 centre of the pad. Only the detector changes. The first column is the recorded live mission of the demo video
-(both windows open, the Isaac Sim view recorded; report in `runs/sar_mission_final`); the other two ran headless
+(both windows open, the Isaac Sim view recorded; report in `runs/sar_mission_hero`); the other two ran headless
 on both sides. The third maps the boxes from the simulator's instance segmentation instead of a detector
 (`sar_mission.py --gt_boxes` with `gcs.py --detector gt`): perfect detections, so what is left of the pin error is
-the geometry (pose, intrinsics, depth, geolocation, tracker).
+the geometry (pose, intrinsics, depth, geolocation, tracker). The site has 41 objects: 35 in the survey area, 10 of
+them people, and 6 around the landing pad, outside it (the pad, four cones and a responder walking by).
 
 | | fine-tuned YOLO26n (the recorded mission) | stock COCO YOLO26n | simulator boxes (geometry check) |
 |---|---|---|---|
-| People found | **9 / 9** | 9 / 9 | 9 / 9 |
-| False alarms | **2** (both on the standing person on the stairs: hands called cones) | 36 (kites, sports balls, fire hydrants, ...) | 0 |
-| Objects found (39 on the site) | **39** | 9 (it only knows the people) | 39 |
-| Mean pin error | **0.06 m** (people 0.13 m) | 0.19 m (people) | 0.06 m (median 0.03 m) |
+| People found (in the survey area) | **10 / 10** | 10 / 10 | 10 / 10 |
+| False alarms | **0** | 31 (kites, birds, sports balls, ...) | 0 |
+| Objects found (41 on the site) | **40** (all but the responder outside the survey area, never in view) | 10 (it only knows the people) | 40 |
+| Mean pin error | **0.04 m** (people 0.06 m) | 0.12 m (people) | 0.04 m (median 0.03 m) |
 | Map height error | 0.10 m RMSE; 4 mm where the ground has no step | same map | same map |
 | Coverage | 100 % scanned, 99.8 % photographed | same | same |
 | Closest approach to obstacles | 2.4 m (the crown of a tree) | same | same |
@@ -425,11 +426,12 @@ the geometry (pose, intrinsics, depth, geolocation, tracker).
 ![Photo map of the recorded mission with the fine-tuned detector's pins](docs/images/isaac_final_map_photo.png)
 
 *The report's photo map of the recorded mission: the orthomosaic built from the drone camera, the flown path from
-the landing pad (bottom left) and back, and the 41 pins.*
+the landing pad (bottom left) and back, and the 40 pins. The hollow square below the pad marks the one object
+missed, the responder walking outside the survey area.*
 
 * With perfect boxes, rigid objects land within millimetres to centimetres (landing pad 4 mm, pallets 2-8 mm,
-  crates 0-5 cm, barrels 0.2-8 cm, cones 0.5-11 cm): the pose sent with each frame matches its image, with no
-  frame of lag (at 1.25 m/s one frame would show as 12 cm along the flight line). People (1-29 cm) and the
+  crates 0-5 cm, barrels 0.1-8 cm, cones 0.5-11 cm): the pose sent with each frame matches its image, with no
+  frame of lag (at 1.25 m/s one frame would show as 12 cm along the flight line). People (2-11 cm) and the
   forklift (28 cm) are off because the centre of their box in the image is not the centre of their footprint.
   The fine-tuned detector's pins are as accurate as the perfect boxes.
 * The map height error compares the ray-hit elevation map with the true terrain (GT_TERRAIN) over the survey
@@ -437,18 +439,17 @@ the landing pad (bottom left) and back, and the 41 pins.*
   by less than 10 cm from cell to cell (31 % of the area) the map is within 4 mm RMSE.
 * The tracker keeps a separate pin per object: same class within 1.5 m for people, 0.8 m for crates, barrels and
   cones (they stand in piles), 1 m for pallets, 3 m for the forklift.
-* A headless run with the same fine-tuned detector (`runs/sar_final_seed0`) found the same 39 objects with 3
-  false alarms, all on the same standing person (its hands called cones, once a crate), and pins 0.06 m from the
-  truth (people 0.14 m).
+* A headless run with the same fine-tuned detector (`runs/sar_final_natural`) found the same 40 objects, again
+  without a false alarm, and pins 0.04 m from the truth (people 0.06 m).
 
 Loop rates (RTX 5080, Ryzen 7 9800X3D, nothing else on the GPU unless noted):
 
 | | |
 |---|---|
-| Simulation | 17-21 env steps/s headless (1.7-2.1x real time; one step = 0.1 s of flight: 10 physics steps and the RTX render of the drone camera, 46 ms mean); 14.5 steps/s (1.45x real time) with the Isaac Sim window, its chase view (1.8 ms per step) and the video recording (3.9 ms per frame); 6-10 steps/s while a YOLO training job shares the GPU |
+| Simulation | 17-22 env steps/s headless (1.7-2.2x real time; one step = 0.1 s of flight: 10 physics steps and the RTX render of the drone camera, 45 ms mean); 14.5 steps/s (1.45x real time) with the Isaac Sim window, its chase view (2.4 ms per step) and the video recording (3.9 ms per frame); 6-10 steps/s while a YOLO training job shares the GPU |
 | Link, simulator side | 0.9 ms per step (p95 1.1 ms) to copy and queue telemetry, scan and the camera frame; a background thread writes them. 0 messages dropped in every run, 8.1 GB per mission |
-| Ground station | dashboard 22-26 ms per frame, drawn at 12 fps; YOLO on the CPU 16-18 ms per frame (74 ms with the Isaac Sim window on the same machine; the worker then skips frames, 6 % in that run) |
-| GPU memory | Isaac Sim with the drone camera: 5.2 GiB after the start, 5.9 GiB peak over a full headless mission, 6.2 GiB with window and video. The ground station uses none |
+| Ground station | dashboard 18-26 ms per frame, drawn at 12 fps; YOLO on the CPU 16-24 ms per frame (21 ms in the recorded mission, next to the Isaac Sim window; 74 ms in an earlier windowed run, when the worker skipped 6 % of the frames) |
+| GPU memory | Isaac Sim with the drone camera: 5.2 GiB after the start, 6.0 GiB peak over a full headless mission, 6.3 GiB with window and video. The ground station uses none |
 
 ### Fake drone
 
