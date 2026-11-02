@@ -153,11 +153,14 @@ person and three crates in the drone camera's frame and pinned five people on th
 `--window_pos X Y` places it, e.g. on a second monitor) and the same view is recorded with `--video`. The camera
 (`src/drone_lab/sar/chase_view.py`) follows the drone from behind and above with a wide lens, looking at a point
 30 % of the way from the drone down to the ground, so the drone and its scan stay in the frame; it glides
-(first-order smoothing, 0.4 s) and never looks in from beyond the terrain edge. Two extras dress the view: the
-mapping scanner's 441 ray hits glow on the ground, and the site's grass runs on to the horizon instead of the
-terrain ending in a void. Only the window's camera sees them: they live in their own RTX scene partition, and the
-drone camera gets a partition of its own, so the detector and the photo map get exactly the frames they get
-without the extras (checked: not one scan-dot pixel in the photo map of a full mission).
+(first-order smoothing, 0.4 s) and never looks in from beyond the terrain edge. As the drone crosses the site from
+west to east the camera swings round it, from south-west to south-east of it, so at both ends of the lines it looks
+back over the site instead of out over the grass border: at the east turns the survey area fills 46 % of the frame
+instead of 18 %. Two extras dress the view: the mapping scanner's 441 ray hits glow on the ground, and the site's
+grass runs on to the horizon instead of the terrain ending in a void. Only the window's camera sees them: they live
+in their own RTX scene partition, and the drone camera gets a partition of its own, so the detector and the photo
+map get exactly the frames they get without the extras (checked: not one scan-dot pixel in the photo map of a full
+mission).
 
 **Flight plan** (`src/drone_lab/sar/mission.py`, which also has the math):
 

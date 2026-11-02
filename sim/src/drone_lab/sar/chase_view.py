@@ -6,7 +6,8 @@ a partition of its own. RTX renders a partition only for the cameras assigned to
 it the detector and the photo map, sees exactly the site it sees without the chase view.
 
 * :class:`FollowCamera` -- smooth third-person camera that frames the drone and the ground under it, its eye kept
-  above the site (no views from beyond the terrain edge).
+  above the site (no views from beyond the terrain edge) and turning with the drone's east-west position, so it
+  looks back over the site at the ends of the survey lines.
 * :func:`spawn_ground_skirt` -- flat ground from the site's edge to the horizon, with the site's own grass.
 * :class:`ScanRays` -- the mapping scanner's ray hits as glowing dots on the ground.
 
@@ -38,20 +39,37 @@ class FollowCamera:
     It looks at a point below the drone (``look_below`` of the way down to the ground), with a wide lens
     (``focal_length``), so the drone sits in the upper part of the frame and its scan on the ground in the lower
     part. The look-at point follows the drone with first-order smoothing (time constants ``tau_xy`` / ``tau_z``),
-    so the view glides through the turns and over steps in the terrain. ``bounds`` (x_min, x_max, y_min, y_max)
-    keeps the eye above the site: near the edges the camera moves in closer instead of looking in from outside.
+    so the view glides through the turns and over steps in the terrain. ``swing_x`` turns the eye around the
+    drone as it crosses the site from west to east, so at both ends of the lines the camera looks back over the
+    site instead of out over the border. ``bounds`` (x_min, x_max, y_min, y_max) keeps the eye above the site:
+    near the edges the camera moves in closer instead of looking in from outside.
     """
 
     offset: tuple[float, float, float] = (-4.5, -6.5, 6.0)
-    """Eye position relative to the look-at point [m]."""
+    """Eye position relative to the look-at point [m] (at the west end of ``swing_x``)."""
     look_below: float = 0.3
     """Height of the look-at point between the drone (0) and the ground under it (1)."""
     focal_length: float = 15.0
     """Lens of the viewer camera [mm] (horizontal aperture 20.955 mm: 70 deg field of view)."""
     bounds: tuple[float, float, float, float] | None = None
+    swing_x: tuple[float, float] | None = None
+    """West and east x [m] between which the eye turns from ``offset`` to its mirror image east of the look-at
+    point (same distance and height); None keeps ``offset`` everywhere."""
     tau_xy: float = 0.4
     tau_z: float = 0.5
     _target: np.ndarray | None = field(default=None, init=False, repr=False)
+
+    def eye_offset(self, x: float) -> np.ndarray:
+        """Eye position relative to the look-at point when that point is at ``x`` [m]."""
+        off = np.asarray(self.offset, dtype=np.float64)
+        if self.swing_x is None:
+            return off
+        x0, x1 = self.swing_x
+        s = min(max((x - x0) / max(x1 - x0, 1e-9), 0.0), 1.0)
+        s = s * s * (3.0 - 2.0 * s)  # smoothstep: the turn starts and ends without a jerk
+        a0, a1 = math.atan2(off[1], off[0]), math.atan2(off[1], -off[0])
+        a, r = a0 + s * (a1 - a0), math.hypot(off[0], off[1])
+        return np.array([r * math.cos(a), r * math.sin(a), off[2]])
 
     def update(self, drone_pos, ground_z: float | None, dt: float) -> tuple[np.ndarray, np.ndarray]:
         """Advance by ``dt`` seconds; returns ``(eye, target)`` in world coordinates.
@@ -70,7 +88,7 @@ class FollowCamera:
             self._target[:2] += a_xy * (goal[:2] - self._target[:2])
             self._target[2] += a_z * (goal[2] - self._target[2])
         target = self._target.copy()
-        eye = target + np.asarray(self.offset, dtype=np.float64)
+        eye = target + self.eye_offset(target[0])
         if self.bounds is not None:
             x0, x1, y0, y1 = self.bounds
             eye[0] = min(max(eye[0], x0), x1)

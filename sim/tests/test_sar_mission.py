@@ -118,6 +118,21 @@ def test_follow_camera_keeps_its_eye_above_the_site():
     assert target[0] == -23.0 and target[1] == -18.0
 
 
+def test_follow_camera_swings_round_to_look_back_over_the_site():
+    cam = FollowCamera(offset=(-4.5, -6.5, 6.0), swing_x=(-20.0, 20.0))
+    np.testing.assert_allclose(cam.eye_offset(-23.0), [-4.5, -6.5, 6.0])  # west end: looks north-east
+    np.testing.assert_allclose(cam.eye_offset(23.0), [4.5, -6.5, 6.0], atol=1e-9)  # east end: looks north-west
+    mid = cam.eye_offset(0.0)
+    np.testing.assert_allclose(mid, [0.0, -math.hypot(4.5, 6.5), 6.0], atol=1e-9)  # same distance, due south
+    xs = np.linspace(-25.0, 25.0, 501)
+    angles = np.unwrap([math.atan2(*cam.eye_offset(x)[1::-1]) for x in xs])
+    steps = np.diff(angles)
+    assert np.all(steps >= 0.0) and steps.max() < 0.005  # one smooth turn, no jump
+    eye, target = cam.update((20.0, 0.0, 7.5), ground_z=0.0, dt=0.1)
+    np.testing.assert_allclose(eye - target, [4.5, -6.5, 6.0], atol=1e-9)
+    assert FollowCamera().eye_offset(15.0).tolist() == [-4.5, -6.5, 6.0]  # no swing_x: the fixed offset
+
+
 def test_ground_skirt_is_a_frame_around_the_site():
     points, counts, indices = skirt_mesh((-26.0, 26.0, -26.0, 26.0), 100.0, -0.01)
     assert points.shape == (8, 3) and counts == [4] * 4 and len(indices) == 16

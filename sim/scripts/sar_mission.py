@@ -319,7 +319,10 @@ def setup_viewer(base, mission: Mission) -> Viewer | None:
     if viz is None:
         return None
     x0, x1, y0, y1 = mission.site.bounds
-    camera = FollowCamera(bounds=(x0 + 1.0, x1 - 1.0, y0 + 1.0, y1 - 1.0)) if args_cli.view == "chase" else None
+    camera = None
+    if args_cli.view == "chase":
+        area = mission.plan.area
+        camera = FollowCamera(bounds=(x0 + 1.0, x1 - 1.0, y0 + 1.0, y1 - 1.0), swing_x=(area[0], area[1]))
     stage = base.sim.stage
     if camera is not None:
         set_focal_length(stage, VIEWER_CAMERA, camera.focal_length)
