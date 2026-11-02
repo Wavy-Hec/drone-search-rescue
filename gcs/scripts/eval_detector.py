@@ -10,20 +10,24 @@ For every evaluated split of data.yaml (default: val and test):
   validator's confusion matrix does it (IoU above 0.45, one to one, highest confidence first): objects found,
   missed and false alarms per class, and that confusion matrix;
 * the person scores of both models on the same images (``classes=[0]`` keeps only the person predictions and
-  labels; COCO's class 0 is person too). The COCO model cannot know the other classes.
+  labels; COCO's class 0 is person too). The COCO model cannot know the other classes;
+* with ``--previous``, all of the above for an earlier fine-tuned model on the same frames, e.g. one trained
+  before the people of the site changed.
 
 The counts come from the station's detector rather than from the validator, which pads the 640 x 480 frames to
 640 x 512 and uses another NMS IoU; that changes a few boxes. A side-by-side figure of a few test frames with a
-person in full view shows both models' detections, also with the station's settings.
+person in full view shows both models' detections, also with the station's settings; with ``--previous``, a
+second one shows frames where the earlier model misses people that the fine-tuned one finds.
 
 Writes next to the weights (``--out-dir`` to change): ``<name>_eval.json``, ``<name>_confusion_matrix_<split>.png``,
-``<name>_pr_curve_<split>.png`` and ``<name>_vs_coco.jpg``. Ultralytics' own validation folders go to
-``runs/eval/`` (git-ignored).
+``<name>_pr_curve_<split>.png``, ``<name>_vs_coco.jpg`` and ``<name>_vs_previous.jpg``. Ultralytics' own validation
+folders go to ``runs/eval/`` (git-ignored).
 
 Example (conda env 'vision')::
 
-    python scripts/eval_detector.py --data ~/isaac_ws/datasets/drone_sar_yolo/yolo/data.yaml \\
-        --weights ~/isaac_ws/assets/models/drone_sar_yolo26n.pt
+    python scripts/eval_detector.py --data ~/isaac_ws/datasets/drone_sar_yolo_v2/yolo/data.yaml \\
+        --weights ~/isaac_ws/assets/models/drone_sar_yolo26n.pt \\
+        --previous ~/isaac_ws/assets/models/drone_sar_yolo26n_tpose_v1.pt
 """
 
 from __future__ import annotations
@@ -101,14 +105,20 @@ def scores(metrics, names: dict[int, str]) -> tuple[dict, dict]:
 
 
 def station_matrix(
-    detector: YoloDetector, root: Path, image_dir: str, names: dict[int, str], keep: list[int] | None = None
+    detector: YoloDetector,
+    root: Path,
+    image_dir: str,
+    names: dict[int, str],
+    keep: list[int] | None = None,
+    people: dict[Path, tuple[int, int]] | None = None,
 ) -> ConfusionMatrix:
     """Confusion matrix of the ground station's detector on the frames of one split.
 
     ``detector`` is a :class:`YoloDetector` (or anything with its ``detect(rgb)``); its own confidence threshold
     and NMS apply. Detections are matched to the labels like the validator does: IoU above :data:`MATCH_IOU`,
     one to one, highest confidence first. ``keep``: the classes to score (default: all); labels and detections
-    of other classes are left out.
+    of other classes are left out. ``people``, when given, receives ``image: (people found, people labelled)``
+    (class 0 is person).
     """
     import cv2
     import torch
@@ -134,7 +144,10 @@ def station_matrix(
             "bboxes": torch.tensor([pixel_box(b, width, height) for b in truth], dtype=torch.float32).reshape(-1, 4),
             "cls": torch.tensor([b[0] for b in truth], dtype=torch.float32),
         }
+        people_found = matrix.matrix[0, 0]
         matrix.process_batch(detections, gt, conf=0.0, iou_thres=MATCH_IOU)  # the detector applied its threshold
+        if people is not None:
+            people[path] = (int(matrix.matrix[0, 0] - people_found), sum(b[0] == 0 for b in truth))
     return matrix
 
 
@@ -188,15 +201,18 @@ def tile(detector: YoloDetector, path: Path, title: str) -> np.ndarray:
     return np.vstack([header, image])
 
 
-def side_by_side(fine: YoloDetector, coco: YoloDetector, images: list[Path], out: Path) -> None:
-    """One row per frame: fine-tuned detections left, stock COCO (person only) right."""
+def side_by_side(columns: list[tuple[YoloDetector, str]], images: list[Path], out: Path) -> None:
+    """One row per frame, one column per ``(detector, title)``; the first title also names the frame."""
     import cv2
 
     rows = []
     for path in images:
-        left = tile(fine, path, f"fine-tuned ({path.stem})")
-        right = tile(coco, path, "stock COCO, person")
-        rows.append(np.hstack([left, np.full((left.shape[0], 6, 3), 255, np.uint8), right]))
+        titles = [f"{columns[0][1]} ({path.stem})"] + [title for _, title in columns[1:]]
+        tiles = [tile(detector, path, title) for (detector, _), title in zip(columns, titles, strict=True)]
+        row = tiles[0]
+        for right in tiles[1:]:
+            row = np.hstack([row, np.full((row.shape[0], 6, 3), 255, np.uint8), right])
+        rows.append(row)
     gap = np.full((6, rows[0].shape[1], 3), 255, np.uint8)
     grid = rows[0]
     for row in rows[1:]:
@@ -223,6 +239,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--data", required=True, help="data.yaml from scripts/seg_to_yolo.py")
     p.add_argument("--weights", required=True, help="fine-tuned weights")
     p.add_argument("--coco", default=COCO_MODEL, help="stock COCO weights for the person comparison")
+    p.add_argument("--previous", default=None, help="an earlier fine-tuned model to score on the same frames")
     p.add_argument("--splits", default="val,test", help="splits to score (those missing from data.yaml are skipped)")
     p.add_argument("--imgsz", type=int, default=640)
     p.add_argument("--batch", type=int, default=16)
@@ -243,11 +260,13 @@ def main(argv: list[str] | None = None) -> int:
     station = {"device": a.device, "conf": a.conf, "imgsz": a.imgsz}
     fine = YoloDetector(weights, **station)
     coco = YoloDetector(Path(a.coco).expanduser(), classes="person", **station)
+    previous = YoloDetector(Path(a.previous).expanduser(), **station) if a.previous else None
     stem = weights.stem
     report: dict = {
         "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "weights": str(weights),
         "coco_weights": coco.weights,
+        "previous_weights": previous.weights if previous else None,
         "data": str(data),
         "imgsz": a.imgsz,
         "conf": a.conf,
@@ -255,6 +274,8 @@ def main(argv: list[str] | None = None) -> int:
         "match_iou": MATCH_IOU,
         "splits": {},
     }
+    lost: dict[Path, int] = {}
+    """Frames where the previous model misses people the fine-tuned model finds all of -> how many it misses."""
     for split in [s.strip() for s in a.splits.split(",") if s.strip() in image_dirs]:
         t0 = time.time()
         labels = read_labels(root, image_dirs[split])
@@ -262,7 +283,8 @@ def main(argv: list[str] | None = None) -> int:
         overall, per_class = scores(res, names)
         fine_person, _ = scores(validate(fine.model, data, split, a, f"{stem}_{split}_person", classes=[0]), names)
         coco_person, _ = scores(validate(coco.model, data, split, a, f"coco_{split}_person", classes=[0]), names)
-        at_conf = station_matrix(fine, root, image_dirs[split], names)
+        fine_people: dict[Path, tuple[int, int]] = {}
+        at_conf = station_matrix(fine, root, image_dirs[split], names, people=fine_people)
         coco_at_conf = station_matrix(coco, root, image_dirs[split], names, keep=[0])
         report["splits"][split] = {
             "images": len(labels),
@@ -274,8 +296,21 @@ def main(argv: list[str] | None = None) -> int:
                 "fine_tuned": {**fine_person, **counts(at_conf.matrix, names, [0])["person"]},
                 "coco": {**coco_person, **counts(coco_at_conf.matrix, names, [0])["person"]},
             },
-            "seconds": round(time.time() - t0, 1),
         }
+        entry = report["splits"][split]
+        if previous is not None:
+            run = f"{Path(previous.weights).stem}_{split}"
+            prev_all, prev_per_class = scores(validate(previous.model, data, split, a, run), names)
+            prev_person, _ = scores(validate(previous.model, data, split, a, f"{run}_person", classes=[0]), names)
+            prev_people: dict[Path, tuple[int, int]] = {}
+            prev_matrix = station_matrix(previous, root, image_dirs[split], names, people=prev_people)
+            prev_counts = counts(prev_matrix.matrix, names)
+            entry["previous"] = {"all": prev_all, "per_class": prev_per_class, "at_conf": prev_counts}
+            entry["person"]["previous"] = {**prev_person, **prev_counts["person"]}
+            for image, (found, labelled) in fine_people.items():
+                if found == labelled and prev_people[image][0] < found:
+                    lost[image] = found - prev_people[image][0]
+        entry["seconds"] = round(time.time() - t0, 1)
         station_dir = project / f"{stem}_{split}_station"
         station_dir.mkdir(parents=True, exist_ok=True)
         at_conf.plot(normalize=False, save_dir=station_dir)
@@ -291,14 +326,21 @@ def main(argv: list[str] | None = None) -> int:
         person = report["splits"][split]["person"]
         print(
             f"{split}: all {overall}; at conf {a.conf}: {dict(totals)}; "
-            f"person fine-tuned {person['fine_tuned']} vs COCO {person['coco']}",
+            f"person fine-tuned {person['fine_tuned']} vs COCO {person['coco']}"
+            + (f" vs previous {person['previous']}" if previous else ""),
             flush=True,
         )
     figure_split = "test" if "test" in image_dirs else "val"
     frames = pick_frames(root, image_dirs[figure_split], a.samples)
     if frames:
-        side_by_side(fine, coco, frames, out_dir / f"{stem}_vs_coco.jpg")
+        side_by_side([(fine, "fine-tuned"), (coco, "stock COCO, person")], frames, out_dir / f"{stem}_vs_coco.jpg")
         report["figure"] = {"split": figure_split, "frames": [f.stem for f in frames], "conf": a.conf}
+    if lost:  # the frames where the previous model loses the most people, spread over the splits
+        chunks = np.array_split(np.array(sorted(lost), dtype=object), min(a.samples, len(lost)))
+        picks = [max(chunk, key=lost.__getitem__) for chunk in chunks]
+        columns = [(fine, "fine-tuned"), (previous, Path(previous.weights).stem)]
+        side_by_side(columns, picks, out_dir / f"{stem}_vs_previous.jpg")
+        report["figure_previous"] = {"frames": [p.stem for p in picks], "people_missed": [lost[p] for p in picks]}
     path = out_dir / f"{stem}_eval.json"
     path.write_text(json.dumps(report, indent=2))
     print(f"results -> {path}")

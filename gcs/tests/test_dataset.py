@@ -234,7 +234,9 @@ class TestEvalDetector(unittest.TestCase):
                     Detection(0, "person", 0.4, (35.0, 5.0, 45.0, 20.0)),  # nothing there; the cone is missed
                 ]
             )
-            matrix = ev.station_matrix(station, tmp, "images/val", names).matrix
+            people: dict = {}
+            matrix = ev.station_matrix(station, tmp, "images/val", names, people=people).matrix
+            self.assertEqual(people, {tmp / "images" / "val" / "f0.png": (1, 1)})  # per frame: found, labelled
             self.assertEqual(
                 ev.counts(matrix, names),
                 {
