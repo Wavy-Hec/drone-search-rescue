@@ -519,5 +519,5 @@ scripts/          gcs.py  fake_drone.py  compose_video.py  seg_to_yolo.py  train
 tests/            unittest suite (./run_tests.sh)
 PROTOCOL.md       message types, fields, units, frames, Isaac Lab conversions
 models/           weights written by train_detector.py (not in git; the demo's detector is a release asset)
-docs/images/      README images (Git LFS)
+docs/images/      README images
 ```
