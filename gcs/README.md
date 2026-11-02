@@ -294,34 +294,40 @@ camera's instance segmentation, so nothing was labelled by hand:
 | Split | Sites (scenario seeds) | Frames | Objects | Views |
 |---|---|---|---|---|
 | train | 36 (1000-1035) | 1620 | 4605 | 5-12 m above the ground, up to 15° off nadir, any heading; 2 in 3 aimed at an object |
-| val | 7 others (2000-2006) | 315 | 856 | the same, on sites never seen in training |
+| val | 7 others (2000-2006) | 315 | 856 | the same, with layouts never seen in training |
 | test | the demo mission's site (seed 0) | 183 | 174 | every 2.5 m along the survey path, at the mission's height and light |
 
-Train and val frames also vary the light (sun direction and strength, overcast sky) and the ground (materials
-swapped between terrain types, tinted, rescaled). Objects with less than 40 % inside the frame (measured on a
-render with a wider margin) or fewer than 100 visible pixels are dropped and painted over. Train and val never
-use a seed below 1000, so any site picked with `--seed` in drone_lab is new to the detector.
+A site is the survey terrain dressed by one scenario seed: the seed places the people and the objects, while
+the terrain itself is the same for every seed (its generator seed is fixed). Train and val frames also vary the
+light (sun azimuth and strength at the mission's 43° elevation, overcast sky) and the ground (materials swapped
+between terrain types, tinted, rescaled). Objects with less than 40 % inside the frame (measured on a render
+with a wider margin) or fewer than 100 visible pixels are dropped and painted over. Train and val never use a
+seed below 1000, so the layout of any site picked with `--seed` in drone_lab is new to the detector.
 
-Scores: mAP50 / mAP50-95, and at the GCS threshold (confidence 0.25) the objects found, missed and the false
-alarms:
+Scores: mAP50 / mAP50-95 from the Ultralytics validator, and the objects found, missed and the false alarms
+of the ground station's own detector on the whole frames at its threshold (confidence 0.25; a label is found
+when a box of its class overlaps it with an IoU above 0.45):
 
 | Class | val: held-out sites | test: mission site | test at 0.25: found / missed / false alarms |
 |---|---|---|---|
 | person | 0.995 / 0.925 | 0.995 / 0.914 | 55 / 0 / 0 |
 | vehicle | 0.995 / 0.963 | 0.995 / 0.995 | 6 / 0 / 0 |
-| crate | 0.994 / 0.900 | 0.995 / 0.978 | 36 / 0 / 0 |
+| crate | 0.994 / 0.900 | 0.995 / 0.978 | 36 / 0 / 2 |
 | barrel | 0.995 / 0.922 | 0.995 / 0.927 | 29 / 0 / 0 |
 | pallet | 0.995 / 0.968 | 0.995 / 0.967 | 23 / 0 / 0 |
-| cone | 0.995 / 0.962 | 0.995 / 0.983 | 23 / 0 / 2 |
+| cone | 0.995 / 0.962 | 0.995 / 0.983 | 23 / 0 / 3 |
 | landing_pad | 0.995 / 0.995 | 0.995 / 0.995 | 2 / 0 / 0 |
-| **all** | **0.995 / 0.948** | **0.995 / 0.965** | **174 / 0 / 2** |
+| **all** | **0.995 / 0.948** | **0.995 / 0.965** | **174 / 0 / 5** |
 
 The stock COCO model, on the person class of the same frames, scores 0.507 / 0.296 on val and 0.655 / 0.416 on
-test. At confidence 0.25 it finds 27 of the 55 people in the test frames, with 8 false alarms. It learned people
-from photos taken at eye level; from 7 m straight above, a body in a T-pose is a cross with a head in the
-middle. Almost all false alarms of the fine-tuned model touch the image border, mostly on objects cut by the
-frame edge, which the GCS does not put on the map. The exception: it sometimes calls the hands of a standing
-person seen from above cones.
+test. Run the same way at confidence 0.25, it finds 25 of the 55 people in the test frames, with 9 false
+alarms. It learned people from photos taken at eye level; from 7 m straight above, a body in a T-pose is a cross
+with a head in the middle.
+
+The fine-tuned model's 5 false alarms on test: the hands of a standing person seen from above, called cones (3),
+and two crate boxes on the painted-over remains of objects cut by the frame edge (painting keeps the outline and
+the shadow). On val it finds 850 of the 856 objects, with 14 false alarms, 13 of them at the image border (6 on
+such painted remains). The GCS does not put boxes that touch the border on the map.
 
 ![The fine-tuned model and the stock COCO model on mission frames of the demo site](docs/images/detector_vs_coco.jpg)
 
@@ -344,9 +350,9 @@ python scripts/eval_detector.py --data ~/isaac_ws/datasets/drone_sar_yolo/yolo/d
     --weights ~/isaac_ws/assets/models/drone_sar_yolo26n.pt
 ```
 
-Next to the weights: `drone_sar_yolo26n_metrics.json` (training), `drone_sar_yolo26n_eval.json` (every score
-above), the confusion matrices at confidence 0.25 and the precision-recall curves of val and test, and the
-figure above. The training curves are in `runs/train/drone_sar_yolo26n/`.
+Next to the weights: `drone_sar_yolo26n_metrics.json` and the training curves `drone_sar_yolo26n_training.png`
+and `.csv` (best epoch 80 of 100), `drone_sar_yolo26n_eval.json` (every score above), the confusion matrices of
+the station's detector and the precision-recall curves of val and test, and the figure above.
 
 ## Tests
 
@@ -365,7 +371,7 @@ DRONE_GCS_SKIP_E2E=1 ./run_tests.sh # without the end-to-end run
 | App | Arrow keys neither quit nor take screenshots. Data / END of another mission ignored; a new mission clears an old END. Rollover keeps ground truth and drops the old mission's late detections. Every drone gets detection. Boxes sent by the simulator (`--detector gt`) land on the map. Short link label. Video keeps real time through stalls and logs the sim time of every frame. `compose_video` pairs each simulator frame with the newest dashboard frame not ahead of it, and joins the two videos in step |
 | Fake world | Rays and depth lie on the height field |
 | Detectors | The blob detector finds every object. The worker keeps the newest frame. Default weights: `$DRONE_GCS_WEIGHTS`, else the fine-tuned model if present, else COCO. YOLO wrapper: 2 CPU inferences on Ultralytics' `bus.jpg`; class filters validated (typos raise) and matched after `--class-map` |
-| Dataset tools | `seg_to_yolo` on synthetic segmentation gives exact labels, keeps cut-off boxes, paints over tiny ones. Split capture folders stay the splits, and the full box of a cut-off object decides whether it stays. Block split gives train data and ~15 % val from 8 to 2000 frames. `train_detector --dry-run` |
+| Dataset tools | `seg_to_yolo` on synthetic segmentation gives exact labels, keeps cut-off boxes, paints over tiny ones. Split capture folders stay the splits, and the full box of a cut-off object decides whether it stays. Block split gives train data and ~15 % val from 8 to 2000 frames. `train_detector --dry-run`. `eval_detector` counts found, missed and false alarms from the station detector's boxes |
 | Sender import | The sender imports without cv2, torch or PIL. **A sender process in env_isaaclab** sends to a receiver in vision, and arrays arrive bit-exact |
 | Dashboard and report | All three layers render. Labels take the first spot inside the image that hides nothing (else the one that hides least); map labels keep clear of each other and of a landed drone. All report files are written, `report.md` included; the scorecard counts people and false alarms against the ground truth, and the map height error against the true terrain is under 5 cm on smooth ground |
 | End to end | Fake drone process → socket → headless GCS process. Coverage grows monotonically to over 98 %. Elevation error is under 1 cm RMSE on smooth cells (measured 2.6 mm) and under 5 mm median. All synthetic objects are found with no false positives and a mean horizontal error under 25 cm |

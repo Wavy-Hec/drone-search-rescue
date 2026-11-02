@@ -3,7 +3,8 @@
 
 Starts from the COCO nano weights, trains with defaults sized for ~2000 images on a 16 GB GPU, copies the best
 checkpoint to ``--out`` (default ``models/detector.pt``, tracked with Git LFS) and writes the training summary
-next to it as ``<out name>_metrics.json`` (default ``models/detector_metrics.json``).
+next to it as ``<out name>_metrics.json`` (default ``models/detector_metrics.json``), with the training curves
+(losses and val scores per epoch) as ``<out name>_training.png`` and ``.csv``.
 The GCS then uses it with ``python scripts/gcs.py --weights models/detector.pt``.
 
 Defaults and why:
@@ -160,6 +161,10 @@ def main(argv=None) -> int:
     out = Path(a.out).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(best, out)
+    for ext in ("png", "csv"):  # Ultralytics' training curves
+        curves = Path(trainer.save_dir) / f"results.{ext}"
+        if curves.exists():
+            shutil.copy2(curves, out.with_name(f"{out.stem}_training.{ext}"))
     metrics = {k: float(v) for k, v in getattr(results, "results_dict", {}).items()}
     per_class = {}
     try:

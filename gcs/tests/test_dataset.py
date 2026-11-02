@@ -17,6 +17,7 @@ from drone_gcs.dataset import (
     parse_id_mapping,
     split_keys,
 )
+from drone_gcs.detector import Detection
 
 from ._util import ROOT, rmtree, short_tmpdir
 
@@ -192,6 +193,60 @@ class TestSegToYolo(unittest.TestCase):
                 self.assertLessEqual(runs, max(1, n_val // 2), (n, seed))
         s = split_keys([f"{i:06d}" for i in range(2000)], ConvertConfig())
         self.assertEqual(sum(v == "val" for v in s.values()), 300)  # large captures: 6 blocks of 50
+
+
+class StubDetector:
+    """Returns the same detections for every frame."""
+
+    def __init__(self, detections: list[Detection]):
+        self.detections = detections
+
+    def detect(self, rgb: np.ndarray) -> list[Detection]:
+        return self.detections
+
+
+class TestEvalDetector(unittest.TestCase):
+    def test_counts_of_the_station_detector(self):
+        # found / missed / false alarms come from the station's boxes, matched like the validator's confusion matrix
+        try:
+            import ultralytics  # noqa: F401
+        except ImportError:
+            self.skipTest("ultralytics not installed")
+        spec = importlib.util.spec_from_file_location("eval_detector", ROOT / "scripts" / "eval_detector.py")
+        ev = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ev)
+        names = {0: "person", 1: "crate", 2: "cone"}
+        tmp = Path(short_tmpdir("dgcs_eval"))
+        try:
+            for sub in ("images", "labels"):
+                (tmp / sub / "val").mkdir(parents=True)
+            cv2.imwrite(str(tmp / "images" / "val" / "f0.png"), np.zeros((H, W, 3), np.uint8))
+            labels = [
+                "0 0.200000 0.500000 0.200000 0.600000",  # person: x 10..30, y 10..40
+                "1 0.600000 0.400000 0.200000 0.400000",  # crate: x 50..70, y 10..30
+                "2 0.850000 0.700000 0.100000 0.200000",  # cone: x 80..90, y 30..40
+            ]
+            (tmp / "labels" / "val" / "f0.txt").write_text("\n".join(labels) + "\n")
+            station = StubDetector(
+                [
+                    Detection(0, "person", 0.9, (11.0, 10.0, 30.0, 41.0)),  # the person
+                    Detection(2, "cone", 0.8, (50.0, 10.0, 70.0, 30.0)),  # the crate, called a cone
+                    Detection(0, "person", 0.4, (35.0, 5.0, 45.0, 20.0)),  # nothing there; the cone is missed
+                ]
+            )
+            matrix = ev.station_matrix(station, tmp, "images/val", names).matrix
+            self.assertEqual(
+                ev.counts(matrix, names),
+                {
+                    "person": {"found": 1, "missed": 0, "false_alarms": 1},
+                    "crate": {"found": 0, "missed": 1, "false_alarms": 0},
+                    "cone": {"found": 0, "missed": 1, "false_alarms": 1},
+                },
+            )
+            person = ev.station_matrix(station, tmp, "images/val", names, keep=[0]).matrix  # people only
+            self.assertEqual(ev.counts(person, names, [0]), {"person": {"found": 1, "missed": 0, "false_alarms": 1}})
+        finally:
+            rmtree(tmp)
 
 
 if __name__ == "__main__":

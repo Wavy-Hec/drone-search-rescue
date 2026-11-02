@@ -3,14 +3,18 @@
 
 For every evaluated split of data.yaml (default: val and test):
 
-* precision, recall, mAP50 and mAP50-95 per class and the precision-recall curve of the fine-tuned model;
-* at the ground station's confidence threshold (``--conf``, default 0.25): objects found, missed and false
-  alarms per class, and the confusion matrix (counts; the validator's own matrix at confidence 0.001 also
-  counts every low-score box);
+* precision, recall, mAP50 and mAP50-95 per class and the precision-recall curve of the fine-tuned model, from
+  the Ultralytics validator;
+* what the ground station gets: its own detector (:class:`drone_gcs.detector.YoloDetector`, confidence
+  ``--conf``, default 0.25) runs on every whole frame, and its boxes are matched to the labels the way the
+  validator's confusion matrix does it (IoU above 0.45, one to one, highest confidence first): objects found,
+  missed and false alarms per class, and that confusion matrix;
 * the person scores of both models on the same images (``classes=[0]`` keeps only the person predictions and
   labels; COCO's class 0 is person too). The COCO model cannot know the other classes.
 
-A side-by-side figure of a few test frames with a person in full view shows both models' detections.
+The counts come from the station's detector rather than from the validator, which pads the 640 x 480 frames to
+640 x 512 and uses another NMS IoU; that changes a few boxes. A side-by-side figure of a few test frames with a
+person in full view shows both models' detections, also with the station's settings.
 
 Writes next to the weights (``--out-dir`` to change): ``<name>_eval.json``, ``<name>_confusion_matrix_<split>.png``,
 ``<name>_pr_curve_<split>.png`` and ``<name>_vs_coco.jpg``. Ultralytics' own validation folders go to
@@ -32,12 +36,23 @@ import sys
 import time
 from collections import Counter
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
+if TYPE_CHECKING:
+    from ultralytics.utils.metrics import ConfusionMatrix
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from drone_gcs.detector import YoloDetector  # noqa: E402
+
 COCO_MODEL = os.path.expanduser("~/isaac_ws/assets/models/yolo26n.pt")
 HEADER_PX = 28
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg")
+MATCH_IOU = 0.45
+"""A detection matches a label above this IoU (the rule of the Ultralytics validator's confusion matrix)."""
 
 
 def read_names(data: Path) -> tuple[Path, dict[str, str], dict[int, str]]:
@@ -61,6 +76,12 @@ def read_labels(root: Path, image_dir: str) -> dict[str, list[tuple[int, float, 
     return out
 
 
+def pixel_box(label: tuple[int, float, float, float, float], width: int, height: int) -> list[float]:
+    """``[x1, y1, x2, y2]`` in pixels of a normalised YOLO label."""
+    _, cx, cy, w, h = label
+    return [(cx - w / 2) * width, (cy - h / 2) * height, (cx + w / 2) * width, (cy + h / 2) * height]
+
+
 def scores(metrics, names: dict[int, str]) -> tuple[dict, dict]:
     """Overall and per-class (P, R, mAP50, mAP50-95) of an Ultralytics DetMetrics."""
     box = metrics.box
@@ -79,13 +100,54 @@ def scores(metrics, names: dict[int, str]) -> tuple[dict, dict]:
     }
 
 
-def counts(metrics, names: dict[int, str], classes: list[int] | None = None) -> dict:
-    """Found / missed / false alarms per class from the confusion matrix (rows: predicted, columns: true)."""
-    m = metrics.confusion_matrix.matrix
+def station_matrix(
+    detector: YoloDetector, root: Path, image_dir: str, names: dict[int, str], keep: list[int] | None = None
+) -> ConfusionMatrix:
+    """Confusion matrix of the ground station's detector on the frames of one split.
+
+    ``detector`` is a :class:`YoloDetector` (or anything with its ``detect(rgb)``); its own confidence threshold
+    and NMS apply. Detections are matched to the labels like the validator does: IoU above :data:`MATCH_IOU`,
+    one to one, highest confidence first. ``keep``: the classes to score (default: all); labels and detections
+    of other classes are left out.
+    """
+    import cv2
+    import torch
+    from ultralytics.utils.metrics import ConfusionMatrix
+
+    keep = sorted(names) if keep is None else keep
+    ids = {names[c]: c for c in keep}
+    labels = read_labels(root, image_dir)
+    matrix = ConfusionMatrix(names=names)
+    for path in sorted(p for p in (root / image_dir).iterdir() if p.suffix.lower() in IMAGE_SUFFIXES):
+        bgr = cv2.imread(str(path))
+        if bgr is None:
+            raise OSError(f"cannot read {path}")
+        height, width = bgr.shape[:2]
+        found = [d for d in detector.detect(bgr[..., ::-1]) if d.cls in ids]  # the station works in RGB
+        truth = [b for b in labels.get(path.stem, []) if b[0] in keep]
+        detections = {
+            "bboxes": torch.tensor([d.box for d in found], dtype=torch.float32).reshape(-1, 4),
+            "conf": torch.tensor([d.conf for d in found], dtype=torch.float32),
+            "cls": torch.tensor([ids[d.cls] for d in found], dtype=torch.float32),
+        }
+        gt = {
+            "bboxes": torch.tensor([pixel_box(b, width, height) for b in truth], dtype=torch.float32).reshape(-1, 4),
+            "cls": torch.tensor([b[0] for b in truth], dtype=torch.float32),
+        }
+        matrix.process_batch(detections, gt, conf=0.0, iou_thres=MATCH_IOU)  # the detector applied its threshold
+    return matrix
+
+
+def counts(matrix: np.ndarray, names: dict[int, str], classes: list[int] | None = None) -> dict:
+    """Found / missed / false alarms per class of a confusion matrix (rows: predicted, columns: true)."""
     out = {}
     for c in classes if classes is not None else sorted(names):
-        found = int(m[c, c])
-        out[names[c]] = {"found": found, "missed": int(m[:, c].sum()) - found, "false_alarms": int(m[c].sum()) - found}
+        found = int(matrix[c, c])
+        out[names[c]] = {
+            "found": found,
+            "missed": int(matrix[:, c].sum()) - found,
+            "false_alarms": int(matrix[c].sum()) - found,
+        }
     return out
 
 
@@ -105,11 +167,19 @@ def validate(model, data: Path, split: str, args, name: str, **kw):
     )
 
 
-def tile(model, path: Path, title: str, conf: float, imgsz: int, device: str, classes: list[int] | None):
-    """One model's detections on one frame, with a title bar above the image."""
+def tile(detector: YoloDetector, path: Path, title: str) -> np.ndarray:
+    """The detector's boxes on one frame (its own settings), with a title bar above the image."""
     import cv2
 
-    res = model.predict(str(path), conf=conf, imgsz=imgsz, device=device, classes=classes, verbose=False)[0]
+    res = detector.model.predict(
+        str(path),
+        conf=detector.conf,
+        iou=detector.iou,
+        imgsz=detector.imgsz,
+        device=detector.device,
+        classes=detector.class_ids,
+        verbose=False,
+    )[0]
     image = res.plot(line_width=2, font_size=11)
     header = np.full((HEADER_PX, image.shape[1], 3), 24, np.uint8)
     n = len(res.boxes)
@@ -118,14 +188,14 @@ def tile(model, path: Path, title: str, conf: float, imgsz: int, device: str, cl
     return np.vstack([header, image])
 
 
-def side_by_side(fine, coco, images: list[Path], out: Path, conf: float, imgsz: int, device: str) -> None:
+def side_by_side(fine: YoloDetector, coco: YoloDetector, images: list[Path], out: Path) -> None:
     """One row per frame: fine-tuned detections left, stock COCO (person only) right."""
     import cv2
 
     rows = []
     for path in images:
-        left = tile(fine, path, f"fine-tuned ({path.stem})", conf, imgsz, device, None)
-        right = tile(coco, path, "stock COCO, person", conf, imgsz, device, [0])
+        left = tile(fine, path, f"fine-tuned ({path.stem})")
+        right = tile(coco, path, "stock COCO, person")
         rows.append(np.hstack([left, np.full((left.shape[0], 6, 3), 255, np.uint8), right]))
     gap = np.full((6, rows[0].shape[1], 3), 255, np.uint8)
     grid = rows[0]
@@ -165,56 +235,69 @@ def main(argv: list[str] | None = None) -> int:
     a = p.parse_args(argv)
 
     os.environ.setdefault("YOLO_OFFLINE", "1")
-    from ultralytics import YOLO
-
     data, weights = Path(a.data).expanduser().resolve(), Path(a.weights).expanduser().resolve()
     out_dir = Path(a.out_dir).expanduser() if a.out_dir else weights.parent
     out_dir.mkdir(parents=True, exist_ok=True)
+    project = Path(a.project).expanduser().resolve()
     root, image_dirs, names = read_names(data)
-    fine, coco = YOLO(str(weights)), YOLO(str(Path(a.coco).expanduser()))
+    station = {"device": a.device, "conf": a.conf, "imgsz": a.imgsz}
+    fine = YoloDetector(weights, **station)
+    coco = YoloDetector(Path(a.coco).expanduser(), classes="person", **station)
     stem = weights.stem
     report: dict = {
         "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "weights": str(weights),
-        "coco_weights": str(Path(a.coco).expanduser()),
+        "coco_weights": coco.weights,
         "data": str(data),
         "imgsz": a.imgsz,
         "conf": a.conf,
+        "station_detector": fine.describe(),
+        "match_iou": MATCH_IOU,
         "splits": {},
     }
     for split in [s.strip() for s in a.splits.split(",") if s.strip() in image_dirs]:
         t0 = time.time()
         labels = read_labels(root, image_dirs[split])
-        res = validate(fine, data, split, a, f"{stem}_{split}", plots=True)
+        res = validate(fine.model, data, split, a, f"{stem}_{split}", plots=True)
         overall, per_class = scores(res, names)
-        at_conf = validate(fine, data, split, a, f"{stem}_{split}_conf", plots=True, conf=a.conf)
-        coco_at_conf = validate(coco, data, split, a, f"coco_{split}_conf", plots=True, conf=a.conf, classes=[0])
-        fine_person, _ = scores(validate(fine, data, split, a, f"{stem}_{split}_person", classes=[0]), names)
-        coco_person, _ = scores(validate(coco, data, split, a, f"coco_{split}_person", classes=[0]), names)
+        fine_person, _ = scores(validate(fine.model, data, split, a, f"{stem}_{split}_person", classes=[0]), names)
+        coco_person, _ = scores(validate(coco.model, data, split, a, f"coco_{split}_person", classes=[0]), names)
+        at_conf = station_matrix(fine, root, image_dirs[split], names)
+        coco_at_conf = station_matrix(coco, root, image_dirs[split], names, keep=[0])
         report["splits"][split] = {
             "images": len(labels),
             "instances": dict(Counter(names[b[0]] for boxes in labels.values() for b in boxes)),
             "all": overall,
             "per_class": per_class,
-            "at_conf": counts(at_conf, names),
+            "at_conf": counts(at_conf.matrix, names),
             "person": {
-                "fine_tuned": {**fine_person, **counts(at_conf, names, [0])["person"]},
-                "coco": {**coco_person, **counts(coco_at_conf, coco.names, [0])["person"]},
+                "fine_tuned": {**fine_person, **counts(at_conf.matrix, names, [0])["person"]},
+                "coco": {**coco_person, **counts(coco_at_conf.matrix, names, [0])["person"]},
             },
             "seconds": round(time.time() - t0, 1),
         }
-        for run, src, dst in (
-            (res, "BoxPR_curve.png", "pr_curve"),
-            (at_conf, "confusion_matrix.png", "confusion_matrix"),
+        station_dir = project / f"{stem}_{split}_station"
+        station_dir.mkdir(parents=True, exist_ok=True)
+        at_conf.plot(normalize=False, save_dir=station_dir)
+        for src, dst in (
+            (Path(res.save_dir) / "BoxPR_curve.png", "pr_curve"),
+            (station_dir / "confusion_matrix.png", "confusion_matrix"),
         ):
-            if (Path(run.save_dir) / src).exists():
-                shutil.copy2(Path(run.save_dir) / src, out_dir / f"{stem}_{dst}_{split}.png")
+            if src.exists():
+                shutil.copy2(src, out_dir / f"{stem}_{dst}_{split}.png")
+        totals: Counter = Counter()
+        for per_class_counts in report["splits"][split]["at_conf"].values():
+            totals.update(per_class_counts)
         person = report["splits"][split]["person"]
-        print(f"{split}: all {overall}; person fine-tuned {person['fine_tuned']} vs COCO {person['coco']}", flush=True)
+        print(
+            f"{split}: all {overall}; at conf {a.conf}: {dict(totals)}; "
+            f"person fine-tuned {person['fine_tuned']} vs COCO {person['coco']}",
+            flush=True,
+        )
     figure_split = "test" if "test" in image_dirs else "val"
     frames = pick_frames(root, image_dirs[figure_split], a.samples)
     if frames:
-        side_by_side(fine, coco, frames, out_dir / f"{stem}_vs_coco.jpg", a.conf, a.imgsz, a.device)
+        side_by_side(fine, coco, frames, out_dir / f"{stem}_vs_coco.jpg")
         report["figure"] = {"split": figure_split, "frames": [f.stem for f in frames], "conf": a.conf}
     path = out_dir / f"{stem}_eval.json"
     path.write_text(json.dumps(report, indent=2))
