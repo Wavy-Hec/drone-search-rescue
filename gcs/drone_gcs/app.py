@@ -60,7 +60,10 @@ class AppConfig:
 class VideoRecorder:
     """cv2.VideoWriter (mp4v) at a fixed fps; on close, optionally re-encodes to H.264 with system ffmpeg
     (browser/Obsidian friendly). Frames are written in real time: a late tick repeats the last frame, for
-    stalls up to ``max_catchup_s`` (longer gaps, e.g. a suspended machine, are cut and logged)."""
+    stalls up to ``max_catchup_s`` (longer gaps, e.g. a suspended machine, are cut and logged).
+
+    ``<name>_frames.csv`` next to the video gives the simulator time shown in every frame, so the recording can be
+    lined up with one made on the simulator side (``scripts/compose_video.py``)."""
 
     def __init__(
         self, path: Path, fps: float, size: tuple[int, int], transcode: bool = True, max_catchup_s: float = 5.0
@@ -74,6 +77,8 @@ class VideoRecorder:
         self.writer = cv2.VideoWriter(str(self.tmp), cv2.VideoWriter.fourcc(*"mp4v"), self.fps, size)
         if not self.writer.isOpened():
             raise RuntimeError(f"cannot open a video writer for {self.tmp}")
+        self.frames_csv = self.path.with_name(self.path.stem + "_frames.csv")
+        self.sim_t: list[str] = []  # simulator time shown in each frame ("" before the first message)
         self.frames = 0
         self.t0: float | None = None
         self.lost_s = 0.0  # wall time cut out of the video by over-long stalls
@@ -82,7 +87,8 @@ class VideoRecorder:
     def seconds(self) -> float:
         return self.frames / self.fps
 
-    def write(self, img: np.ndarray, now: float) -> None:
+    def write(self, img: np.ndarray, now: float, sim_t: float | None = None) -> None:
+        """Write ``img`` as the frame(s) due at wall time ``now``; ``sim_t`` is the simulator time it shows."""
         if self.t0 is None:
             self.t0 = now
         due = int((now - self.t0 - self.lost_s) * self.fps) + 1
@@ -96,6 +102,7 @@ class VideoRecorder:
             log.info("dashboard stalled for %.1f s (video repeats the last frame)", n / self.fps)
         for _ in range(n):
             self.writer.write(img)
+        self.sim_t += ["" if sim_t is None else f"{sim_t:.2f}"] * n
         self.frames += n
 
     def close(self) -> Path | None:
@@ -103,6 +110,7 @@ class VideoRecorder:
         if self.frames == 0:
             self.tmp.unlink(missing_ok=True)
             return None
+        self.frames_csv.write_text("frame,sim_t\n" + "".join(f"{k},{t}\n" for k, t in enumerate(self.sim_t)))
         if self.transcode and shutil.which("ffmpeg"):
             cmd = [
                 "ffmpeg", "-y", "-loglevel", "error", "-i", str(self.tmp), "-c:v", "libx264", "-preset", "veryfast",
@@ -387,7 +395,7 @@ class GCSApp:
                     except cv2.error:
                         self.quit_reason = "window closed"
                 if self.recorder is not None:
-                    self.recorder.write(canvas, now)
+                    self.recorder.write(canvas, now, st.t_now)
                 el = now - self.t_start
                 while shots_due and el >= shots_due[0]:
                     shots_due.pop(0)

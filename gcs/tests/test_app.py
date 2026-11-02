@@ -222,6 +222,20 @@ class TestVideoRecorder(unittest.TestCase):
         finally:
             rmtree(tmp)
 
+    def test_frames_csv_gives_the_sim_time_of_every_frame(self):
+        tmp = Path(short_tmpdir("dgcs_vid"))
+        try:
+            rec = VideoRecorder(tmp / "dashboard.mp4", 10.0, (64, 48), transcode=False)
+            img = np.zeros((48, 64, 3), np.uint8)
+            rec.write(img, 0.0)  # before the first message
+            rec.write(img, 0.1, 3.25)
+            rec.write(img, 0.3, 3.5)  # late tick: the frame is repeated, with its time
+            rec.close()
+            lines = (tmp / "dashboard_frames.csv").read_text().splitlines()
+            self.assertEqual(lines, ["frame,sim_t", "0,", "1,3.25", "2,3.50", "3,3.50"])
+        finally:
+            rmtree(tmp)
+
 
 if __name__ == "__main__":
     unittest.main()
