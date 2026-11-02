@@ -80,9 +80,9 @@ Details: [`src/drone_lab/sar/README.md`](src/drone_lab/sar/README.md).
 
 ![A drone-camera frame with the boxes taken from the instance segmentation](docs/images/sar_drone_frame.jpg)
 
-*Seed 0 (`scripts/sar_preview.py`): the helipad with its cones, people among the blocks, the forklift. Below: a
-drone-camera frame at survey altitude with the boxes and classes from the instance segmentation (a lying person,
-the forklift, two crates).*
+*Seed 0 (`scripts/sar_preview.py`): the helipad with its cones and a responder walking past it, people among the
+blocks, the forklift. Below: a drone-camera frame at survey altitude with the boxes and classes from the instance
+segmentation (a victim in the recovery position, the forklift, two crates).*
 
 ```bash
 python scripts/sar_preview.py            # GPU, ~1 min: overview, photo map with GT pins, drone frames, checks
@@ -145,9 +145,10 @@ python scripts/compose_video.py --gcs runs/sar_live --sim ~/isaac_ws/projects/dr
 
 ![The live mission: the Isaac Sim chase view next to the ground station](docs/images/sar_mission_demo.jpg)
 
-*Frame of the demo video, 81 s into the mission: on the left the Isaac Sim window, a follow camera over the drone
-with its mapping rays glowing on the gravel; on the right the ground station, whose detector has just boxed a
-person and three crates in the drone camera's frame and pinned five people on the map so far.*
+*Frame of the demo video, 75 s into the mission: on the left the Isaac Sim window, a follow camera over the drone
+with its mapping rays glowing on the gravel; on the right the ground station, whose detector has just boxed three
+people (sitting, pointing, lying) and the forklift in the drone camera's frame and pinned five people on the map
+so far.*
 
 **The Isaac Sim window** shows only the viewport (`--kit_ui` brings back Isaac Sim's menus and panels;
 `--window_pos X Y` places it, e.g. on a second monitor) and the same view is recorded with `--video`. The camera
@@ -189,20 +190,21 @@ may pin them), `--gt_boxes` (adds the objects' boxes from the instance segmentat
 station's `--detector gt`), `--jpeg`, `--camera_every N`, `--gcs <address>`, `--no_gcs`. Outputs in `runs/<out>/` (default `sar_mission_seed<seed>`): `mission.json` (plan,
 outcome, closest approach, loop and link timing, GPU memory), `trajectory.csv`, `ground_truth.json`.
 
-**Result: the recorded live mission** (seed 0, the commands above: both windows open, the chase view recorded,
-the ground station with the fine-tuned detector). The drone lands on its pad after 6 min 16 s and 428 m, 7 mm
-from its centre; over the survey it holds 7.68 m with 0.10 m standard deviation and tilts 0.7 degrees on
-average. The ground station scanned 100 % of the area and photographed 99.8 %, found all 9 people and all 39
-objects with 2 false alarms (cones on the hands of the one standing person), with pins 6 cm from the truth on
-average; its height map is within 4 mm of the true terrain where the ground has no step (0.10 m RMSE with the
-block walls). Closest approach to an obstacle: 2.4 m, the crown of a tree. With the window, the video and the
-ground station's YOLO on the same machine the simulation runs at 14.5 steps per second (1.45x real time): the
-step with the RTX render 61 ms, the chase view 1.8 ms, the video frame 3.9 ms, the link 0.9 ms; 6.2 GiB of GPU
-memory at the peak.
+**Result: the recorded live mission** (seed 0, the commands above: both windows open, the chase view recorded, the
+ground station with the fine-tuned detector). The drone lands on its pad after 6 min 16 s and 428 m, 7 mm from its
+centre; over the survey it holds 7.68 m with 0.10 m standard deviation and tilts 0.7 degrees on average. The ground
+station scanned 100 % of the area and photographed 99.8 %. It found all 35 objects in the survey area, the 10 people
+among them, and 5 of the 6 around the landing pad, with no false alarm and pins 4 cm from the truth on average
+(people 6 cm); the one it missed is a responder walking 5.6 m south of the pad, outside the survey area, whom the
+camera never saw. Its height map is within 4 mm of the true terrain where the ground has no step (0.10 m RMSE with
+the block walls). Closest approach to an obstacle: 2.4 m, the crown of a tree. With the window, the video and the
+ground station's YOLO on the same machine the simulation runs at 14.5 steps per second (1.45x real time): the step
+with the RTX render 61 ms, the chase view 2.4 ms, the video frame 3.9 ms, the link 0.9 ms; 6.3 GiB of GPU memory at
+the peak.
 
-Headless, the same flight runs at 17-21 steps per second (1.7-2.1x real time), and a run with the same detector
-found the same 39 objects with 3 false alarms, all on that standing person. Comparison with the stock COCO
-detector, the geometry check with perfect boxes and the loop rates: the drone_gcs README (Results).
+Headless, the same flight runs at 17-22 steps per second (1.7-2.2x real time), and a run with the same detector
+found the same 40 objects, again without a false alarm. Comparison with the stock COCO detector, the geometry
+check with perfect boxes and the loop rates: the drone_gcs README (Results).
 
 ## Rescue finale: Hector's quadruped walks to a person the drone found
 
@@ -218,36 +220,43 @@ mission's backend, over the same seeded terrain and dressed site. Commands, meth
 
 ![The route planned on the drone's elevation map and pins, and the traversability cost](docs/images/rescue_finale_plan.png)
 
-*Planned on the report of the recorded live mission (`drone_gcs/runs/sar_mission_final`: 9 of 9 people found): from
-the landing pad north along the border, then straight down the crater's west wall to person #25, whom the drone saw
-lying in the crater (the pin is 0.24 m from person_08's true centre). Top: the arrival in the follow-cam video, with
-the minimap of the drone's map and the walked track. Bottom: the elevation the robot planned on (the drone's map plus
-the known flat border around the surveyed area) and the traversability cost with the no-go cells.*
+*Planned on the report of the recorded live mission (`drone_gcs/runs/sar_mission_hero`: 10 of 10 people found):
+from the landing pad north along the border, then straight down the crater's west wall to person #32, whom the drone
+saw lying in the recovery position on the crater floor (the pin is 0.05 m from person_08's true centre). Top: the
+arrival in the follow-cam video, with the minimap of the drone's map and the walked track. Bottom: the elevation the
+robot planned on (the drone's map plus the known flat border around the surveyed area) and the traversability cost
+with the no-go cells.*
 
-The recorded finale on the live mission's report (one robot, `--video`): the robot reached the person in 24.3 s,
-walked 16.5 m of the 16.5 m route without a fall and stopped 1.62 m from the drone's pin (1.65 m from the person's
-real centre).
+The recorded finale on the live mission's report (one robot, `--goal_pin 32 --video`): the robot reached the person
+in 24.3 s, walked 16.5 m of the 16.5 m route without a fall and stopped 1.74 m from the drone's pin (1.69 m from the
+person's real centre).
 
 | Map and pins | Person | 32 robots at once, no second tries | Planned route | Falls |
 |---|---|---|---|---|
-| the recorded live mission's report (`--report <drone_gcs run>`) | pin #25, lying in the crater (person_08) | 32/32 reached, 23.9-24.7 s | 16.5 m | 0 |
-| an earlier full mission's report (`sar_demo_seed0`) | pin #34, the same person | 32/32, 24.9-25.4 s | 17.1 m | 0 |
-| the first 90 s of a mission (5 people found) | pin #30, lying next to the crates (person_02) | 32/32, 19.8-21.5 s | 12.8 m | 0 |
-| the drone's survey map `runs/lawnmower_v1` + the site's pins | person_08 in the crater | 32/32, 24.6-25.1 s | 16.9 m | 0 |
-| terrain + site ground truth (default without a report) | person_08 in the crater | 32/32, 22.5-23.4 s | 15.6 m | 0 |
-| ground truth, `--goal_pin person_04` | person_04, lying by the collapsed buildings | 32/32, 29.7-30.2 s | 18.6 m | 0 |
+| the recorded live mission's report (`--report <drone_gcs run> --goal_pin 32`) | pin #32, in the recovery position in the crater (person_08) | 32/32 reached, 23.9-24.7 s | 16.5 m | 0 |
+| an earlier full mission's report (`sar_demo_seed0`), T-pose people | pin #34, person_08 | 32/32, 24.9-25.4 s | 17.1 m | 0 |
+| the first 90 s of a mission (5 people found), T-pose people | pin #30, lying next to the crates (person_02) | 32/32, 19.8-21.5 s | 12.8 m | 0 |
+| the drone's survey map `runs/lawnmower_v1` + the site's pins | person_08, from the crater's north rim | 32/32, 32.4-33.1 s | 22.8 m | 1 |
+| terrain + site ground truth (default without a report) | person_08 in the crater | 32/32, 23.5-24.1 s | 16.1 m | 0 |
+| ground truth, `--goal_pin person_04` | person_04, lying by the collapsed buildings | 32/32, 28.3-29.3 s | 17.5 m | 0 |
 | ground truth, `--max_slope 22` | person_08, from the crater rim | 32/32, 34.7-36.8 s | 23.7 m | 0 |
 
-The pins do not say whether a person is lying or standing; the height of a pin above the mapped ground does (a lying
-person's back is at most 0.4 m up, a standing person's head 1.3-1.8 m), so the planner picks a lying person 15-25 m
-away first and gives them a larger footprint. Steep ground is walked along the fall line: turning on a steep descent
-is what makes this policy run away downhill (in the first recording on the live mission's map the route turned on the
-crater wall in its last metre, and the robot tumbled into the person half a second after arriving), so the custom
-quadruped's planner also pays for the slope across its direction of travel, and the route now turns on the flat
-border. The site's textured terrain needed one change for walking robots: on PhysX a collision mesh with material face
-subsets stops colliding (the robot fell through the ground), so the rescue tasks move the textures to a render-only
-copy of the terrain mesh. The Unitree Go2 with Isaac Lab's rough-terrain policy remains as a fallback (`--robot go2`,
-on Newton: that checkpoint flips within about 2 s on PhysX); it reached the crater person 4/4.
+The two rows marked T-pose people were walked before the people got their natural poses; on the plain survey map
+the route now comes down the crater's north wall, where one robot of the 32 tipped over 0.1 s after arriving.
+
+The pins do not say how a person lies, sits or stands; the height of a pin above the mapped ground tells a person on
+the ground from one on their feet (on the demo site 0.1-0.5 m for people lying or sitting, 0.8-1.9 m for standing
+ones), so the planner picks a person on the ground 15-25 m away first and gives them a larger footprint. On the
+recorded mission's report its first pick is a person sitting on the sand 18.4 m away (pin #37); the recorded finale
+names the person lying in the crater with `--goal_pin 32`. Steep ground is walked along the fall line: turning on a
+steep descent is what makes this policy run away downhill (in the first recording on the live mission's map the
+route turned on the crater wall in its last metre, and the robot tumbled into the person half a second after
+arriving), so the custom quadruped's planner also pays for the slope across its direction of travel, and the route
+now turns on the flat border. The site's textured terrain needed one change for walking robots: on PhysX a collision
+mesh with material face subsets stops colliding (the robot fell through the ground), so the rescue tasks move the
+textures to a render-only copy of the terrain mesh. The Unitree Go2 with Isaac Lab's rough-terrain policy remains as
+a fallback (`--robot go2`, on Newton: that checkpoint flips within about 2 s on PhysX); it reached the crater person
+4/4.
 
 ```bash
 CUDA_VISIBLE_DEVICES= python scripts/rescue_finale.py --plan_only --out rescue_plan    # CPU, seconds: plan only

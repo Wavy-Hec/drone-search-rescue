@@ -93,7 +93,7 @@ free lane next to the person: the recorded robot ran away there at 2.2 m/s and t
 after arriving (with 32 robots on that route none fell, but one reached 1.62 m/s and one stopped 1.01 m from the
 pin). The custom quadruped's planner therefore also pays `6 (cross_slope / max_slope)^2` per metre for the slope
 across its direction of travel. The route on that map now turns on the flat border and comes straight down the fall
-line: 32 of 32 robots, top speed 1.33 m/s, closest stop 1.50 m from the pin, and the recorded walk arrives cleanly.
+line: 32 of 32 robots, top speed 1.33 m/s, closest stop 1.63 m from the pin, and the recorded walk arrives cleanly.
 On the rim route (`--max_slope 22`), which ends on the slope above the person, the weight also stops the run-aways
 while slowing down there: no robot of 32 above 1.2 m/s instead of 8, closest stop 2.02 m from the person instead of
 0.94 m. On the ground truth the route comes down the crater's corner, where the fall line itself runs diagonally,
@@ -106,21 +106,23 @@ spawn jitter), no second tries:
 
 | Map and pins | Route | Robots reached | Time | Planned / walked | Falls |
 |---|---|---|---|---|---|
-| the recorded live mission's report (`drone_gcs/runs/sar_mission_final`: 9 of 9 people found) | north along the border, then straight down the crater's west wall to the drone's pin of person_08 (0.24 m from the true centre) | 32/32 | 23.9-24.7 s | 16.5 / 16.3-16.6 m | 0 |
-| an earlier full mission's report (`sar_demo_seed0`) | the same way, to that mission's pin of person_08 | 32/32 | 24.9-25.4 s | 17.1 / 16.9-17.3 m | 0 |
-| a partial mission report (`e2e_v2_gt`: the first 90 s of the flight, 5 people found) | border, past the crates to the drone's pin of person_02 (0.15 m off) | 32/32 | 19.8-21.5 s | 12.8 / 12.4-12.8 m | 0 |
-| the drone's survey map `runs/lawnmower_v1` (no detections: site pins) | down the crater's west wall to person_08 | 32/32 | 24.6-25.1 s | 16.9 / 16.7-17.1 m | 0 |
-| ground truth (default) | down the crater's south-west corner to person_08, lying face down on the crater floor 1.4 m below the rim | 32/32 | 22.5-23.4 s | 15.6 / 15.4-15.7 m | 0 |
-| ground truth, `--goal_pin person_04` | past the collapsed buildings to person_04, lying face up | 32/32 | 29.7-30.2 s | 18.6 / 18.3-18.6 m | 0 |
+| the recorded live mission's report (`drone_gcs/runs/sar_mission_hero`: 10 of 10 people found), `--goal_pin 32` | north along the border, then straight down the crater's west wall to the drone's pin of person_08 (0.05 m from the true centre) | 32/32 | 23.9-24.7 s | 16.5 / 16.3-16.6 m | 0 |
+| an earlier full mission's report (`sar_demo_seed0`), T-pose people | the same way, to that mission's pin of person_08 | 32/32 | 24.9-25.4 s | 17.1 / 16.9-17.3 m | 0 |
+| a partial mission report (`e2e_v2_gt`: the first 90 s of the flight, 5 people found), T-pose people | border, past the crates to the drone's pin of person_02 (0.15 m off) | 32/32 | 19.8-21.5 s | 12.8 / 12.4-12.8 m | 0 |
+| the drone's survey map `runs/lawnmower_v1` (no detections: site pins) | along the crater's north rim, then down its north wall to person_08 | 32/32 | 32.4-33.1 s | 22.8 / 22.4-23.1 m | 1 |
+| ground truth (default) | down the crater's south-west corner to person_08, lying in the recovery position on the crater floor 1.4 m below the rim | 32/32 | 23.5-24.1 s | 16.1 / 15.5-15.8 m | 0 |
+| ground truth, `--goal_pin person_04` | past the collapsed buildings to person_04, lying face up | 32/32 | 28.3-29.3 s | 17.5 / 17.3-17.6 m | 0 |
 | ground truth, `--max_slope 22` | along the crater's north rim, stops on the slope above person_08 | 32/32 | 34.7-36.8 s | 23.7 / 23.0-23.4 m | 0 |
-| ground truth, `--sar_seed 3` (another site) | to that site's person_04, lying face down | 32/32 | 31.5-33.4 s | 19.5 / 19.2-19.6 m | 0 |
+| ground truth, `--sar_seed 3` (another site) | to that site's person_04, lying face up | 32/32 | 33.5-38.3 s | 20.7 / 20.4-20.8 m | 0 |
 
-Mean cross-track error 2-10 cm, at most 17 cm (on the rim route up to 0.7 m: turning on the 22 deg slope above the
-person, a few robots drift downhill, with the cross-slope weight or without), walking speed 0.53-0.64 m/s at a cruise
-command of 0.7 m/s. The robots stop 1.35-2.2 m from the person's centre (the person's outline or, for a drone pin, a
-1.2 m circle, plus the robot's clearance); from the live mission's report 1.54-1.68 m from the real person's centre.
-With `--video` (one robot) on the live mission's report: 24.3 s, 16.5 m walked, no falls, stopped 1.62 m from the
-pin. In the earlier `sar_demo_seed0` report the detector also pinned a "barrel" 4.3 m above the landing pad (one of
+The two rows marked T-pose people were walked before the site's people got their natural poses; the others are on
+the site as it is now. On the plain survey map the route now ends on the crater's north wall, and one robot of the 32
+tipped over there 0.1 s after arriving. Mean cross-track error 2-10 cm, at most 23 cm (on the rim route up to 0.7 m:
+turning on the 22 deg slope above the person, a few robots drift downhill, with the cross-slope weight or without),
+walking speed 0.51-0.68 m/s at a cruise command of 0.7 m/s. The robots stop 0.8-2.2 m from the person's centre (the
+person's outline or, for a drone pin, a 1.2 m circle, plus the robot's clearance); from the live mission's report
+1.58-1.72 m from the real person's centre. With `--video` (one robot) on the live mission's report: 24.3 s, 16.5 m
+walked, no falls, stopped 1.74 m from the pin. In the earlier `sar_demo_seed0` report the detector also pinned a "barrel" 4.3 m above the landing pad (one of
 its three false alarms); the planner keeps clear of every pin, so that robot starts 0.75 m west of the pad's centre.
 The live mission's report has no such pin.
 
