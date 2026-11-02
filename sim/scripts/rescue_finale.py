@@ -218,6 +218,9 @@ from drone_lab.teaming.inputs import (
 from drone_lab.teaming.planner import PlanResult, plan_path
 from drone_lab.teaming.traversability import Footprint, TraversabilityCfg, TraversabilityMap, compute_traversability
 
+VIEWER_CAMERA = "/OmniverseKit_Persp"
+"""Camera prim of the Kit visualizer: the window's viewport and the video recorder."""
+
 PERSON_RADIUS = {"lying": 1.2, "standing": 0.7}
 """Footprint radius of a person without an exact outline (a drone pin), by pose [m]: the body and outstretched arms
 (1.8 m long lying, 1.7 m from hand to hand) plus about 0.3 m for the pin's error."""
@@ -532,11 +535,34 @@ def configure_env(env_cfg, ctx: dict, profile: RobotProfile, max_time: float) ->
         w, h = args_cli.video_size
         eye, lookat = overview_camera(plan)
         env_cfg.sim.visualizer_cfgs = [
-            KitVisualizerCfg(headless=not open_window, window_width=w, window_height=h, eye=eye, lookat=lookat)
+            KitVisualizerCfg(
+                headless=not open_window,
+                window_width=w,
+                window_height=h,
+                eye=eye,
+                lookat=lookat,
+                background_color=None,  # the sky dome behind the terrain, not a flat colour
+            )
         ]
         args_cli.enable_cameras = True
         if not open_window:
             args_cli.headless = True
+
+
+def add_ground_to_horizon(stage, term, terrain_generator) -> None:
+    """Grass from the site's edge to the horizon, for the video camera only (as in the drone mission's video).
+
+    The robot starts on the landing pad near a corner of the site, so the follow camera's first shots look past the
+    terrain edge, where the renderer would otherwise show an empty background.
+    """
+    from drone_lab.sar.chase_view import isolate_chase_view, rim_points, spawn_ground_skirt
+    from drone_lab.tasks.rescue.rescue_env_cfg import SITE_PRIM_PATH
+    from drone_lab.teaming.inputs import survey_site_bounds
+
+    bounds = survey_site_bounds(terrain_generator)[1]
+    rim_z = float(np.min(term.terrain_height(rim_points(bounds))))
+    isolate_chase_view(stage, VIEWER_CAMERA, [])
+    spawn_ground_skirt(stage, bounds, rim_z - 0.005, f"{SITE_PRIM_PATH}/Looks/ground_grass")
 
 
 def overview_camera(plan: PlanResult) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
@@ -650,9 +676,7 @@ class FollowCam:
         try:
             from isaaclab_physx.renderers.kit_viewport_utils import set_kit_renderer_camera_view
 
-            set_kit_renderer_camera_view(
-                eye=np.array(eye), target=np.array(target), camera_prim_path="/OmniverseKit_Persp"
-            )
+            set_kit_renderer_camera_view(eye=np.array(eye), target=np.array(target), camera_prim_path=VIEWER_CAMERA)
         except Exception:
             pass
 
@@ -835,6 +859,10 @@ def walk(ctx: dict, run_dir: Path, profile: RobotProfile) -> int:
             if viz is None:
                 log("WARNING: no Kit visualizer is active; no video")
             else:
+                try:
+                    add_ground_to_horizon(base.sim.stage, term, env_cfg.scene.terrain.terrain_generator)
+                except Exception as exc:  # scenery only
+                    log(f"WARNING: no ground beyond the site's edge ({exc})")
                 writer = open_mp4_writer(run_dir / "rescue.mp4", fps)
                 if args_cli.camera == "follow":
                     cam = FollowCam(viz, scale=profile.camera_scale)
