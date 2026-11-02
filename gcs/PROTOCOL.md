@@ -155,7 +155,7 @@ Vehicle state, typically 10 to 50 Hz.
 | `ang_vel` | [wx, wy, wz] rad/s | angular velocity (as given by the sim) |
 | `wp_index` | int | index into `planned_path` of the waypoint currently targeted |
 | `carrot` | [x, y, z] m, world | current tracking target (carrot) |
-| `phase` | str | mission phase, e.g. `takeoff`, `transit`, `survey`, `return`, `descent`, `touchdown` (shown in the HUD) |
+| `phase` | str | mission phase, e.g. `takeoff`, `transit`, `survey`, `return`, `descent`, `touchdown` (shown in the HUD); `landed` once the drone sits on the ground with its motors off (the camera panel then shows a LANDED card) |
 
 ### SCAN
 Mapping ray-caster hits, typically 5 to 20 Hz. Each scan updates the elevation map: per-cell count, sum,

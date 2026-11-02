@@ -22,7 +22,7 @@ import cv2
 import numpy as np
 
 from .mapping import GridSpec
-from .state import CameraFrame, GCSState
+from .state import CameraFrame, DroneState, GCSState
 from .text import TextRenderer
 
 LAYERS = ("elevation", "photo", "coverage")
@@ -456,14 +456,11 @@ class MapRenderer:
                 pts = np.round(view.pts(tr[:, 1:3])).astype(np.int32)
                 cv2.polylines(img, [pts], False, (0, 0, 0), 4, aa)
                 cv2.polylines(img, [pts], False, PAL["orange"], 2, aa)
-        # current waypoint + carrot
+        # current waypoint + carrot, while the drone flies
         for d in state.drones.values():
-            if (
-                state.planned_path is not None
-                and d.wp_index is not None
-                and 0 <= d.wp_index < len(state.planned_path)
-                and not report
-            ):
+            if report or state.ended or d.phase == "landed":
+                continue
+            if state.planned_path is not None and d.wp_index is not None and 0 <= d.wp_index < len(state.planned_path):
                 wp = state.planned_path[int(d.wp_index)]
                 c = view.pt(wp[0], wp[1])
                 cv2.circle(img, c, 9, (0, 0, 0), 3, aa)
@@ -481,7 +478,7 @@ class MapRenderer:
                     pad=2,
                     bg_alpha=0.55,
                 )
-            if d.carrot is not None and not report:
+            if d.carrot is not None:
                 c = view.pt(d.carrot[0], d.carrot[1])
                 cv2.drawMarker(img, c, PAL["magenta"], cv2.MARKER_CROSS, 9, 2, aa)
         # landing pad
@@ -767,6 +764,9 @@ class Dashboard:
         x, y, w, h = self.r_cam
         did = ui.get("active_drone")
         d = state.drones.get(did) if did is not None else None
+        if d is not None and (d.phase == "landed" or (state.ended and state.end_reason == "landed")):
+            self._landed_card(img, state, d)
+            return
         frame: CameraFrame | None = None
         if d is not None:
             frame = d.camera
@@ -836,6 +836,29 @@ class Dashboard:
         if frame.depth is None:
             info += "   (no depth)"
         t.put(roi, info, 8, dh - 8, 12, PAL["white"], "mono", anchor="lb", bg=(20, 20, 20), pad=3, bg_alpha=0.55)
+
+    def _landed_card(self, img, state: GCSState, d: DroneState) -> None:
+        """The camera panel once the drone sits on the ground (its camera a hand's width above the pad sees only
+        noise): where it landed, when, and how far it flew."""
+        t = self.text
+        x, y, w, h = self.r_cam
+        t.put(img, f"CAMERA   drone {d.drone_id}   motors off", x + 10, y + 13, 13, PAL["fg"], "medium", anchor="lm")
+        ix, iy, iw, ih = x + 1, y + 27, w - 1, h - 27
+        img[iy : iy + ih, ix : ix + iw] = (24, 20, 20)
+        cx, cy = ix + iw // 2, iy + ih // 2
+        cv2.circle(img, (cx, cy - 62), 42, PAL["green"], 3, cv2.LINE_AA)
+        t.put(img, "H", cx, cy - 62, 44, PAL["green"], "bold", anchor="mm")
+        t.put(img, "LANDED", cx, cy + 14, 40, PAL["green"], "bold", anchor="mm")
+        if state.home is not None and d.pos is not None:
+            off = math.hypot(d.pos[0] - state.home[0], d.pos[1] - state.home[1])
+            dist = f"{1000 * off:.0f} mm" if off < 0.1 else f"{off:.2f} m"
+            t.put(img, f"{dist} from the centre of the landing pad", cx, cy + 58, 16, PAL["fg"], "medium", anchor="mm")
+        touchdown = d.landed_t
+        if touchdown is None:
+            touchdown = (state.end_fields.get("stats") or {}).get("touchdown_t")
+        if touchdown is not None and state.t_first is not None:
+            sub = f"touchdown T+{fmt_time(touchdown - state.t_first)}   {state.flown_length():.0f} m flown"
+            t.put(img, sub, cx, cy + 86, 13, PAL["dim"], "medium", anchor="mm")
 
     def _objects(self, img, state: GCSState, ui: dict) -> None:
         t = self.text

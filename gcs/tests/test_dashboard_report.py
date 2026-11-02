@@ -116,6 +116,32 @@ class TestDashboardAndReport(unittest.TestCase):
         x, y, w, h = dash.r_cam
         self.assertGreater(img[y + 30 : y + h - 2, x + 2 : x + w - 2].std(), 10)
 
+    def test_landed_card_replaces_the_camera_image(self):
+        dash = Dashboard((1600, 900))
+        ui = {"layer": "elevation", "active_drone": 0, "detector_on": True, "link": {"connected": True}}
+        x, y, w, h = dash.r_cam
+        mx, my, mw, mh = dash.r_map
+        d = self.state.drones[0]
+        live = dash.render(self.state, ui)
+        flying = d.phase, d.landed_t
+        d.phase, d.landed_t = "landed", d.t
+        try:
+            landed = dash.render(self.state, ui)
+        finally:
+            d.phase, d.landed_t = flying
+        card = landed[y + 30 : y + h - 2, x + 2 : x + w - 2]
+        background = np.all(card == (24, 20, 20), axis=-1).mean()
+        green = np.all(np.abs(card.astype(int) - PAL["green"]) < 8, axis=-1).sum()
+        self.assertGreater(background, 0.85)  # the card, not the camera image
+        self.assertLess(np.all(live[y + 30 : y + h - 2, x + 2 : x + w - 2] == (24, 20, 20), axis=-1).mean(), 0.5)
+        self.assertGreater(green, 500)  # LANDED and the pad sign
+
+        def waypoint_pixels(img):  # the current waypoint's yellow ring and label on the map (legend left out)
+            return np.all(img[my + 27 : my + mh, mx : mx + mw - 180] == PAL["yellow"], axis=-1).sum()
+
+        self.assertGreater(waypoint_pixels(live), 20)
+        self.assertEqual(waypoint_pixels(landed), 0)
+
     def test_report_files(self):
         tmp = Path(short_tmpdir("dgcs_rep"))
         try:

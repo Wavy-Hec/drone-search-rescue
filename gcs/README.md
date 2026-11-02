@@ -49,9 +49,10 @@ The drone takes off from its landing pad, flies a lawnmower over the 40 × 40 m 
 up), comes back and lands on the pad: about 6 minutes of flight. The flight plan and its camera-overlap math are
 in drone_lab (`src/drone_lab/sar/mission.py`). The ground station uses the YOLO26n fine-tuned on simulator images
 (`~/isaac_ws/assets/models/drone_sar_yolo26n.pt`) when it exists, otherwise the stock COCO model; `--weights`
-picks another one. After the landing the window shows MISSION END and stays open; `q` (or closing it) writes
-the report to `runs/sar_live/` (`report.md` first); `--exit-on-end` does that by itself a few seconds after the
-landing.
+picks another one. From the touchdown on, the camera panel shows a LANDED card instead of the camera (a hand's
+width above the pad it sees only noise): how far from the centre of the pad the drone landed, when, and how far it
+flew. After the landing the window shows MISSION END and stays open; `q` (or closing it) writes the report to
+`runs/sar_live/` (`report.md` first); `--exit-on-end` does that by itself a few seconds after the landing.
 
 **The demo video.** The two sides record on their own clocks: the simulator one frame per 0.1 s step
 (`mission.mp4`), the ground station its dashboard in wall-clock time (`dashboard.mp4`); each writes the sim time
@@ -397,7 +398,7 @@ DRONE_GCS_SKIP_E2E=1 ./run_tests.sh # without the end-to-end run
 | Detectors | The blob detector finds every object. The worker keeps the newest frame. Default weights: `$DRONE_GCS_WEIGHTS`, else the fine-tuned model if present, else COCO. YOLO wrapper: 2 CPU inferences on Ultralytics' `bus.jpg`; class filters validated (typos raise) and matched after `--class-map` |
 | Dataset tools | `seg_to_yolo` on synthetic segmentation gives exact labels, keeps cut-off boxes, paints over tiny ones. Split capture folders stay the splits, and the full box of a cut-off object decides whether it stays. Block split gives train data and ~15 % val from 8 to 2000 frames. `train_detector --dry-run`. `eval_detector` counts found, missed and false alarms from the station detector's boxes, and the people it finds in each frame |
 | Sender import | The sender imports without cv2, torch or PIL. **A sender process in env_isaaclab** sends to a receiver in vision, and arrays arrive bit-exact |
-| Dashboard and report | All three layers render. Labels take the first spot inside the image that hides nothing (else the one that hides least); map labels keep clear of each other and of a landed drone. All report files are written, `report.md` included; the scorecard counts people and false alarms against the ground truth, and the map height error against the true terrain is under 5 cm on smooth ground |
+| Dashboard and report | All three layers render. Labels take the first spot inside the image that hides nothing (else the one that hides least); map labels keep clear of each other and of a landed drone. Once the drone has landed, the camera panel shows the LANDED card and the map drops the waypoint marker. All report files are written, `report.md` included; the scorecard counts people and false alarms against the ground truth, and the map height error against the true terrain is under 5 cm on smooth ground |
 | End to end | Fake drone process → socket → headless GCS process. Coverage grows monotonically to over 98 %. Elevation error is under 1 cm RMSE on smooth cells (measured 2.6 mm) and under 5 mm median. All synthetic objects are found with no false positives and a mean horizontal error under 25 cm |
 
 ## Results

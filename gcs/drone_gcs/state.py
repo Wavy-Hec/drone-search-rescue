@@ -73,6 +73,7 @@ class DroneState:
     wp_index: int | None = None
     carrot: np.ndarray | None = None
     phase: str = ""  # mission phase reported by the drone (take-off, survey, ...)
+    landed_t: float | None = None  # sim time of the first "landed" phase (touchdown, motors off)
     yaw: float = 0.0
     camera: CameraFrame | None = None
     det_frame: CameraFrame | None = None
@@ -351,6 +352,8 @@ class GCSState:
         d.carrot = np.asarray(f["carrot"], dtype=np.float64) if f.get("carrot") is not None else None
         d.yaw = yaw_from_quat(d.quat)
         d.phase = str(f.get("phase") or "")
+        if d.phase == "landed" and d.landed_t is None:
+            d.landed_t = msg.t
         self._touch_time(msg.t)
         self._ensure_grid(pos[0], pos[1])
         t = msg.t if msg.t is not None else 0.0
