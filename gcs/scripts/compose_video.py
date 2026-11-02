@@ -10,7 +10,7 @@ dashboard plays on for ``--tail`` seconds next to the last view, so the end of t
 
 Example (conda env ``vision``, from this repository)::
 
-    python scripts/compose_video.py --gcs runs/sar_live --sim ~/isaac_ws/projects/drone_lab/runs/sar_mission_seed0
+    python scripts/compose_video.py --gcs runs/sar_live --sim ../sim/runs/sar_live
 
 writes ``runs/sar_live/demo.mp4`` (H.264): the simulator view scaled to the dashboard's height on the left, the
 dashboard on the right (``--layout stack``: on top of each other). ``--speed 2`` plays it twice as fast with every

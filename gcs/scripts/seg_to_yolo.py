@@ -11,8 +11,8 @@ one for all frames.
 
 The search-and-rescue site of drone_lab writes split captures directly (``scripts/gen_yolo_dataset.py``)::
 
-    python scripts/seg_to_yolo.py --src ~/isaac_ws/datasets/drone_sar_yolo/capture \\
-        --out ~/isaac_ws/datasets/drone_sar_yolo/yolo --classes person,vehicle,crate,barrel,pallet,cone,landing_pad \\
+    python scripts/seg_to_yolo.py --src ../datasets/drone_sar_yolo/capture \\
+        --out ../datasets/drone_sar_yolo/yolo --classes person,vehicle,crate,barrel,pallet,cone,landing_pad \\
         --min-area 100 --min-side 6 --max-truncation 0.6
 
 Saving captures from another Isaac Lab camera (data_types=["rgb", "instance_id_segmentation_fast"] and
@@ -23,7 +23,7 @@ colorize_instance_id_segmentation=False)::
     np.save(f"cap/instance_{k:06d}.npy", out["instance_id_segmentation_fast"].torch[0, ..., 0].cpu().numpy())
     json.dump(info["instance_id_segmentation_fast"], open(f"cap/instance_{k:06d}.json", "w"))
 
-    python scripts/seg_to_yolo.py --src ~/isaac_ws/datasets/drone_capture --out ~/isaac_ws/datasets/drone_yolo \\
+    python scripts/seg_to_yolo.py --src ../datasets/drone_capture --out ../datasets/drone_yolo \\
         --classes car,tent,person,tarp --prim-rules "Car=car,Tent=tent,Person=person,Tarp=tarp"
 """
 

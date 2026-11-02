@@ -1,6 +1,7 @@
 """The sender must import with only the standard library + numpy (it runs inside Isaac Sim's Python)."""
 
 import os
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -15,7 +16,17 @@ from drone_gcs.link import Receiver
 
 from ._util import ROOT, rmtree, short_tmpdir
 
-ISAAC_PY = Path(os.path.expanduser("~/anaconda3/envs/env_isaaclab/bin/python"))
+
+def conda_env_python(name: str) -> Path | None:
+    """``bin/python`` of the conda env ``name`` of the conda in use (``$CONDA_EXE``, else on PATH), if it exists."""
+    conda = os.environ.get("CONDA_EXE") or shutil.which("conda")
+    if not conda:
+        return None
+    python = Path(conda).resolve().parents[1] / "envs" / name / "bin" / "python"
+    return python if python.is_file() else None
+
+
+ISAAC_PY = conda_env_python("env_isaaclab")
 
 SENDER_SCRIPT = textwrap.dedent(
     """
@@ -55,7 +66,7 @@ class TestSenderImport(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(out.stdout.strip(), "[]")
 
-    @unittest.skipUnless(ISAAC_PY.exists(), "env_isaaclab not found")
+    @unittest.skipUnless(ISAAC_PY, "env_isaaclab not found")
     def test_isaaclab_env_sender_to_gcs_receiver(self):
         """Sender in env_isaaclab (numpy 2.3) -> Receiver here (numpy 2.5): arrays arrive bit-exact."""
         tmp = short_tmpdir("dgcs_x")

@@ -8,7 +8,7 @@ Run it in the conda env ``vision``, then start the simulator (``drone_lab/script
 Examples::
 
     python scripts/gcs.py                                  # window + mp4, YOLO on the CPU (fine-tuned model if present)
-    python scripts/gcs.py --weights ~/isaac_ws/assets/models/yolo26n.pt   # the stock COCO model
+    python scripts/gcs.py --weights models/yolo26n.pt      # the stock COCO model
     python scripts/gcs.py --detector gt                    # boxes from the simulator (sar_mission.py --gt_boxes)
     python scripts/gcs.py --detector blob --name demo      # colour-blob stand-in for the fake world
     python scripts/gcs.py --headless --detector blob       # record only, exit after END

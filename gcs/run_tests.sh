@@ -6,7 +6,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 if [[ "${CONDA_DEFAULT_ENV:-}" != "vision" ]]; then
-  source "$HOME/anaconda3/etc/profile.d/conda.sh"
+  CONDA_BASE=$(conda info --base) || { echo "conda not found: run 'conda activate vision' first" >&2; exit 1; }
+  source "$CONDA_BASE/etc/profile.d/conda.sh"
   conda activate vision
 fi
 if [[ $# -gt 0 ]]; then
