@@ -75,6 +75,49 @@ def test_physics_defaults_to_isaacsim_physx(task_id):
 
 
 @pytest.mark.parametrize("task_id", [FLAT, ROUGH, DEPTH])
+def test_execution_settings_per_backend(task_id):
+    """Isaac Sim PhysX runs with the 2.x execution settings; Newton and OvPhysX keep the Isaac Lab 3.0 defaults."""
+    from isaaclab.sim import SimulationCfg
+    from isaaclab_ov.physics import OvPhysxCfg
+
+    native_default = SimulationCfg().use_newton_actuators  # Isaac Lab 3.0: native actuators
+    assert native_default is True
+    for play_mode in (False, True):
+        for overrides in ([], ["physics=isaacsim_physx"], ["physics=physx"]):
+            env_cfg, _ = _resolve(task_id, overrides, play_mode=play_mode)
+            assert env_cfg.sim.use_newton_actuators is False, overrides  # Isaac Lab's actuator path, as in 2.x
+            assert env_cfg.sim.physics.enable_external_forces_every_iteration is False, overrides  # 2.3.2 TGS
+        for overrides in (["physics=newton_mjwarp"], ["physics=newton_kamino"]):
+            env_cfg, _ = _resolve(task_id, overrides, play_mode=play_mode)
+            assert env_cfg.sim.use_newton_actuators is native_default, overrides
+        env_cfg, _ = _resolve(task_id, ["physics=ovphysx"], play_mode=play_mode)
+        assert env_cfg.sim.use_newton_actuators is native_default
+        assert (
+            env_cfg.sim.physics.enable_external_forces_every_iteration
+            is OvPhysxCfg().enable_external_forces_every_iteration
+        )
+
+
+@pytest.mark.parametrize("task_id", [FLAT, ROUGH, DEPTH])
+def test_3x_execution_defaults_are_one_override_away(task_id):
+    """The documented overrides restore the Isaac Lab 3.0 execution defaults on Isaac Sim PhysX, per run."""
+    from isaaclab.sim import SimulationCfg
+    from isaaclab_physx.physics import PhysxCfg
+
+    overrides = ["env.sim.use_newton_actuators=true", "env.sim.physics.enable_external_forces_every_iteration=true"]
+    env_cfg, _ = _resolve(task_id, ["physics=isaacsim_physx", *overrides])
+    assert env_cfg.sim.use_newton_actuators is SimulationCfg().use_newton_actuators is True
+    assert (
+        env_cfg.sim.physics.enable_external_forces_every_iteration
+        is PhysxCfg().enable_external_forces_every_iteration
+        is True
+    )
+    # the other way round, a Newton run can still switch to Isaac Lab's actuator path
+    env_cfg, _ = _resolve(task_id, ["physics=newton_mjwarp", "env.sim.use_newton_actuators=false"])
+    assert env_cfg.sim.use_newton_actuators is False
+
+
+@pytest.mark.parametrize("task_id", [FLAT, ROUGH, DEPTH])
 def test_play_mode_matches_2x_play_classes(task_id):
     env_cfg, _ = _resolve(task_id, ["physics=isaacsim_physx"], play_mode=True)
     assert env_cfg.scene.num_envs <= 50
@@ -426,6 +469,8 @@ def test_parity_with_2x_sources():
     assert not old["skipped"]
     comparer = parity.compare_with_2x(old["state"], CustomQuadRoughEnvCfg(), old["defaults"])
     assert not comparer.problems and comparer.checked > 200
+    checks = parity.execution_checks(old, CustomQuadRoughEnvCfg())
+    assert all(expected == actual for expected, actual in checks.values()), checks
     # negative control: changed 3.0 values are reported, including a parameter the 2.x config leaves at its default
     cfg = CustomQuadRoughEnvCfg()
     cfg.rewards.dof_acc_l2.weight = -1.0e-6
@@ -438,3 +483,8 @@ def test_parity_with_2x_sources():
         "['boxes'].grid_height_range",
     ):
         assert path in problems, path
+    # ... and so are the Isaac Lab 3.0 execution defaults, which the 2.x policy was not trained with
+    cfg.sim.physics.default.enable_external_forces_every_iteration = True
+    cfg.sim.use_newton_actuators = True
+    checks = parity.execution_checks(old, cfg)
+    assert [name for name, (expected, actual) in checks.items() if expected != actual] == list(checks)

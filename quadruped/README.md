@@ -27,23 +27,22 @@ on. The Isaac Lab 3.0 velocity base would otherwise default to Newton MJWarp. Ne
 `physics=newton_mjwarp`. `physics=physx` (an auto preset that would pick the uninstalled OvPhysX for headless runs) is
 aliased to Isaac Sim PhysX in these configs; still prefer the explicit `physics=isaacsim_physx`.
 
-### 2.x parity switches (for the converted checkpoint)
+### 2.x execution settings (default on Isaac Sim PhysX)
 
-Two Isaac Lab 3.0 execution defaults change how the 2.x policy behaves on Isaac Sim PhysX. Pass both when you replay
-or fine-tune the converted checkpoint:
+Two Isaac Lab 3.0 execution defaults change how the 2.x policy behaves on Isaac Sim PhysX, so the tasks use the 2.x
+values there (Newton keeps the 3.0 defaults):
 
 ```
 env.sim.use_newton_actuators=false env.sim.physics.enable_external_forces_every_iteration=false
 ```
 
 * `use_newton_actuators=false`: 3.0's native actuator path feeds the DC-motor PD joint positions that are 1-3 physics
-  substeps old on Isaac Sim PhysX (an Isaac Lab 3.0 defect); the legacy path uses fresh ones, as 2.x did. Also
-  recommended for new PhysX training until upstream fixes it.
+  substeps old on Isaac Sim PhysX (an Isaac Lab 3.0 defect); the legacy path uses fresh ones, as 2.x did.
 * `enable_external_forces_every_iteration=false`: the 2.3.2 TGS setting (3.0 flipped the default).
 
 With both, the replay matches the same checkpoint run in Isaac Lab 2.3.2 (about 19 % of 20 s episodes end in a fall in
-both; tracking error 0.19 m/s); without them its velocity-tracking error is about a third higher. The project defaults
-stay at the 3.0 values because both switches select deprecated APIs. Numbers: PORT_NOTES section 14.2.
+both; tracking error 0.19 m/s); without them its velocity-tracking error is about a third higher. Passing the two
+tokens above is now redundant; `=true` for both restores the Isaac Lab 3.0 defaults. Numbers: PORT_NOTES section 14.2.
 
 ### Newton (opt-in)
 

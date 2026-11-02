@@ -18,21 +18,23 @@ play_rsl_rl.py``): preset/Hydra tokens from the command line, ``resolve_task_con
 * mean episode reward per term in the Isaac Lab log convention (episode sum / max_episode_length_s, i.e. the
   ``Episode_Reward/<term>`` value TensorBoard shows) and the total;
 * mean trunk height above the scanned terrain and the fraction of alive steps with ground contact on the
-  ``*_foot`` and ``*_calf`` bodies (PORT_NOTES risk 10).
+  ``*_foot`` and ``*_calf`` bodies (the feet-contact finding in PORT_NOTES.md).
 
 Policies: ``--policy checkpoint`` (rsl-rl 5 checkpoint via ``--checkpoint``), ``zero`` (all-zero actions = hold the
 default joint pose) or ``random`` (uniform [-1, 1]).
 
-Run from the project root (headless, Kit + Isaac Sim PhysX), e.g. the 2.x-parity replay of PORT_NOTES section 14::
+Run from the project root (headless, Kit + Isaac Sim PhysX), e.g. the converted 2.x policy::
 
     python scripts/eval_policy.py --task Isaac-Velocity-Rough-Custom-Quad-v0 --num_envs 128 --episodes 2 \\
         --policy checkpoint --checkpoint "$PWD/checkpoints_2x/height_scanner_model_rslrl5.pt" --seed 42 \\
-        --label best --out logs/eval/best_s42.json physics=isaacsim_physx \\
-        env.sim.use_newton_actuators=false env.sim.physics.enable_external_forces_every_iteration=false
+        --out logs/eval/rough_s42.json
 
 The summary line starts with ``[EVAL] summary:``; ``--out`` adds the per-episode records. The simulation is
-deterministic for a fixed seed and ``num_envs``, so variants are compared with the same seeds (A/B one change at a
-time). ``--native_refresh measure`` reproduces the stale joint-state measurement of the native actuator path.
+deterministic for a fixed seed and ``num_envs``, so variants are compared with the same seeds, one change at a time
+(e.g. the Isaac Lab 3.0 execution defaults:
+``env.sim.use_newton_actuators=true env.sim.physics.enable_external_forces_every_iteration=true``).
+``--native_refresh measure`` (with ``env.sim.use_newton_actuators=true``) measures how stale the joint state is that
+the native actuator path reads on Isaac Sim PhysX.
 """
 
 from __future__ import annotations
@@ -66,10 +68,10 @@ def _parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
         "--native_refresh",
         choices=("off", "measure", "fix"),
         default="off",
-        help="Patch PhysxActuatorControl.compute_native_actuators in this process: 'measure' records how stale the "
-        "joint-state buffers bound to the native actuators are on each physics substep (then restores them, so the "
-        "dynamics are unchanged); 'fix' refreshes them before every actuator step, like the non-identity-ordering "
-        "branch.",
+        help="Native actuator path only (env.sim.use_newton_actuators=true): patch "
+        "PhysxActuatorControl.compute_native_actuators in this process. 'measure' records how stale the joint-state "
+        "buffers bound to the native actuators are on each physics substep (then restores them, so the dynamics are "
+        "unchanged); 'fix' refreshes them before every actuator step, like the non-identity-ordering branch.",
     )
     add_launcher_args(parser)
     return setup_preset_cli(parser, argv)
@@ -99,6 +101,8 @@ def main(argv: list[str] | None = None) -> int:
     env_cfg, agent_cfg = resolve_task_config(
         args_cli.task, "rsl_rl_cfg_entry_point", play_mode=not args_cli.train_env_cfg
     )
+    if args_cli.native_refresh != "off" and not env_cfg.sim.use_newton_actuators:
+        raise SystemExit("--native_refresh patches the native actuator path: add env.sim.use_newton_actuators=true")
     t_start = time.time()
     with launch_simulation(env_cfg, args_cli), contextlib.ExitStack() as cleanup:
         agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, check_rsl_rl_version())

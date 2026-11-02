@@ -22,11 +22,13 @@ Checked:
   rewards, terminations, events, curriculum, height scanner, contact sensor, terrain importer and generator, timing,
   number of envs and the PhysX scene setting; term parameters a config leaves out are compared through the term
   functions' default values (2.3.2 source vs. 3.0 signature);
-* the robot's default pose and DC-motor parameters (``custom_quad.py``).
+* the robot's default pose and DC-motor parameters (``custom_quad.py``);
+* how Isaac Sim PhysX executes the actions: the TGS ``enable_external_forces_every_iteration`` flag against the 2.3.2
+  ``PhysxCfg`` default, and the actuator path (Isaac Lab 2.x had no native actuator path).
 
 Not checked here: defaults of the config classes themselves that neither side sets (for example
 ``ContactSensorCfg.force_threshold``), rendering-only settings (sky light, terrain visual material) and the function
-bodies; PORT_NOTES.md section 5 lists the manual diffs for those.
+bodies; PORT_NOTES.md lists the manual diffs for those.
 
 Usage (from the project root, conda env ``env_isaaclab`` active)::
 
@@ -45,12 +47,17 @@ import operator
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from quadruped_lab.tasks.locomotion.config.custom_quad.rough_env_cfg import CustomQuadRoughEnvCfg
 
 HOME = Path.home()
 DEFAULT_OLD_LAB = HOME / "IsaacLab"
 DEFAULT_OLD_TASK = HOME / "quadruped_rough_terrain" / "custom_quadruped"
 OLD_BASE_REL = "source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/velocity_env_cfg.py"
 OLD_ROUGH_TERRAINS_REL = "source/isaaclab/isaaclab/terrains/config/rough.py"
+OLD_SIM_CFG_REL = "source/isaaclab/isaaclab/sim/simulation_cfg.py"
 OLD_MDP_RELS = (  # where the 2.x velocity mdp functions are defined (velocity package first)
     "source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/mdp/rewards.py",
     "source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/mdp/curriculums.py",
@@ -555,6 +562,39 @@ def compare_with_2x(old_state: Call, cfg, old_defaults: dict[str, dict]) -> CfgC
     return comparer
 
 
+def old_class_fields(source: str, class_name: str) -> dict[str, object]:
+    """Annotated fields of a 2.x config class with their literal defaults (``None`` where not a literal)."""
+    cls = next(n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.ClassDef) and n.name == class_name)
+    fields: dict[str, object] = {}
+    for node in cls.body:
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            try:
+                fields[node.target.id] = None if node.value is None else ast.literal_eval(node.value)
+            except ValueError:
+                fields[node.target.id] = None
+    return fields
+
+
+def execution_checks(old: dict, cfg: CustomQuadRoughEnvCfg) -> dict[str, tuple[object, object]]:
+    """How Isaac Sim PhysX executes the policy's actions: ``{check: (2.x value, 3.0 default)}``.
+
+    * TGS external forces: the 2.3.2 ``PhysxCfg`` default vs the task's Isaac Sim PhysX default.
+    * Native actuator path: Isaac Lab 2.x ran every actuator on Isaac Lab's actuator path (its ``SimulationCfg`` has
+      no ``use_newton_actuators`` field); the task's per-backend preset must keep Isaac Sim PhysX on that path.
+    """
+    physx_2x = old_class_fields(old["sim_cfg_src"], "PhysxCfg")
+    sim_2x = old_class_fields(old["sim_cfg_src"], "SimulationCfg")
+    native = cfg.sim.use_newton_actuators
+    native = getattr(native, "default", native)  # unresolved cfg: per-backend preset whose default is PhysX
+    return {
+        "TGS external forces every iteration": (
+            physx_2x["enable_external_forces_every_iteration"],
+            cfg.sim.physics.default.enable_external_forces_every_iteration,
+        ),
+        "native actuator path": (sim_2x.get("use_newton_actuators", False), native),
+    }
+
+
 def load_old_sources(old_lab: Path, old_task: Path) -> dict:
     """Read the 2.x sources (2.3.2 files from git HEAD, Hector's task files) and evaluate the rough env cfg."""
 
@@ -565,6 +605,7 @@ def load_old_sources(old_lab: Path, old_task: Path) -> dict:
 
     out = {
         "base_src": old_file(OLD_BASE_REL),
+        "sim_cfg_src": old_file(OLD_SIM_CFG_REL),
         "rough_src": (old_task / "rough_env_cfg.py").read_text(),
         "custom_quad_src": (old_task / "custom_quad.py").read_text(),
     }
@@ -609,20 +650,21 @@ def main(argv: list[str] | None = None) -> int:
     if [t["name"] for t in old_terms] != [t["name"] for t in new_terms]:
         problems.append(f"term order differs: {[t['name'] for t in old_terms]} vs {[t['name'] for t in new_terms]}")
     rows, offset = [], 0
-    for old, new in zip(old_terms, new_terms, strict=False):
-        dim = dims[new["func"]]
-        old_noise = None if old["noise"] is None else (old["noise"]["n_min"], old["noise"]["n_max"])
-        new_noise = None if new["noise"] is None else (new["noise"]["n_min"], new["noise"]["n_max"])
+    for old_term, new_term in zip(old_terms, new_terms, strict=False):
+        dim = dims[new_term["func"]]
+        old_noise = None if old_term["noise"] is None else (old_term["noise"]["n_min"], old_term["noise"]["n_max"])
+        new_noise = None if new_term["noise"] is None else (new_term["noise"]["n_min"], new_term["noise"]["n_max"])
         same = (
-            old["func"] == new["func"]
+            old_term["func"] == new_term["func"]
             and old_noise == new_noise
-            and old["clip"] == new["clip"]
-            and old["scale"] == new["scale"]
-            and (new["noise"] is None or new["noise"]["op"] == "add")
+            and old_term["clip"] == new_term["clip"]
+            and old_term["scale"] == new_term["scale"]
+            and (new_term["noise"] is None or new_term["noise"]["op"] == "add")
         )
         if not same:
-            problems.append(f"term '{new['name']}' differs: 2.x={old} 3.0={new}")
-        rows.append((new["name"], new["func"], dim, f"{offset}-{offset + dim - 1}", new_noise, new["clip"], same))
+            problems.append(f"term '{new_term['name']}' differs: 2.x={old_term} 3.0={new_term}")
+        row = (new_term["name"], new_term["func"], dim, f"{offset}-{offset + dim - 1}", new_noise, new_term["clip"])
+        rows.append((*row, same))
         offset += dim
     if offset != ckpt_in:
         problems.append(f"observation size {offset} != checkpoint input {ckpt_in}")
@@ -664,6 +706,7 @@ def main(argv: list[str] | None = None) -> int:
             act_cfg.friction,
         ),
     )
+    checks.update(execution_checks(old, cfg))
     for name, (expected, actual) in checks.items():
         if expected != actual:
             problems.append(f"{name}: 2.x={expected} 3.0={actual}")

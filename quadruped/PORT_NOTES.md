@@ -90,9 +90,9 @@ e.g. `RslRlMLPModelCfg` `isaaclab_rl/isaaclab_rl/rsl_rl/rl_cfg.py:21`, `CameraCf
 | Canonical robot.usd | Jan-15 copy as `robot.usd`; Feb-23 kept as `robot_feb23.usd` | `height_scanner_model.pt` (2026-01-29) postdates Jan 15 and predates the Feb-23 re-save. A `pxr` comparison shows the two root layers differ **only** in the saved viewport camera (`customLayerData` camera position/target); joints, bodies, masses, drives and limits of the composed stages are identical, so the A/B test is low priority. |
 | Physics default | Isaac Sim PhysX for all three tasks; Newton via `physics=newton_mjwarp` | parity with the 2.x checkpoints; the 3.0 velocity base defaults to Newton (`velocity_env_cfg.py:72`) |
 | `physics=physx` | aliased to Isaac Sim PhysX inside the cfg | `PhysxAutoCfg` picks OvPhysX for kit-less runs (`physics_manager_cfg.py:68-78`); OvPhysX is not installed and would give train/play backend mismatch |
-| Actuator execution | 3.0 native path (`use_newton_actuators=True`) | non-deprecated path; the Newton DC-motor clamp is the same formula as 2.x (citations in section 3). A/B switch: `env.sim.use_newton_actuators=false`. **GPU (section 14.2): on Isaac Sim PhysX this path feeds the clamp joint positions that are 1-3 substeps old (3.0 defect); pass the switch to replay or fine-tune the 2.x checkpoint** |
+| Actuator execution | Isaac Lab's actuator path on Isaac Sim PhysX (`use_newton_actuators=False`), native path on Newton | non-deprecated path; the Newton DC-motor clamp is the same formula as 2.x (citations in section 3). A/B switch: `env.sim.use_newton_actuators=false`. **GPU (section 14.2): on Isaac Sim PhysX this path feeds the clamp joint positions that are 1-3 substeps old (3.0 defect); pass the switch to replay or fine-tune the 2.x checkpoint** |
 | Solver effort limit | `joint_effort_limit=45.0` | 3.0 docs recommend `>= actuator_effort_limit`; asset authors 500 N*m so even `None` would not clip; behaviour equals 2.x's 1e9 because the DC model already clips to 45 |
-| TGS external forces every iteration | 3.0 default (`True`) kept | default flipped in 3.0 and `False` is deprecated (`isaaclab_physx/docs/CHANGELOG.rst:781-783`, `isaaclab_physx/isaaclab_physx/physics/physx_manager_cfg.py:166`); 2.3.2 had `False` (`2.3.2: isaaclab/isaaclab/sim/simulation_cfg.py:123`). A/B: `env.sim.physics.enable_external_forces_every_iteration=false`. **GPU (section 14.2): `false` cuts the 2.x policy's tracking error by a quarter to a third; pass it for the 2.x checkpoint** |
+| TGS external forces every iteration | 2.3.2 value (`False`) on Isaac Sim PhysX | default flipped in 3.0 and `False` is deprecated (`isaaclab_physx/docs/CHANGELOG.rst:781-783`, `isaaclab_physx/isaaclab_physx/physics/physx_manager_cfg.py:166`); 2.3.2 had `False` (`2.3.2: isaaclab/isaaclab/sim/simulation_cfg.py:123`). A/B: `env.sim.physics.enable_external_forces_every_iteration=false`. **GPU (section 14.2): `false` cuts the 2.x policy's tracking error by a quarter to a third; pass it for the 2.x checkpoint** |
 | Joint/body ordering | `None` (backend-native) | the checkpoint was trained with Isaac Sim PhysX's native order; the `"physx"` alias means OvPhysX order, which can differ (`../docs/source/how-to/transfer_policies_between_physx_and_newton.rst:353-368`) |
 | Task IDs | keep `Isaac-Velocity-{Flat,Rough,Rough-Depth}-Custom-Quad-v0` | as decided; gymnasium accepts `-v0`, no 3.0 code treats it specially |
 | `-Play-v0` IDs | dropped | no real need: Hector's `commands` file played with the training ID, and `isaaclab play` applies `play_mode()`. If wanted, 3.0 supports deprecated aliases via a `"deprecated": {"alias": ...}` kwarg (`isaaclab_tasks/isaaclab_tasks/utils/parse_cfg.py:71-84`, example `isaaclab_tasks/isaaclab_tasks/contrib/dr_legs/__init__.py:24-38`) |
@@ -694,10 +694,11 @@ Why the two switches matter:
 * **B: TGS `enable_external_forces_every_iteration`**: 3.0 defaults to True, 2.3.2 used False. With False the 2.x
   policy's tracking error drops by a quarter to a third, and the `lin_vel_z_l2` / `ang_vel_xy_l2` penalties shrink 3-5x
   (-0.029 vs -0.091, -0.027 vs -0.140).
-* The project defaults stay at the 3.0 values: both switches select deprecated APIs, and `use_newton_actuators` is a
-  global sim setting that Newton runs share. Pass both switches to replay or fine-tune the 2.x checkpoint. For new
-  Isaac Sim PhysX training, `env.sim.use_newton_actuators=false` avoids the stale positions until upstream fixes the
-  refresh (open issue 1).
+* Both switches are the project defaults on Isaac Sim PhysX: `UseNewtonActuatorsCfg` (`rough_env_cfg.py`) picks
+  `use_newton_actuators` per backend through the `physics=` selector (`False` on Isaac Sim PhysX, `True` on Newton and
+  OvPhysX), and the Isaac Sim PhysX preset sets `enable_external_forces_every_iteration=False`. Both select APIs that
+  Isaac Lab 3.0 deprecates. `env.sim.use_newton_actuators=true env.sim.physics.enable_external_forces_every_iteration=true`
+  restores the 3.0 defaults.
 
 What the policy does: it trots in a tall stance on its calves (trunk 0.69 m above the ground vs 0.45 m at the default
 pose; mean thigh -15 deg and calf 42 deg vs the default -50 / 100 deg; mean |action| 2.5). About 94 % of the falls
@@ -871,9 +872,8 @@ isaaclab train --rl_library rsl_rl --task Isaac-Velocity-Rough-Depth-Custom-Quad
 1. **Native actuator path on Isaac Sim PhysX** (upstream, Isaac Lab 3.0): stale joint positions in the DC-motor PD
    (14.2). The port default (`use_newton_actuators=True`) is affected; the depth task's GPU checks ran with it. Upstream
    fix: refresh `_joint_pos` / `_joint_vel` unconditionally before `self._actuator_runtime.compute()` in
-   `compute_native_actuators`. Until then pass `env.sim.use_newton_actuators=false` on PhysX. Whether to make A + B the
-   project default (deprecated APIs, and the flag also switches Newton runs) is Hector's call; every number here
-   documents both.
+   `compute_native_actuators`. Until then the project defaults to Isaac Lab's actuator path on Isaac Sim PhysX
+   (Newton runs keep the native path).
 2. **Feet never touch** (risk 10): `feet_air_time` is dead weight in rough (0.01) and flat (0.25). For new training,
    point it at `.*_calf` or shrink the calf collider in a copy of the asset; both break parity with the 2.x checkpoint.
 3. **Falls in play mode**: about 19 % of play-mode episodes end in `base_contact`, the same as the 2.x replay

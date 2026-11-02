@@ -7,7 +7,13 @@
 
 Ported from the Isaac Lab 2.3.2 task ``custom_quadruped/rough_env_cfg.py``. The policy observation interface (term
 order, dims, noise, clipping) is unchanged, so the converted 2.x checkpoint
-``checkpoints_2x/height_scanner_model_rslrl5.pt`` (235 obs -> 12 actions) can be replayed with this config.
+``checkpoints_2x/height_scanner_model_rslrl5.pt`` (235 obs -> 12 actions) runs with this config.
+
+Physics defaults to Isaac Sim PhysX with the execution settings the checkpoint was trained with in Isaac Lab 2.x:
+Isaac Lab's actuator path (``sim.use_newton_actuators=False``) and the 2.3.2 TGS setting
+(``enable_external_forces_every_iteration=False``). Newton keeps the Isaac Lab 3.0 defaults. The 3.0 execution
+defaults on Isaac Sim PhysX are one override away:
+``env.sim.use_newton_actuators=true env.sim.physics.enable_external_forces_every_iteration=true``.
 
 The 2.x ``CustomQuadRoughEnvCfg_PLAY`` class is gone: ``isaaclab play`` applies
 :meth:`~isaaclab_tasks.core.velocity.velocity_env_cfg.LocomotionVelocityRoughEnvCfg.play_mode`, which makes the same
@@ -38,6 +44,22 @@ class CustomQuadRobotCfg(PresetCfg):
 
 
 @configclass
+class UseNewtonActuatorsCfg(PresetCfg):
+    """``sim.use_newton_actuators`` per physics backend, picked by the ``physics=`` selector.
+
+    Isaac Sim PhysX (the default, also ``isaacsim_physx`` and the ``physx`` alias) runs the DC motors on Isaac Lab's
+    actuator path, as Isaac Lab 2.x did. On Isaac Sim PhysX, Isaac Lab 3.0's native actuator path feeds the DC-motor
+    PD joint positions that are one to three physics substeps old, and the converted 2.x policy tracks its commands
+    measurably worse with it (PORT_NOTES.md). Newton and OvPhysX keep the 3.0 default, native actuators.
+    """
+
+    default: bool = False
+    ovphysx: bool = True
+    newton_mjwarp: bool = True
+    newton_kamino: bool = True
+
+
+@configclass
 class CustomQuadRoughEnvCfg(LocomotionVelocityRoughEnvCfg):
     """Custom quadruped on the stock rough-terrain generator with a 187-ray height scan."""
 
@@ -45,16 +67,19 @@ class CustomQuadRoughEnvCfg(LocomotionVelocityRoughEnvCfg):
         # post init of parent
         super().__post_init__()
 
-        # physics: the 3.0 velocity base defaults to Newton MJWarp; default to Isaac Sim PhysX for parity with the
-        # 2.x checkpoints. Newton stays selectable on the command line with ``physics=newton_mjwarp``.
-        self.sim.physics.default = self.sim.physics.isaacsim_physx
+        # physics: the 3.0 velocity base defaults to Newton MJWarp; default to Isaac Sim PhysX, the backend of the 2.x
+        # checkpoints. Newton stays selectable on the command line with ``physics=newton_mjwarp``.
+        physics = self.sim.physics
+        # TGS applies external forces once per step, as in Isaac Lab 2.3.2 (the 3.0 default applies them on every
+        # position iteration, which makes the 2.x policy track its commands worse)
+        physics.isaacsim_physx.enable_external_forces_every_iteration = False
+        physics.default = physics.isaacsim_physx
         # ``physics=physx`` is an auto preset that picks OvPhysX (not installed here) for kit-less runs and Isaac Sim
         # PhysX for Kit runs, i.e. different backends for headless train and ``--viz kit`` play. Alias it to
         # Isaac Sim PhysX so a stray ``physics=physx`` cannot switch backends.
-        self.sim.physics.physx = self.sim.physics.isaacsim_physx
-        # run the DC motors through the 3.0 native actuator path (same torque-speed clamp as the 2.x DCMotor);
-        # ``env.sim.use_newton_actuators=false`` restores the deprecated Isaac Lab execution path for an A/B test.
-        self.sim.use_newton_actuators = True
+        physics.physx = physics.isaacsim_physx
+        # actuators: Isaac Lab's actuator path on Isaac Sim PhysX, native actuators on Newton (UseNewtonActuatorsCfg)
+        self.sim.use_newton_actuators = UseNewtonActuatorsCfg()
 
         # scene: robot.usd on PhysX, robot_newton.usd (+ PhysX joint/body order) on Newton, see CustomQuadRobotCfg
         self.scene.robot = CustomQuadRobotCfg()
