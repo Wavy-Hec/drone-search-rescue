@@ -34,6 +34,10 @@ The simulator runs in the conda env `env_isaaclab` (Isaac Sim 6.2 + Isaac Lab 3.
 themselves. The trained models are release assets: `../scripts/download_assets.sh` puts the drone's flight policy
 and the detector in `../downloads/`, and the quadruped's walking policy in `../quadruped/checkpoints_2x/`.
 
+The uv setup in `pyproject.toml` comes from the Isaac Lab project template and is not needed here: its
+`[tool.uv.sources]` table expects an Isaac Lab checkout two folders up (`../../IsaacLab`), and without one `uv sync`
+stops with "Distribution not found".
+
 ```bash
 # terminal 1, in gcs/ (conda env vision): the ground station; it waits for the drone
 python scripts/gcs.py --name sar_live --weights ../downloads/drone_sar_yolo26n.pt --exit-on-end
