@@ -500,13 +500,13 @@ lattice on one side only.
   layer is redrawn at most every few hundred ms instead of on every frame (250 m at 0.25 m: about 18 ms per
   dashboard frame instead of 60 ms; a 40 m map still updates every frame).
 
-## License note: Ultralytics is AGPL-3.0
+## License
 
-The detector uses [Ultralytics](https://github.com/ultralytics/ultralytics) (AGPL-3.0) and the YOLO26 weights
-(AGPL-3.0, see `~/isaac_ws/assets/models/yolo26n.pt.provenance.txt`). Models fine-tuned from them are under the
-same terms. That is fine for this private, local project. If you ever distribute this software, or offer it
-as a network service, the AGPL obligations apply (release the source under the AGPL). Closed or commercial
-use needs an Ultralytics Enterprise License. Everything except `drone_gcs/detector.py`'s YOLO path and
+The ground station is licensed under the AGPL-3.0 ([LICENSE](LICENSE)), because its detector uses
+[Ultralytics YOLO](https://github.com/ultralytics/ultralytics), which is AGPL-3.0. The fine-tuned detector weights
+published as release assets start from the YOLO26n weights and are AGPL-3.0 as well. The sender side that the
+simulator imports (`drone_gcs/__init__.py`, `link.py`, `protocol.py`, `geometry.py` and `isaac_bridge.py`) needs
+only NumPy and is MIT, as its file headers say. Everything except `drone_gcs/detector.py`'s YOLO path and
 `scripts/train_detector.py` runs without Ultralytics (`--detector blob|none`).
 
 ## Layout
