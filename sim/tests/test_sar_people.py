@@ -218,7 +218,7 @@ def test_seed0_natural_people():
 
 def test_baked_meshes_match_the_pose_data():
     """With the assets in the local cache: bake one person in two poses and compare with ``people_poses.json``;
-    the static USD has no skeleton, the same meshes and textures that exist on disk."""
+    the static USD has no skeleton, the same meshes and textures that exist on disk, and later runs reuse it."""
     require("isaaclab")
     from drone_lab.sar.assets import ASSETS, asset_root
     from drone_lab.sar.people import PoseBaker, geometry_record, pose_geometry
@@ -245,6 +245,9 @@ def test_baked_meshes_match_the_pose_data():
                     rec["bbox_max"], ref.bbox_max, atol=1e-3
                 ), pose
             path = baker.usd(spec.key, spec.path, "sitting")
+            # another process localises fresh copies of the same assets: the same baked file serves it
+            again = PoseBaker(lambda url: retrieve_file_path(url, download_dir=cache), asset_root(), out)
+            assert again.usd(spec.key, spec.path, "sitting") == path
         except (OSError, RuntimeError) as exc:  # offline and nothing cached
             raise unittest.SkipTest(f"assets not available ({exc})") from None
         stage = Usd.Stage.Open(path)

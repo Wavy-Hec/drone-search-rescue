@@ -355,7 +355,6 @@ class SourceRig:
     def __init__(self, rig_path: str, clip_paths: dict[str, str]):
         from pxr import Usd
 
-        self.path = rig_path
         stage = Usd.Stage.Open(rig_path)
         _, skel, self.joints, self.parents = _skeleton(stage)
         self.rest_local = _matrices(skel.GetRestTransformsAttr().Get())
@@ -377,6 +376,14 @@ class SourceRig:
         parts = [a.Get(t) for a in (anim.GetTranslationsAttr(), anim.GetRotationsAttr(), anim.GetScalesAttr())]
         parts = [v if v is not None and len(v) else r for v, r in zip(parts, rest, strict=True)]
         return _matrices(UsdSkel.MakeTransforms(*parts))
+
+    def digest(self) -> str:
+        """Hash of what posing reads from the rig and the clips (their content, not their local paths)."""
+        h = hashlib.sha1("|".join(self.joints).encode())
+        h.update(np.ascontiguousarray(self.rest_local).tobytes())
+        for clip in sorted(self.clip_paths):  # the clips have no dependencies: their files are stable copies
+            h.update(Path(self.clip_paths[clip]).read_bytes())
+        return h.hexdigest()
 
     def world(self, clip: str, frame: float, layers: tuple[Layer, ...] = ()) -> np.ndarray:
         """World transforms (row-vector, Z up) of the rig at ``frame`` of ``clip``, with ``layers`` applied."""
@@ -458,6 +465,17 @@ class CharacterRig:
                     "dominant": ji[np.arange(len(ji)), jw.argmax(axis=1)],
                 }
             )
+
+    def digest(self) -> str:
+        """Hash of the skeleton and the skinned meshes (their content, not the file's local paths)."""
+        h = hashlib.sha1("|".join(self.joints).encode())
+        for a in (self.bind, self.ref_local):
+            h.update(np.ascontiguousarray(a).tobytes())
+        for m in self.meshes:
+            h.update(m["path"].encode())
+            for k in ("points", "normals", "ji", "jw"):
+                h.update(np.ascontiguousarray(m[k]).tobytes())
+        return h.hexdigest()
 
     def subtree(self, joint: int) -> list[int]:
         out, stack = [], [joint]
@@ -662,13 +680,6 @@ def write_posed_usd(character_usd: str, posed: PosedCharacter, out_path: str, me
 # ---------------------------------------------------------------------------------------------------------------
 
 
-def _files_digest(paths: list[str]) -> str:
-    h = hashlib.sha1()
-    for p in paths:
-        h.update(Path(p).read_bytes())
-    return h.hexdigest()[:12]
-
-
 class PoseBaker:
     """Downloads (through ``fetch``) and poses characters; keeps the rig and clips loaded across calls."""
 
@@ -703,7 +714,7 @@ class PoseBaker:
         spec = POSES[pose]
         rig = self.rig
         char = self.character(character_path)
-        key = _files_digest([char.path, rig.path, *(rig.clip_paths[c] for c in sorted(rig.clip_paths))])
+        key = hashlib.sha1(f"{char.digest()}{rig.digest()}".encode()).hexdigest()[:12]
         out = os.path.join(self.out_dir, asset_key, f"{pose}-{spec.digest()}-{key}.usd")
         if not os.path.isfile(out):
             posed = char.pose(rig, spec)
