@@ -1,0 +1,13 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            // Runs in the Python environment that has Isaac Lab 3.0 and this project installed (activate it before
+            // starting VS Code). Writes .vscode/settings.json, .vscode/launch.json and pyrightconfig.json.
+            "label": "setup_python_env",
+            "type": "shell",
+            "command": "isaaclab --editor",
+            "problemMatcher": []
+        }
+    ]
+}
