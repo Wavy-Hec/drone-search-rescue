@@ -25,9 +25,8 @@ folders go to ``runs/eval/`` (git-ignored).
 
 Example (conda env 'vision')::
 
-    python scripts/eval_detector.py --data ~/isaac_ws/datasets/drone_sar_yolo_v2/yolo/data.yaml \\
-        --weights ~/isaac_ws/assets/models/drone_sar_yolo26n.pt \\
-        --previous ~/isaac_ws/assets/models/drone_sar_yolo26n_tpose_v1.pt
+    python scripts/eval_detector.py --data ../datasets/drone_sar_yolo_v2/yolo/data.yaml \\
+        --weights models/drone_sar_yolo26n.pt --previous models/drone_sar_yolo26n_tpose_v1.pt
 """
 
 from __future__ import annotations
@@ -50,9 +49,8 @@ if TYPE_CHECKING:
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from drone_gcs.detector import YoloDetector  # noqa: E402
+from drone_gcs.detector import COCO_WEIGHTS, YoloDetector  # noqa: E402
 
-COCO_MODEL = os.path.expanduser("~/isaac_ws/assets/models/yolo26n.pt")
 HEADER_PX = 28
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg")
 MATCH_IOU = 0.45
@@ -238,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--data", required=True, help="data.yaml from scripts/seg_to_yolo.py")
     p.add_argument("--weights", required=True, help="fine-tuned weights")
-    p.add_argument("--coco", default=COCO_MODEL, help="stock COCO weights for the person comparison")
+    p.add_argument("--coco", default=str(COCO_WEIGHTS), help="stock COCO weights for the person comparison")
     p.add_argument("--previous", default=None, help="an earlier fine-tuned model to score on the same frames")
     p.add_argument("--splits", default="val,test", help="splits to score (those missing from data.yaml are skipped)")
     p.add_argument("--imgsz", type=int, default=640)

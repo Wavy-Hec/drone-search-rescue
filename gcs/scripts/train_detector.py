@@ -2,7 +2,7 @@
 """Fine-tune the YOLO detector on simulator images (dataset from scripts/seg_to_yolo.py).
 
 Starts from the COCO nano weights, trains with defaults sized for ~2000 images on a 16 GB GPU, copies the best
-checkpoint to ``--out`` (default ``models/detector.pt``, tracked with Git LFS) and writes the training summary
+checkpoint to ``--out`` (default ``models/detector.pt``, not in git) and writes the training summary
 next to it as ``<out name>_metrics.json`` (default ``models/detector_metrics.json``), with the training curves
 (losses and val scores per epoch) as ``<out name>_training.png`` and ``.csv``.
 The GCS then uses it with ``python scripts/gcs.py --weights models/detector.pt``.
@@ -18,8 +18,8 @@ Ultralytics (AGPL-3.0): fine-tuned weights fall under the same licence, see the 
 
 Examples::
 
-    python scripts/train_detector.py --data ~/isaac_ws/datasets/drone_yolo/data.yaml --dry-run
-    python scripts/train_detector.py --data ~/isaac_ws/datasets/drone_yolo/data.yaml --epochs 120
+    python scripts/train_detector.py --data ../datasets/drone_yolo/data.yaml --dry-run
+    python scripts/train_detector.py --data ../datasets/drone_yolo/data.yaml --epochs 120
 """
 
 from __future__ import annotations
@@ -33,7 +33,11 @@ import time
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MODEL = os.path.expanduser("~/isaac_ws/assets/models/yolo26n.pt")
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from drone_gcs.detector import COCO_WEIGHTS  # noqa: E402
+
+DEFAULT_MODEL = str(COCO_WEIGHTS)
 
 
 def read_data_yaml(path: Path) -> dict:

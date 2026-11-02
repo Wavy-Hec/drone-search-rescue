@@ -1,8 +1,8 @@
 """Detectors for the GCS and the worker thread that keeps inference off the UI loop.
 
 * :class:`YoloDetector` - Ultralytics YOLO. Default weights (:func:`default_weights`): ``$DRONE_GCS_WEIGHTS``, else
-  the YOLO26n fine-tuned on simulator images (``~/isaac_ws/assets/models/drone_sar_yolo26n.pt``) when it exists,
-  else the stock COCO model ``yolo26n.pt`` next to it. Ultralytics is AGPL-3.0, see the README.
+  the YOLO26n fine-tuned on simulator images (``drone_sar_yolo26n.pt`` in :data:`MODELS_DIR`) when it exists, else
+  the stock COCO model ``yolo26n.pt`` next to it. Ultralytics is AGPL-3.0, see the README.
 * :class:`ColorBlobDetector` - stand-in for the fake world (saturated colour blobs -> boxes). COCO YOLO does
   not know the synthetic shapes, so the end-to-end tests use this one.
 * :class:`DetectorWorker` - runs any detector in a background thread; ``submit()`` keeps only the newest
@@ -35,7 +35,8 @@ import numpy as np
 
 log = logging.getLogger("drone_gcs.detector")
 AUTO_GPU_MIN_FREE_MIB = 2048
-MODELS_DIR = Path("~/isaac_ws/assets/models").expanduser()
+MODELS_DIR = Path(os.environ.get("DRONE_GCS_MODELS") or Path(__file__).resolve().parents[1] / "models").expanduser()
+"""Folder of the default weights: ``$DRONE_GCS_MODELS``, else the ``models/`` folder of this project."""
 COCO_WEIGHTS = MODELS_DIR / "yolo26n.pt"
 """Stock YOLO26n (COCO classes)."""
 SAR_WEIGHTS = MODELS_DIR / "drone_sar_yolo26n.pt"

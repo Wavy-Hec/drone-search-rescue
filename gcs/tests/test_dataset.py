@@ -126,13 +126,15 @@ class TestSegToYolo(unittest.TestCase):
             # block split keeps consecutive frames together
             val = sorted(p.stem for p in (out / "labels" / "val").glob("*.txt"))
             self.assertEqual(int(val[1]) - int(val[0]), 1)
-            # the training script accepts it (dry run: no training, no GPU)
+            # the training script accepts it (dry run: no training, no GPU; the starting weights only have to exist)
+            start = tmp / "yolo26n.pt"
+            start.write_bytes(b"")
             spec = importlib.util.spec_from_file_location("train_detector", ROOT / "scripts" / "train_detector.py")
             td = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(td)
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                rc = td.main(["--data", str(out / "data.yaml"), "--dry-run"])
+                rc = td.main(["--data", str(out / "data.yaml"), "--model", str(start), "--dry-run"])
             self.assertEqual(rc, 0, buf.getvalue())
             rep = json.loads(buf.getvalue())
             self.assertEqual(rep["dataset"]["train_images"], 4)
