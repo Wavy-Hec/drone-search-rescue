@@ -62,10 +62,12 @@ class GridSpec:
 
     @property
     def x_max(self) -> float:
+        """Upper x edge of the last column [m]."""
         return self.x_min + self.nx * self.resolution
 
     @property
     def y_max(self) -> float:
+        """Upper y edge of the last row [m]."""
         return self.y_min + self.ny * self.resolution
 
     @property
@@ -99,10 +101,12 @@ class GridSpec:
         return my[:, None] & mx[None, :]
 
     def to_dict(self) -> dict:
+        """JSON-ready fields (``map_meta.json``)."""
         return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict) -> GridSpec:
+        """Inverse of :meth:`to_dict`."""
         return cls(float(d["x_min"]), float(d["y_min"]), float(d["resolution"]), int(d["nx"]), int(d["ny"]))
 
 

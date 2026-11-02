@@ -13,10 +13,14 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from isaaclab.utils import configclass
 
 from drone_lab.sar.scene import SarSiteCfg
+
+if TYPE_CHECKING:
+    from pxr import Usd
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +35,9 @@ class RescueSiteCfg(SarSiteCfg):
     func: Callable | str = "drone_lab.tasks.rescue.site:spawn_rescue_site"
 
 
-def move_ground_materials_to_visual_mesh(terrain_prim_path: str, visual_path: str, stage=None) -> int:
+def move_ground_materials_to_visual_mesh(
+    terrain_prim_path: str, visual_path: str, stage: Usd.Stage | None = None
+) -> int:
     """Move the material face subsets of the terrain mesh onto a render-only copy of the mesh at ``visual_path``.
 
     The copy gets the mesh's authored geometry and display attributes (no physics, no transform ops) and the
@@ -86,7 +92,13 @@ def move_ground_materials_to_visual_mesh(terrain_prim_path: str, visual_path: st
     return len(subsets)
 
 
-def spawn_rescue_site(prim_path: str, cfg: RescueSiteCfg, translation=None, orientation=None, **kwargs):
+def spawn_rescue_site(
+    prim_path: str,
+    cfg: RescueSiteCfg,
+    translation: tuple[float, float, float] | None = None,
+    orientation: tuple[float, float, float, float] | None = None,
+    **kwargs: Any,
+) -> Usd.Prim:
     """Spawn the SAR site (:func:`drone_lab.sar.scene.spawn_sar_site`), then make its textured terrain walkable."""
     from drone_lab.sar.scene import spawn_sar_site
 

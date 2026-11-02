@@ -83,6 +83,7 @@ class AssetSpec:
 
     @property
     def url(self) -> str:
+        """Full URL under :func:`asset_root`."""
         return f"{asset_root()}/{self.path}"
 
     @property
@@ -285,6 +286,7 @@ class GroundMaterial:
 
     @property
     def url(self) -> str:
+        """Full URL under :func:`asset_root`."""
         return f"{asset_root()}/{self.path}"
 
 

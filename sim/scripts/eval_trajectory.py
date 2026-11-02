@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT / "src") not in sys.path:
@@ -59,8 +60,12 @@ import torch  # noqa: E402
 import drone_lab.tasks  # noqa: E402,F401
 from drone_lab.video import capture_frame, find_kit_visualizer, open_mp4_writer, playback_speedup  # noqa: E402
 
+if TYPE_CHECKING:
+    from isaaclab.envs import ManagerBasedRLEnv
 
-def load_policy(checkpoint: str, env, device: str):
+
+def load_policy(checkpoint: str, env: ManagerBasedRLEnv, device: str) -> tuple[torch.nn.Module, str]:
+    """Return ``(policy, kind)`` from a TorchScript export or an RSL-RL training checkpoint."""
     path = Path(checkpoint).expanduser().resolve()
     try:
         policy = torch.jit.load(str(path), map_location=device)
@@ -88,7 +93,8 @@ def load_policy(checkpoint: str, env, device: str):
     return policy, "rsl_rl"
 
 
-def main():
+def main() -> None:
+    """Fly one reference trajectory with the policy and save the tracking figure, CSV and summary."""
     import gymnasium as gym
 
     from isaaclab_tasks.utils import parse_env_cfg

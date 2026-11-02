@@ -83,6 +83,7 @@ PLOT_FILES = ("map_with_trajectory.png", "map_error.png", "map_3d.png", "altitud
 
 
 def get_theme(name: str = "light") -> Theme:
+    """Figure colours by name: ``"light"`` or ``"dark"``."""
     if name not in THEMES:
         raise ValueError(f"theme must be one of {sorted(THEMES)}")
     return THEMES[name]

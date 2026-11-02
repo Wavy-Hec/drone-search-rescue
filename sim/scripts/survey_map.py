@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT / "src") not in sys.path:
@@ -177,6 +178,11 @@ from drone_lab.survey_io import (  # noqa: E402
 )
 from drone_lab.video import capture_frame, find_kit_visualizer, open_mp4_writer, playback_speedup  # noqa: E402
 
+if TYPE_CHECKING:
+    from isaaclab.envs import ManagerBasedRLEnv
+
+    from drone_lab.tasks.survey.config.arl_robot_1.survey_env_cfg import SurveyEnvCfg
+
 UNSUPPORTED_PHYSICS_MSG = (
     "--physics {name} is not supported for this robot: isaaclab_contrib.assets.Multirotor subclasses the PhysX "
     "articulation (isaaclab_contrib/assets/multirotor/multirotor.py:17) and applies the rotor wrench through the "
@@ -187,12 +193,13 @@ UNSUPPORTED_PHYSICS_MSG = (
 
 
 def resolve_run_dir(out: str | None, prefix: str) -> Path:
+    """``runs/<out>``, ``out`` itself when it is a path, or a time-stamped ``runs/<date>_<prefix>``."""
     if out and ("/" in out or out.startswith("~")):
         return Path(out).expanduser().resolve()
     return PROJECT_ROOT / "runs" / (out or f"{datetime.now():%Y%m%d_%H%M%S}_{prefix}")
 
 
-def configure_env(env_cfg):
+def configure_env(env_cfg: SurveyEnvCfg) -> None:
     """Apply the command-line survey settings to the resolved task config."""
     cmd = env_cfg.commands.survey_target
     try:
@@ -265,7 +272,7 @@ def configure_env(env_cfg):
             args_cli.headless = True
 
 
-def load_policy(checkpoint: str, env, device: str):
+def load_policy(checkpoint: str, env: ManagerBasedRLEnv, device: str) -> tuple[torch.nn.Module, str]:
     """Return ``(policy, kind)``; ``policy(obs_tensor) -> actions`` for the 17-D policy observation."""
     path = Path(checkpoint).expanduser().resolve()
     if not path.is_file():
@@ -296,7 +303,8 @@ def load_policy(checkpoint: str, env, device: str):
     return policy, "rsl_rl"
 
 
-def main():
+def main() -> None:
+    """Fly the survey, then save the map, the metrics, the figures and (with ``--video``) the video."""
     import gymnasium as gym
 
     from isaaclab_tasks.utils import parse_env_cfg

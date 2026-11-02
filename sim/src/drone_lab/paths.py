@@ -13,6 +13,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
@@ -284,7 +285,7 @@ def load_waypoints(path: str | Path, default_z: float | None = None) -> np.ndarr
     return waypoints_array(read_waypoint_rows(path), default_z)
 
 
-def waypoints_array(rows, default_z: float | None = None) -> np.ndarray:
+def waypoints_array(rows: Iterable[Sequence[float]], default_z: float | None = None) -> np.ndarray:
     """Convert a list of [x, y] / [x, y, z] rows to an (N, 3) array, filling z with ``default_z``."""
     out = []
     for row in rows:
@@ -417,7 +418,9 @@ def point_at_arclength(points: np.ndarray, s_cum: np.ndarray, s: np.ndarray | fl
     return np.stack([np.interp(s, s_cum, points[:, k]) for k in range(points.shape[1])], axis=-1)
 
 
-def distance_to_polyline(query: np.ndarray, polyline: np.ndarray, *, planar: bool = False, chunk: int = 4096):
+def distance_to_polyline(
+    query: np.ndarray, polyline: np.ndarray, *, planar: bool = False, chunk: int = 4096
+) -> tuple[np.ndarray, np.ndarray]:
     """Shortest distance from every query point to a polyline.
 
     Args:

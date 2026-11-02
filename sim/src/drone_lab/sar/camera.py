@@ -38,6 +38,7 @@ import math
 from dataclasses import dataclass
 
 import numpy as np
+from numpy.typing import ArrayLike
 
 HORIZONTAL_APERTURE = 20.955
 """Isaac Lab's default ``PinholeCameraCfg.horizontal_aperture``; only the ratio to the focal length matters."""
@@ -60,18 +61,22 @@ class CameraSpec:
 
     @property
     def cx(self) -> float:
+        """Principal point, x [px]."""
         return 0.5 * self.width
 
     @property
     def cy(self) -> float:
+        """Principal point, y [px]."""
         return 0.5 * self.height
 
     @property
     def hfov_deg(self) -> float:
+        """Horizontal field of view [deg]."""
         return math.degrees(2.0 * math.atan(0.5 * self.width / self.focal_px))
 
     @property
     def vfov_deg(self) -> float:
+        """Vertical field of view [deg]."""
         return math.degrees(2.0 * math.atan(0.5 * self.height / self.focal_px))
 
     @property
@@ -97,6 +102,7 @@ class CameraSpec:
         return self.width * g, self.height * g
 
     def to_dict(self) -> dict:
+        """Intrinsics, mount and conventions for the ground-truth JSON."""
         return {
             "width": self.width,
             "height": self.height,
@@ -119,7 +125,7 @@ SAR_CAMERA = CameraSpec()
 """The camera used by ``DroneLab-SAR-ARL-Robot-1-v0``."""
 
 
-def quat_xyzw_to_matrix(q) -> np.ndarray:
+def quat_xyzw_to_matrix(q: ArrayLike) -> np.ndarray:
     """Rotation matrix of a quaternion (x, y, z, w)."""
     x, y, z, w = (float(v) for v in q)
     return np.array(
@@ -131,7 +137,9 @@ def quat_xyzw_to_matrix(q) -> np.ndarray:
     )
 
 
-def world_to_pixel(points_w, cam_pos_w, cam_quat_w_ros, K) -> tuple[np.ndarray, np.ndarray]:
+def world_to_pixel(
+    points_w: ArrayLike, cam_pos_w: ArrayLike, cam_quat_w_ros: ArrayLike, K: ArrayLike
+) -> tuple[np.ndarray, np.ndarray]:
     """Project world points (N, 3) into the image of a camera pose in the ROS convention.
 
     Args:
@@ -151,7 +159,9 @@ def world_to_pixel(points_w, cam_pos_w, cam_quat_w_ros, K) -> tuple[np.ndarray, 
     return uv, pc[:, 2]
 
 
-def pixel_to_world(uv, depth, cam_pos_w, cam_quat_w_ros, K) -> np.ndarray:
+def pixel_to_world(
+    uv: ArrayLike, depth: ArrayLike, cam_pos_w: ArrayLike, cam_quat_w_ros: ArrayLike, K: ArrayLike
+) -> np.ndarray:
     """Back-project pixels with their ``distance_to_image_plane`` depth to world points (N, 3).
 
     This is how a detection becomes a map pin: take the box centre (or the median of its mask pixels) and the

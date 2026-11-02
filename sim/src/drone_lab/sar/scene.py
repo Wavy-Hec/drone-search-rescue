@@ -36,9 +36,11 @@ import math
 import os
 import shutil
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+from numpy.typing import ArrayLike
 
 try:
     import fcntl
@@ -52,6 +54,12 @@ from .assets import ASSET_CACHE, ASSETS, GROUND_MATERIALS, SEMANTIC_TYPE, SKY_HD
 from .camera import SAR_CAMERA, CameraSpec
 from .people import POSES, PoseBaker
 from .scenario import OBJECTS_SUBPATH, Scenario, ScenarioCfg, TerrainSite, generate_scenario
+
+if TYPE_CHECKING:
+    from pxr import Usd
+
+    from isaaclab.assets import AssetBaseCfg
+    from isaaclab.sensors import Camera, CameraCfg
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +128,7 @@ class SarSiteCfg(SpawnerCfg):
     """Download directory for remote assets; None: :func:`asset_cache_dir`."""
 
     def scenario_cfg(self) -> ScenarioCfg:
+        """The scenario settings of this site (what :func:`scenario_for` and the spawner place)."""
         return ScenarioCfg(
             seed=int(self.seed),
             num_people=tuple(self.num_people),
@@ -150,7 +159,7 @@ def sar_camera_cfg(
     prim_path: str = "{ENV_REGEX_NS}/Robot/base_link/sar_camera",
     data_types: tuple[str, ...] = ("rgb", "distance_to_image_plane", "instance_segmentation"),
     antialiasing: str | None = "FXAA",
-):
+) -> CameraCfg:
     """Downward RGB-D camera with instance segmentation that carries the ``class`` labels.
 
     ``instance_segmentation`` (Replicator's ``instance_segmentation_fast``) gives one instance id per labelled
@@ -195,7 +204,9 @@ def sar_camera_cfg(
     )
 
 
-def look_at_quat_ros(eye, target, up=(0.0, 0.0, 1.0)) -> tuple[float, float, float, float]:
+def look_at_quat_ros(
+    eye: ArrayLike, target: ArrayLike, up: ArrayLike = (0.0, 0.0, 1.0)
+) -> tuple[float, float, float, float]:
     """Orientation (x, y, z, w) of a ROS-convention camera at ``eye`` looking at ``target``."""
     eye, target, up = (np.asarray(v, dtype=float) for v in (eye, target, up))
     f = target - eye
@@ -229,14 +240,14 @@ def _matrix_to_quat(m: np.ndarray) -> tuple[float, float, float, float]:
 
 def fixed_camera_cfg(
     prim_path: str,
-    eye,
-    target,
+    eye: ArrayLike,
+    target: ArrayLike,
     width: int,
     height: int,
     hfov_deg: float,
-    data_types=("rgb", "instance_segmentation"),
+    data_types: Sequence[str] = ("rgb", "instance_segmentation"),
     antialiasing: str | None = "FXAA",
-):
+) -> CameraCfg:
     """A world-fixed camera (e.g. overview or top-down photo camera) looking from ``eye`` at ``target``.
 
     Its RTX global settings must equal those of every other camera in the process (Isaac Lab checks it); the
@@ -270,7 +281,7 @@ def fixed_camera_cfg(
     )
 
 
-def sun_light_cfg(intensity: float = 2000.0, elevation_deg: float = 43.0, azimuth_deg: float = 136.0):
+def sun_light_cfg(intensity: float = 2000.0, elevation_deg: float = 43.0, azimuth_deg: float = 136.0) -> AssetBaseCfg:
     """Distant "sun" light. Elevation above the horizon; azimuth of the sun, counter-clockwise from +X.
 
     The defaults match the sun inside :data:`~drone_lab.sar.assets.SKY_HDRI` (dome light at identity rotation):
@@ -292,7 +303,7 @@ def sun_light_cfg(intensity: float = 2000.0, elevation_deg: float = 43.0, azimut
     )
 
 
-def sky_light_cfg(intensity: float = 1000.0):
+def sky_light_cfg(intensity: float = 1000.0) -> AssetBaseCfg:
     """Dome light with the clear-sky HDRI (same texture as the built-in drone tasks)."""
     import isaaclab.sim as sim_utils
     from isaaclab.assets import AssetBaseCfg
@@ -422,7 +433,7 @@ def pose_baker(cache_dir: str | None) -> PoseBaker:
 # ---------------------------------------------------------------------------------------------------------------
 
 
-def read_camera(cam, env_index: int = 0, data_types: tuple[str, ...] | None = None) -> dict:
+def read_camera(cam: Camera, env_index: int = 0, data_types: tuple[str, ...] | None = None) -> dict:
     """One environment's frame of an Isaac Lab camera as numpy arrays.
 
     Returns ``{"rgb" (H, W, 3) uint8, "distance_to_image_plane" (H, W) float32, "instance_segmentation"
@@ -465,7 +476,13 @@ def get_spawned_scenario(prim_path: str = "/World/sar") -> Scenario | None:
     return _SPAWNED.get(prim_path)
 
 
-def spawn_sar_site(prim_path: str, cfg: SarSiteCfg, translation=None, orientation=None, **kwargs):
+def spawn_sar_site(
+    prim_path: str,
+    cfg: SarSiteCfg,
+    translation: tuple[float, float, float] | None = None,
+    orientation: tuple[float, float, float, float] | None = None,
+    **kwargs: Any,
+) -> Usd.Prim:
     """Spawn the dressed site (see the module docstring). Returns the site root prim."""
     from pxr import UsdGeom
 
@@ -532,7 +549,7 @@ def spawn_sar_site(prim_path: str, cfg: SarSiteCfg, translation=None, orientatio
     return root
 
 
-def clear_semantics(prim) -> int:
+def clear_semantics(prim: Usd.Prim) -> int:
     """Remove the semantic labels an asset brought along (new ``LabelsAPI`` and legacy ``Semantics``)."""
     from pxr import Usd
 
@@ -549,7 +566,7 @@ def clear_semantics(prim) -> int:
     return n
 
 
-def spawn_landing_pad(path: str, position, radius: float = 1.25):
+def spawn_landing_pad(path: str, position: Sequence[float], radius: float = 1.25) -> Usd.Prim:
     """Procedural helipad: dark disk (collider) with a yellow ring and a white "H"; returns its root prim."""
     import isaaclab.sim as sim_utils
 
@@ -603,7 +620,7 @@ def spawn_landing_pad(path: str, position, radius: float = 1.25):
     return root
 
 
-def spawn_apron(path: str, home, half: float, thickness: float = 0.004):
+def spawn_apron(path: str, home: Sequence[float], half: float, thickness: float = 0.004) -> Usd.Prim:
     """Asphalt square around the landing pad (visual only, a few millimetres above the flat border)."""
     import isaaclab.sim as sim_utils
 

@@ -13,17 +13,17 @@ import numpy as np
 
 from .labels import CLASS_COLORS
 from .people import POSES
-from .scenario import RESPONDER_GROUP, Scenario, TerrainSite, pose_family
+from .scenario import RESPONDER_GROUP, Scenario, SceneObject, TerrainSite, pose_family
 
 
-def person_tag(obj) -> str:
+def person_tag(obj: SceneObject) -> str:
     """Short label of a person on the map: lying, on side, sitting, waving, standing or responder."""
     if obj.group == RESPONDER_GROUP:
         return "responder"
     return POSES[obj.pose].tag if obj.pose in POSES else pose_family(obj.pose)
 
 
-def terrain_raster(site: TerrainSite, resolution: float = 0.1):
+def terrain_raster(site: TerrainSite, resolution: float = 0.1) -> tuple[np.ndarray, tuple[float, float, float, float]]:
     """Height raster of the whole site: ``(z (ny, nx), extent)``."""
     x0, x1, y0, y1 = site.bounds
     xs = np.arange(x0 + 0.5 * resolution, x1, resolution)
@@ -47,7 +47,7 @@ def plot_object_map(
     path: str | Path,
     *,
     photo: np.ndarray | None = None,
-    photo_extent=None,
+    photo_extent: tuple[float, float, float, float] | None = None,
     path_xy: np.ndarray | None = None,
     title: str | None = None,
     dpi: int = 110,

@@ -33,9 +33,11 @@ Arrays are ``(ny, nx)`` with row ``iy`` = y index (the :class:`drone_lab.mapping
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 
 import numpy as np
+from numpy.typing import ArrayLike
 from scipy import ndimage
 
 from drone_lab.mapping import GridSpec
@@ -115,6 +117,7 @@ class TraversabilityCfg:
     """Fraction of the plane-fit window that must be known; otherwise the cell is unknown."""
 
     def to_dict(self) -> dict:
+        """Settings as plain JSON types."""
         return asdict(self)
 
 
@@ -187,17 +190,17 @@ class TraversabilityMap:
         return self._cross_term(gx, gy, u[:, 0], u[:, 1])
 
     # ---------------------------------------------------------------------------------------------- queries
-    def world_to_cell(self, x, y) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def world_to_cell(self, x: ArrayLike, y: ArrayLike) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Cell indices ``(iy, ix)`` of world points and a mask of points inside the grid."""
         ix, iy, valid = self.grid.cell_index(np.asarray(x, dtype=float), np.asarray(y, dtype=float))
         return iy, ix, valid
 
-    def cell_to_world(self, iy, ix) -> tuple[np.ndarray, np.ndarray]:
+    def cell_to_world(self, iy: ArrayLike, ix: ArrayLike) -> tuple[np.ndarray, np.ndarray]:
         """World coordinates of cell centres."""
         res = self.grid.resolution
         return (self.grid.x_min + (np.asarray(ix) + 0.5) * res, self.grid.y_min + (np.asarray(iy) + 0.5) * res)
 
-    def sample(self, layer: np.ndarray, xy: np.ndarray, outside=np.nan) -> np.ndarray:
+    def sample(self, layer: np.ndarray, xy: np.ndarray, outside: float = np.nan) -> np.ndarray:
         """Nearest-cell value of ``layer`` at world points ``xy`` (N, 2); ``outside`` beyond the grid."""
         xy = np.asarray(xy, dtype=float).reshape(-1, 2)
         iy, ix, valid = self.world_to_cell(xy[:, 0], xy[:, 1])
@@ -398,7 +401,7 @@ def step_height(z: np.ndarray, resolution: float, radius_m: float) -> np.ndarray
     return step
 
 
-def points_in_polygon(px: np.ndarray, py: np.ndarray, polygon) -> np.ndarray:
+def points_in_polygon(px: np.ndarray, py: np.ndarray, polygon: ArrayLike) -> np.ndarray:
     """Even-odd rule point-in-polygon test for arrays of points (broadcast shapes)."""
     poly = np.asarray(polygon, dtype=float).reshape(-1, 2)
     inside = np.zeros(np.broadcast(px, py).shape, dtype=bool)
@@ -412,7 +415,7 @@ def points_in_polygon(px: np.ndarray, py: np.ndarray, polygon) -> np.ndarray:
     return inside
 
 
-def _rasterize_polygon(mask: np.ndarray, grid: GridSpec, polygon) -> None:
+def _rasterize_polygon(mask: np.ndarray, grid: GridSpec, polygon: ArrayLike) -> None:
     poly = np.asarray(polygon, dtype=float).reshape(-1, 2)
     xs, ys = grid.cell_centers()
     res = grid.resolution
@@ -432,7 +435,7 @@ def _rasterize_polygon(mask: np.ndarray, grid: GridSpec, polygon) -> None:
         mask[iy[ok], ix[ok]] = True
 
 
-def rasterize_footprints(grid: GridSpec, footprints) -> np.ndarray:
+def rasterize_footprints(grid: GridSpec, footprints: Iterable[Footprint]) -> np.ndarray:
     """Boolean ``(ny, nx)`` mask of the cells covered by the footprints (circle: cell centre inside the circle;
     polygon: cell centre inside the polygon, plus every cell its outline passes through)."""
     mask = np.zeros(grid.shape, dtype=bool)
@@ -468,7 +471,7 @@ def compute_traversability(
     elevation: np.ndarray,
     grid: GridSpec,
     cfg: TraversabilityCfg | None = None,
-    footprints=(),
+    footprints: Iterable[Footprint] = (),
 ) -> TraversabilityMap:
     """Slope / step / roughness costs, unknown cells and object footprints -> inflated cost map.
 

@@ -41,11 +41,15 @@ COMMAND_NAME = "reference"
 
 @configclass
 class TrajectoryCommandsCfg:
+    """Moving reference trajectory with two look-ahead points."""
+
     reference = mdp.TrajectoryReferenceCommandCfg(asset_name="robot", debug_vis=True)
 
 
 @configclass
 class TrajectoryObservationsCfg:
+    """Errors to the reference and its look-ahead points, plus the drone's own state."""
+
     @configclass
     class PolicyCfg(ObsGroup):
         """Observations for the policy group (order preserved)."""
@@ -75,6 +79,8 @@ class TrajectoryObservationsCfg:
 
 @configclass
 class TrajectoryEventCfg:
+    """Reset near the start of a freshly sampled reference."""
+
     reset_base = EventTerm(
         func=mdp.reset_near_reference,
         mode="reset",
@@ -84,6 +90,8 @@ class TrajectoryEventCfg:
 
 @configclass
 class TrajectoryRewardsCfg:
+    """Position and velocity tracking, attitude and smoothness terms."""
+
     tracking_fine = RewTerm(
         func=mdp.reference_tracking_exp, weight=15.0, params={"command_name": COMMAND_NAME, "std": 0.4}
     )
@@ -104,6 +112,8 @@ class TrajectoryRewardsCfg:
 
 @configclass
 class TrajectoryTerminationsCfg:
+    """Time-out, too far from the reference, crash or flip."""
+
     time_out = DoneTerm(func=base_mdp.time_out, time_out=True)
     too_far = DoneTerm(func=mdp.reference_too_far, params={"command_name": COMMAND_NAME, "max_distance": 2.5})
     crash = DoneTerm(func=base_mdp.root_height_below_minimum, params={"minimum_height": -3.0})
@@ -126,6 +136,7 @@ class TrackTrajectoryEnvCfg(NoObstacleEnvCfg):
         self.episode_length_s = 12.0
         self.sim.physics = DronePhysicsCfg()
 
-    def play_mode(self):
+    def play_mode(self) -> None:
+        """``isaaclab play``: the parent's play settings with at most 16 drones."""
         super().play_mode()
         self.scene.num_envs = min(self.scene.num_envs, 16)

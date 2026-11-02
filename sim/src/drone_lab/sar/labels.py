@@ -33,6 +33,7 @@ class InstanceBox:
     ids: tuple[int, ...]
 
     def to_dict(self) -> dict:
+        """JSON-ready fields (``label`` is stored as ``class``)."""
         return {
             "name": self.name,
             "class": self.label,
@@ -59,7 +60,7 @@ PSEUDO_LABELS = ("BACKGROUND", "UNLABELLED", "UNLABELED")
 """Replicator's pseudo classes of unlabelled pixels (ids 0 and 1 of ``instance_segmentation``)."""
 
 
-def semantic_label(sem) -> str | None:
+def semantic_label(sem: dict | str | None) -> str | None:
     """``class`` label from one ``idToSemantics`` entry (dict, or a "class: x" string)."""
     if sem is None:
         return None
@@ -156,7 +157,7 @@ CLASS_COLORS = {
 """Display colour (RGB 0-255) per class, shared by the preview figures."""
 
 
-def colorize_classes(cmap: np.ndarray, background=(30, 30, 30)) -> np.ndarray:
+def colorize_classes(cmap: np.ndarray, background: tuple[int, int, int] = (30, 30, 30)) -> np.ndarray:
     """RGB image of a :func:`class_map`."""
     out = np.empty((*cmap.shape, 3), dtype=np.uint8)
     out[:] = background

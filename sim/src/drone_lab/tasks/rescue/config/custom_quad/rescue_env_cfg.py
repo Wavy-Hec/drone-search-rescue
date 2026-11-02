@@ -51,7 +51,7 @@ class RescueCustomQuadEnvCfg(CustomQuadRoughEnvCfg):
         # the training resets drop the robot from its init height (0.719 m) onto the terrain: respawn the same way
         self.commands.base_velocity.spawn_height_offset = 0.0
 
-    def play_mode(self):
+    def play_mode(self) -> None:
         """``isaaclab play``: only the shared defaults (no corruption, <= 50 envs).
 
         The velocity base's ``play_mode`` would shrink the terrain grid to 5 x 5 tiles; the survey area must stay

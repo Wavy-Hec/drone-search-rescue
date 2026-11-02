@@ -24,6 +24,7 @@ import math
 from dataclasses import dataclass, field
 
 import numpy as np
+from numpy.typing import ArrayLike
 from scipy import ndimage
 
 from .traversability import TraversabilityMap
@@ -89,10 +90,12 @@ class PlanResult:
 
     @property
     def length_m(self) -> float:
+        """Length of the final path [m]."""
         return polyline_length(self.path_xy)
 
     @property
     def raw_length_m(self) -> float:
+        """Length of the A* path through the cell centres [m]."""
         return polyline_length(self.raw_xy)
 
     def to_dict(self) -> dict:
@@ -275,6 +278,7 @@ def snap_to_free(allowed: np.ndarray, cell: tuple[int, int]) -> tuple[tuple[int,
 
 # ----------------------------------------------------------------------------------------- path geometry
 def polyline_length(xy: np.ndarray) -> float:
+    """Length of a 2D polyline [m] (0 for fewer than two points)."""
     xy = np.asarray(xy, dtype=float).reshape(-1, 2)
     return float(np.sum(np.linalg.norm(np.diff(xy, axis=0), axis=1))) if len(xy) > 1 else 0.0
 
@@ -431,8 +435,8 @@ def smooth_path(
 # ---------------------------------------------------------------------------------------------- top level
 def plan_path(
     tmap: TraversabilityMap,
-    start_xy,
-    goal_xy,
+    start_xy: ArrayLike,
+    goal_xy: ArrayLike,
     *,
     max_start_snap_m: float = 2.0,
     max_goal_snap_m: float = 6.0,

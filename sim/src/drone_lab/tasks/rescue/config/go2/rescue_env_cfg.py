@@ -27,7 +27,7 @@ class RescueGo2EnvCfg(UnitreeGo2RoughEnvCfg):
         # scripts/rescue_finale.py replaces it with the planned goal and its terrain height
         apply_rescue_task(self, num_envs=1, episode_length_s=300.0, person=person_asset_cfg(DEFAULT_GOAL_XY, 0.0))
 
-    def play_mode(self):
+    def play_mode(self) -> None:
         """``isaaclab play``: only the shared defaults (no corruption, <= 50 envs).
 
         The velocity base's ``play_mode`` would shrink the terrain grid to 5 x 5 tiles; the survey area must stay

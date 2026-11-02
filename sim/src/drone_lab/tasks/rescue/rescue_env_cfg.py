@@ -22,6 +22,7 @@ policy observations stay exactly as trained) and changes only what the finale ne
 from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import AssetBaseCfg
@@ -33,6 +34,11 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, NUCLEUS_ASSET_ROOT_DIR
 
 from drone_lab.tasks.rescue import mdp as rescue_mdp
 from drone_lab.terrain import SURVEY_TERRAIN_CFG
+
+if TYPE_CHECKING:
+    from isaaclab.terrains import TerrainGeneratorCfg
+
+    from isaaclab_tasks.core.velocity.velocity_env_cfg import LocomotionVelocityRoughEnvCfg
 
 COMMAND_NAME = "base_velocity"
 """The replaced command keeps the velocity task's term name (the policy observation reads it by name)."""
@@ -103,7 +109,7 @@ def person_asset_cfg(
     )
 
 
-def add_sar_site(cfg, seed: int = 0) -> None:
+def add_sar_site(cfg: LocomotionVelocityRoughEnvCfg, seed: int = 0) -> None:
     """Dress the terrain of a rescue config as the drone mission's disaster site (in place).
 
     Adds ``scene.sar_site`` (:class:`~drone_lab.tasks.rescue.site.RescueSiteCfg`: people, props with their
@@ -127,7 +133,7 @@ def add_sar_site(cfg, seed: int = 0) -> None:
     cfg.scene.person = None
 
 
-def use_plain_terrain(cfg, person: AssetBaseCfg | None = None) -> None:
+def use_plain_terrain(cfg: LocomotionVelocityRoughEnvCfg, person: AssetBaseCfg | None = None) -> None:
     """The bare survey terrain in rocky soil, with ``person`` (if given) at the goal; removes a SAR site (in place)."""
     for name in ("sar_site", "sun_light"):
         if getattr(cfg.scene, name, None) is not None:
@@ -140,16 +146,16 @@ def use_plain_terrain(cfg, person: AssetBaseCfg | None = None) -> None:
 
 
 def apply_rescue_task(
-    cfg,
+    cfg: LocomotionVelocityRoughEnvCfg,
     *,
-    terrain_generator=SURVEY_TERRAIN_CFG,
+    terrain_generator: TerrainGeneratorCfg = SURVEY_TERRAIN_CFG,
     num_envs: int = 1,
     episode_length_s: float = 300.0,
     person: AssetBaseCfg | None = None,
     site_seed: int | None = None,
     flip_limit_rad: float = 1.2,
     goal_hold_s: float = 3.0,
-):
+) -> LocomotionVelocityRoughEnvCfg:
     """Modify a velocity-task config in place into the rescue task (see the module docstring); returns it.
 
     ``site_seed`` dresses the terrain as the SAR site of that seed (:func:`add_sar_site`, ``person`` is then

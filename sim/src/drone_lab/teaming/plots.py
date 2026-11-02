@@ -12,7 +12,9 @@ Colour roles follow :mod:`drone_lab.plotting` (same validated palette and ink to
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import matplotlib
 
@@ -29,6 +31,11 @@ from drone_lab.plotting import Theme, get_theme  # noqa: E402
 
 from .planner import PlanResult  # noqa: E402
 from .traversability import TraversabilityMap  # noqa: E402
+
+if TYPE_CHECKING:
+    from numpy.typing import ArrayLike
+
+    from .inputs import Pin
 
 __all__ = ["BLUE_SEQUENTIAL", "STATUS_CRITICAL", "STATUS_GOOD", "plot_plan", "plot_walk", "render_minimap"]
 
@@ -211,8 +218,8 @@ def plot_plan(
     plan: PlanResult,
     out_path: str | Path,
     *,
-    pins=(),
-    goal_pin=None,
+    pins: Sequence[Pin] = (),
+    goal_pin: Pin | None = None,
     source: str = "",
     robot: str = "Go2",
     theme: str | Theme = "light",
@@ -340,8 +347,8 @@ def plot_walk(
     walk: dict,
     out_path: str | Path,
     *,
-    pins=(),
-    goal_pin=None,
+    pins: Sequence[Pin] = (),
+    goal_pin: Pin | None = None,
     summary: dict | None = None,
     theme: str | Theme = "light",
     robot: str = "Go2",
@@ -489,12 +496,12 @@ def render_minimap(
     tmap: TraversabilityMap,
     plan: PlanResult,
     *,
-    pins=(),
-    goal_pin=None,
+    pins: Sequence[Pin] = (),
+    goal_pin: Pin | None = None,
     size_px: int = 300,
     margin_m: float = 3.0,
     theme: str | Theme = "light",
-):
+) -> tuple[np.ndarray, Callable[[ArrayLike, ArrayLike], tuple[np.ndarray, np.ndarray]]]:
     """Square minimap image of the route for the video inset.
 
     Returns:
@@ -538,7 +545,7 @@ def render_minimap(
     span = max(x1 - x0, y1 - y0)
     cx, cy = 0.5 * (x0 + x1), 0.5 * (y0 + y1)
 
-    def to_pixel(x, y):
+    def to_pixel(x: ArrayLike, y: ArrayLike) -> tuple[np.ndarray, np.ndarray]:
         col = (np.asarray(x) - (cx - 0.5 * span)) / span * w
         row = (1.0 - (np.asarray(y) - (cy - 0.5 * span)) / span) * h
         return col, row

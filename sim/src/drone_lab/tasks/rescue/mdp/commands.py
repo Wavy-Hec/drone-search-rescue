@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _env_id_list(env_ids, num_envs: int) -> list[int]:
+def _env_id_list(env_ids: torch.Tensor | Sequence[int] | slice | None, num_envs: int) -> list[int]:
     if env_ids is None:
         return list(range(num_envs))
     if isinstance(env_ids, slice):
@@ -202,7 +202,7 @@ class PathFollowCommand(CommandTerm):
         yaw = math.atan2(y1 - y0, x1 - x0) if (abs(x1 - x0) + abs(y1 - y0)) > 1e-6 else 0.0
         return x, y, z, yaw
 
-    def prepare_respawn(self, env_ids) -> np.ndarray:
+    def prepare_respawn(self, env_ids: torch.Tensor | Sequence[int] | slice | None) -> np.ndarray:
         """Decide where the reset envs (re)start on the route and remember it (:attr:`respawn_s`).
 
         A fall (an env that terminated without a time-out) respawns where it fell, :attr:`cfg.respawn_backoff_m`

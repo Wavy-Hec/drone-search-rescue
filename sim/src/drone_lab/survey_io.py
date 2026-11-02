@@ -85,7 +85,8 @@ class TrajectoryRecorder:
     def __init__(self):
         self._chunks: list[np.ndarray] = []
 
-    def record(self, **columns):
+    def record(self, **columns: np.ndarray | float) -> None:
+        """Append one block of rows: per-row arrays (all the same length) and scalars broadcast to them."""
         n = None
         for v in columns.values():
             v = np.asarray(v)
@@ -107,6 +108,7 @@ class TrajectoryRecorder:
         return sum(len(c) for c in self._chunks)
 
     def as_dict(self) -> dict[str, np.ndarray]:
+        """Every column of :data:`TRAJECTORY_FIELDS` over all recorded rows."""
         arr = np.concatenate(self._chunks) if self._chunks else np.zeros((0, len(TRAJECTORY_FIELDS)))
         return {name: arr[:, i] for i, name in enumerate(TRAJECTORY_FIELDS)}
 

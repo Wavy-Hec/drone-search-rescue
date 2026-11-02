@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass, field
+from typing import Any
 
 import numpy as np
 
@@ -39,6 +40,7 @@ class VelocityLimits:
     ang_vel_z: tuple[float, float] = (-1.0, 1.0)
 
     def clip(self, vx: float, vy: float, wz: float) -> tuple[float, float, float]:
+        """The command clipped to the ranges."""
         return (
             float(np.clip(vx, *self.lin_vel_x)),
             float(np.clip(vy, *self.lin_vel_y)),
@@ -46,7 +48,7 @@ class VelocityLimits:
         )
 
     @classmethod
-    def from_ranges(cls, ranges) -> VelocityLimits:
+    def from_ranges(cls, ranges: Any) -> VelocityLimits:
         """From an object with ``lin_vel_x``, ``lin_vel_y``, ``ang_vel_z`` attributes (e.g. Isaac Lab's Ranges)."""
         return cls(tuple(ranges.lin_vel_x), tuple(ranges.lin_vel_y), tuple(ranges.ang_vel_z))
 
@@ -87,6 +89,7 @@ class FollowerCfg:
     """Final clip to the policy's command ranges."""
 
     def to_dict(self) -> dict:
+        """Settings as plain JSON types."""
         return asdict(self)
 
 

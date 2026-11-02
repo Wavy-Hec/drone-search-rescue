@@ -30,7 +30,7 @@ from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.sensors import ContactSensorCfg, RayCasterCfg, patterns
-from isaaclab.terrains import TerrainImporterCfg
+from isaaclab.terrains import TerrainGeneratorCfg, TerrainImporterCfg
 from isaaclab.utils import configclass, replace
 from isaaclab.visualizers import VisualizerCfg
 
@@ -174,7 +174,9 @@ class SurveyTerminationsCfg:
 ##
 
 
-def overview_camera(area_cfg=SURVEY_TERRAIN_CFG) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+def overview_camera(
+    area_cfg: TerrainGeneratorCfg = SURVEY_TERRAIN_CFG,
+) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
     """High oblique camera (eye, lookat) that frames the whole survey area."""
     area = terrain_area(area_cfg)
     cx, cy = area.center

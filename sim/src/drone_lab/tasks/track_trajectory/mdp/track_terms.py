@@ -70,7 +70,7 @@ def reset_near_reference(
     attitude_noise: float = 0.26,
     velocity_noise: float = 0.2,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-):
+) -> None:
     """Draw a new reference and place the drone near its start (position, attitude and velocity noise)."""
     asset: Articulation = env.scene[asset_cfg.name]
     term = _term(env, command_name)
