@@ -3,6 +3,7 @@
 import contextlib
 import importlib.util
 import io
+import shutil
 import unittest
 from pathlib import Path
 
@@ -38,6 +39,7 @@ class TestComposeVideo(unittest.TestCase):
         with self.assertRaises(ValueError):
             cv.match_frames(sim_t, np.full(3, np.nan))
 
+    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg not installed")
     def test_composes_both_recordings_in_step(self):
         cv = load_script()
         tmp = Path(short_tmpdir("dgcs_compose"))
