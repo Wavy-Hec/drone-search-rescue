@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Hector Lugo
+# SPDX-License-Identifier: MIT
+
 """drone_gcs: ground-control-station side of the simulated drone survey.
 
 The simulator (Isaac Sim / Isaac Lab, or ``scripts/fake_drone.py``) streams MISSION / TELEMETRY / SCAN /

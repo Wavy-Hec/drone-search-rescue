@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Hector Lugo
+# SPDX-License-Identifier: MIT
+
 """Local link between the simulator (``Sender``) and the GCS (``Receiver``). Standard library + numpy only.
 
 The GCS listens; the simulator connects (and keeps reconnecting). Addresses:

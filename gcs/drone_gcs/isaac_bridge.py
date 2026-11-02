@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Hector Lugo
+# SPDX-License-Identifier: MIT
+
 """Stream Isaac Lab 3.0 assets and sensors through a :class:`~drone_gcs.link.Sender`.
 
 Standard library + numpy only and duck-typed: nothing here imports isaaclab, torch or warp, so it loads in

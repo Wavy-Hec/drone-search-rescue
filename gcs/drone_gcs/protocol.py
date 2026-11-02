@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Hector Lugo
+# SPDX-License-Identifier: MIT
+
 """Wire format of the simulator -> GCS link. Standard library + numpy only.
 
 One message is one length-prefixed frame on a stream socket (UNIX domain or TCP)::

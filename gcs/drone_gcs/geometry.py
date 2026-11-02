@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Hector Lugo
+# SPDX-License-Identifier: MIT
+
 """Rotations, camera conventions and the pinhole camera model (numpy only).
 
 Conventions (see PROTOCOL.md):
