@@ -1,6 +1,8 @@
 """SAR scene generator: determinism, placement on the terrain (height queries), no objects inside blocks, spacing,
 classes and the ground-truth JSON (CPU only; needs env_isaaclab for Isaac Lab's terrain generator, no Kit).
 
+The sites here have T-pose people: their layout is the one natural people start from (``test_sar_people.py``).
+
 Run: ``CUDA_VISIBLE_DEVICES= python tests/test_sar_scenario.py`` (or with pytest).
 """
 
@@ -30,7 +32,7 @@ def _scenario(seed: int = 0):
     if key not in _CACHE:
         from drone_lab.sar.scenario import ScenarioCfg, generate_scenario
 
-        _CACHE[key] = generate_scenario(ScenarioCfg(seed=seed), site=_site())
+        _CACHE[key] = generate_scenario(ScenarioCfg(seed=seed, people_style="tpose"), site=_site())
     return _CACHE[key]
 
 

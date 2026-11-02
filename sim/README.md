@@ -66,14 +66,14 @@ Flown with the built-in tracking policy after 1300 training iterations (`exporte
 
 ## Search-and-rescue site (`DroneLab-SAR-ARL-Robot-1-v0`)
 
-The same survey over a dressed disaster site: 6-10 people standing or lying (many of them next to the blocks of
-"collapsed buildings"), a forklift, crates, barrels, pallets, traffic cones, trees, textured ground and a landing
-pad at the start of the path. A seeded generator places every object on the exact terrain mesh (flat footing, no
-overlaps, nothing inside a block) and writes the ground truth: class, position, size and pose of each object. The
-drone carries a downward 640 x 480 RGB-D camera with instance segmentation, so every frame comes with exact labels
-and boxes for training a detector; a lying person is 26-29 px across the shoulders at survey altitude. The policy
-inputs are unchanged, so the same trained policy flies it (45 s test flight: no crash, 4 cm cross-track error).
-The camera costs about 35-50 ms per step and 2.4 GB of GPU memory.
+The same survey over a dressed disaster site: 6-10 victims lying, sitting or waving for help (many of them next to
+the blocks of "collapsed buildings") and two or three responders, a forklift, crates, barrels, pallets, traffic
+cones, trees, textured ground and a landing pad at the start of the path. A seeded generator places every object
+on the exact terrain mesh (flat footing, no overlaps, nothing inside a block) and writes the ground truth: class,
+position, size and pose of each object. The drone carries a downward 640 x 480 RGB-D camera with instance
+segmentation, so every frame comes with exact labels and boxes for training a detector; a lying person is 26-29 px
+across the shoulders at survey altitude. The policy inputs are unchanged, so the same trained policy flies it (45 s
+test flight: no crash, 4 cm cross-track error). The camera costs about 35-50 ms per step and 2.4 GB of GPU memory.
 Details: [`src/drone_lab/sar/README.md`](src/drone_lab/sar/README.md).
 
 ![The dressed disaster site (seed 0) rendered in Isaac Sim](docs/images/sar_overview.jpg)
@@ -90,25 +90,27 @@ python scripts/sar_preview.py --no_sim   # CPU, seconds: ground truth + object m
 python scripts/gen_yolo_dataset.py       # GPU, ~7 min: detector dataset, 2118 labelled frames of 44 sites
 ```
 
-**Natural people (opt-in).** By default the people are Isaac Sim's characters in their rest T-pose, which the
-detector dataset and the missions here were made with. `people_style=natural` poses them: victims lie on their
-back or in the recovery position, sit against the rubble or wave for help, and two or three responders by the
-forklift and the helipad look around, point or walk. Each pose is a frame of Isaac Sim's own animation clips (idle,
-wave, sit, look-around, point, walk), retargeted onto the character's skeleton on the CPU and baked into a static
-mesh ([`people.py`](src/drone_lab/sar/people.py)), so it looks the same in RGB, depth and segmentation (class
-`person`) and costs nothing per frame. Every pose also comes mirrored (the other arm waves, the other knee is up),
-so two people in the same pose are not copies. The rest of the site does not change; the victims keep their names
-and stay within 1 m of their old places, resting on the terrain through the under-side height map of their pose.
+**Natural people (the default).** The victims lie on their back or in the recovery position, sit against the
+rubble or wave for help, and two or three responders by the forklift and the helipad look around, point or walk.
+Each pose is a frame of Isaac Sim's own animation clips (idle, wave, sit, look-around, point, walk), retargeted onto
+the character's skeleton on the CPU and baked into a static mesh ([`people.py`](src/drone_lab/sar/people.py)), so
+it looks the same in RGB, depth and segmentation (class `person`) and costs nothing per frame. Every pose also comes
+mirrored (the other arm waves, the other knee is up), so two people in the same pose are not copies.
+`people_style=tpose` gives Isaac Sim's characters in their rest T-pose instead, standing or lying flat, without
+responders: the people of the first detector dataset. The rest of the site is the same in both; the natural
+victims keep the names of the T-pose ones and stay within 1 m of their places, resting on the terrain through the
+under-side height map of their pose.
 
 ![Natural people on the demo site: sitting, waving, in the recovery position, on the back, pointing, walking](docs/images/sar_people_natural.jpg)
 
-*Close-ups from `sar_preview.py --people_style natural --closeups` (seeds 0 and 1). Top: a worker sitting against a
-block, a woman waving from a sand hill, an officer in the recovery position. Bottom: a worker on his back, and two
-responders, one pointing ahead (a victim lies behind him) and one walking.*
+*Close-ups from `sar_preview.py --closeups` (seeds 0 and 1). Top: a worker sitting against a block, a woman waving
+from a sand hill, an officer in the recovery position. Bottom: a worker on his back, and two responders, one
+pointing ahead (a victim lies behind him) and one walking.*
 
 ```bash
-python scripts/sar_preview.py --people_style natural --closeups   # GPU, ~2 min: + close-ups of every pose
-# in any SAR task or script, the Hydra token:  env.scene.sar_site.spawn.people_style=natural
+python scripts/sar_preview.py --closeups              # GPU, ~2 min: + close-ups of every pose
+python scripts/sar_preview.py --people_style tpose     # the T-pose people (runs/sar_preview_seed0_tpose)
+# in any SAR task or script, the Hydra token:  env.scene.sar_site.spawn.people_style=tpose
 ```
 
 The ground station's detector (YOLO26n) is fine-tuned on that dataset. In the 183 test frames along the survey

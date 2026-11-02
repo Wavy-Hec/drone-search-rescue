@@ -101,11 +101,11 @@ def test_scene_has_site_camera_and_lights():
     # another seed through Hydra
     cfg3 = _parse(SAR, ["env.scene.sar_site.spawn.seed=3"])
     assert cfg3.scene.sar_site.spawn.seed == 3
-    # people: T-pose unless asked, natural through Hydra (the scenario the spawner places follows)
-    assert site.spawn.people_style == "tpose" and site.spawn.scenario_cfg().people_style == "tpose"
-    natural = _parse(SAR, ["env.scene.sar_site.spawn.people_style=natural"]).scene.sar_site.spawn
-    assert natural.people_style == "natural" and natural.scenario_cfg().people_style == "natural"
-    assert natural.scenario_cfg().num_responders == (2, 3)
+    # people: natural unless asked, T-pose through Hydra (the scenario the spawner places follows)
+    assert site.spawn.people_style == "natural" and site.spawn.scenario_cfg().people_style == "natural"
+    assert site.spawn.scenario_cfg().num_responders == (2, 3)
+    tpose = _parse(SAR, ["env.scene.sar_site.spawn.people_style=tpose"]).scene.sar_site.spawn
+    assert tpose.people_style == "tpose" and tpose.scenario_cfg().people_style == "tpose"
 
 
 def test_camera_mount_looks_down_with_nose_up_in_the_image():

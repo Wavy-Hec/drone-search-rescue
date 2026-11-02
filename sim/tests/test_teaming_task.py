@@ -489,7 +489,7 @@ def test_rescue_finale_cli_plans_on_a_drone_gcs_mission_report():
         assert plan["apron_cells"] > 0 and plan["start_xy"] == [-23.0, -18.0]  # the site's landing pad
         assert plan["plan"]["success"] and plan["goal_pin"]["id"] == "2"
         check = plan["goal_check"]
-        assert (check["true_person"], check["pose"]) == ("person_08", "lying_face_down")
+        assert (check["true_person"], check["pose"]) == ("person_08", "lying_side")
         assert abs(check["pin_error_m"] - 0.3) < 1e-3
         assert "check: the pin marks person_08" in r.stdout
 

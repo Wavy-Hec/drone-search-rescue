@@ -1,6 +1,6 @@
 """Spawn the dressed SAR site in Isaac Sim and save what it looks like, plus automatic scale / label checks (GPU).
 
-Writes to ``runs/<out>/`` (default ``runs/sar_preview_seed<seed>``):
+Writes to ``runs/<out>/`` (default ``runs/sar_preview_seed<seed>``, ``..._tpose`` with ``--people_style tpose``):
 
 * ``ground_truth.json``     -- every object: class, position / centre, size, pose, prim path (CPU, no Isaac Sim)
 * ``object_map.png``        -- top-down object map over the hill-shaded terrain, with the survey path (CPU)
@@ -22,7 +22,8 @@ Examples (env_isaaclab, from the project root)::
     python scripts/sar_preview.py --seed 3 --out sar_seed3
     python scripts/sar_preview.py --no_sim             # ground truth + object map only (CPU, seconds)
     python scripts/sar_preview.py --bench_only --bench_steps 200   # drone camera only: render time / VRAM
-    python scripts/sar_preview.py --people_style natural --closeups  # posed people + close-ups of each pose
+    python scripts/sar_preview.py --closeups           # + close-ups of one person per pose
+    python scripts/sar_preview.py --people_style tpose # the characters' rest T-pose (runs/sar_preview_seed0_tpose)
 
 Trailing ``key=value`` tokens are Hydra overrides of the task config
 (e.g. ``env.scene.sar_site.spawn.num_trees=[2,3]``).
@@ -54,7 +55,7 @@ parser.add_argument(
     "--people_style",
     choices=PEOPLE_STYLES,
     default=None,
-    help="People of the site: 'tpose' (the task's default) or 'natural' (posed victims and responders).",
+    help="People of the site: 'natural' (the task's default: posed victims and responders) or 'tpose'.",
 )
 parser.add_argument("--closeups", action="store_true", help="Low oblique close-ups of one person per pose.")
 parser.add_argument("--closeup_size", type=int, nargs=2, default=(1280, 800), metavar=("W", "H"))
@@ -93,7 +94,7 @@ if not args_cli.no_sim:
 import numpy as np  # noqa: E402
 
 from drone_lab.sar.labels import CLASS_COLORS, class_map, colorize_classes, instance_boxes  # noqa: E402
-from drone_lab.sar.scenario import Scenario, TerrainSite  # noqa: E402
+from drone_lab.sar.scenario import Scenario, ScenarioCfg, TerrainSite  # noqa: E402
 from drone_lab.sar.topdown import person_tag, plot_object_map  # noqa: E402
 
 SITE = "/World/sar"
@@ -106,7 +107,7 @@ SEG = "instance_segmentation"
 def run_dir_for(out: str | None, seed: int, people_style: str | None = None) -> Path:
     if out and ("/" in out or out.startswith("~")):
         return Path(out).expanduser().resolve()
-    suffix = f"_{people_style}" if people_style not in (None, "tpose") else ""
+    suffix = f"_{people_style}" if people_style not in (None, ScenarioCfg.people_style) else ""
     return PROJECT_ROOT / "runs" / (out or f"sar_preview_seed{seed}{suffix}")
 
 

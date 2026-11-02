@@ -4,9 +4,10 @@
 downward RGB-D camera. Task: **`DroneLab-SAR-ARL-Robot-1-v0`** (the survey task plus the site, the camera and
 sun/sky lighting; the policy sees exactly the same 17 observations, so the built-in tracking policy flies it).
 
-What is in the default scene (seed 0): 9 people (6 lying; 6 right next to "collapsed buildings"), a forklift, 9
-crates (cardboard, plastic, a 1 m wooden crate), 6 barrels, 5 pallets, 8 traffic cones (4 around the helipad),
-4 trees, and a landing pad with an "H" on an asphalt apron next to the start of the lawnmower path. The ground
+What is in the default scene (seed 0): 9 victims (2 on their back, 2 in the recovery position, 3 sitting, 2 waving;
+6 right next to "collapsed buildings"), 2 responders (by the forklift and the helipad), a forklift, 9 crates
+(cardboard, plastic, a 1 m wooden crate), 6 barrels, 5 pallets, 8 traffic cones (4 around the helipad), 4 trees,
+and a landing pad with an "H" on an asphalt apron next to the start of the lawnmower path. The ground
 has grass (hills, waves, border), soil (pyramids, pit), gravel (rough tile, rubble between blocks) and concrete
 (block tops and walls, stairs). Every object except the trees carries a `class` semantic label: `person`,
 `vehicle`, `crate`, `barrel`, `pallet`, `cone`, `landing_pad` (class ids 0-6 in that order).
@@ -41,18 +42,18 @@ custom data `drone_lab:sar_ground_truth`). Without installing the project, use `
 | `capture.py` | drone views, lights and ground looks of the detector dataset (`scripts/gen_yolo_dataset.py`; numpy only) |
 | `topdown.py` | top-down object map figure |
 
-## People: T-pose or natural
+## People: natural or T-pose
 
-`people_style` (`SarSiteCfg`, `ScenarioCfg`; default `tpose`) picks how the people look:
+`people_style` (`SarSiteCfg`, `ScenarioCfg`; default `natural`) picks how the people look:
 
-* `tpose`: Isaac Sim's characters as shipped, standing or lying flat in their rest T-pose. The detector dataset
-  and the missions so far use this; its sites and ground truth are byte for byte what they were before the
-  option existed (`tests/test_sar_people.py`).
-* `natural`: the same layout, re-posed. Victims lie on their back or in the recovery position, sit on the ground or
-  wave; a victim next to a step slides up to it (a sitting one with its back to the block), at most 1 m from its
+* `natural`: the T-pose layout, re-posed. Victims lie on their back or in the recovery position, sit on the ground
+  or wave; a victim next to a step slides up to it (a sitting one with its back to the block), at most 1 m from its
   T-pose place. Two or three responders in uniform are by the forklift and around the helipad, each doing
   something else: looking around, pointing ahead or walking (`group` `responders` in the ground truth). Every
   other object stays exactly where it was.
+* `tpose`: Isaac Sim's characters as shipped, standing or lying flat in their rest T-pose, without responders.
+  The first detector dataset (`~/isaac_ws/datasets/drone_sar_yolo`) used this; its sites and ground truth are byte
+  for byte what they were before natural people existed (`tests/test_sar_people.py`).
 
 | Pose (`pose` in the ground truth) | Who | Clip frame and edits |
 |---|---|---|
@@ -68,9 +69,9 @@ Every pose also comes as its mirror image, `<pose>_mirrored`: the other arm wave
 lies on the other side. Each person draws its variant (from a random stream of its own, so the pose drawn for a
 victim does not depend on it), and three waving people in one site are not copies of each other.
 
-Switch it with `env.scene.sar_site.spawn.people_style=natural` (any SAR task or script) or
-`scripts/sar_preview.py --people_style natural`; `--closeups` adds a low oblique close-up of one person per pose
-(`--closeup_people person_03 ...` picks them), taken from the side the face looks to.
+Switch to T-pose people with `env.scene.sar_site.spawn.people_style=tpose` (any SAR task or script) or
+`scripts/sar_preview.py --people_style tpose`. `sar_preview.py --closeups` adds a low oblique close-up of one person
+per pose (`--closeup_people person_03 ...` picks them), taken from the side the face looks to.
 
 How the poses are made (`people.py`): the clips of `Isaac/People/Animations` drive the Biped rig of
 `Characters/Biped_Setup.usd`, not the characters' own (Reallusion) skeletons, and Isaac Lab's apps do not load
@@ -154,7 +155,8 @@ MDL ground materials and the sky HDRI are loaded by Kit itself.
 
 ## Notes
 
-* The people are Isaac Sim's characters in their rest T-pose unless `people_style=natural` (see above).
+* The people are posed static copies of Isaac Sim's characters, or the characters in their rest T-pose with
+  `people_style=tpose` (see above).
 * Trees are sized for the survey height at spawn time (`survey_clearance`, copied from
   `commands.survey_target.altitude` when the config is built). If a script lowers the altitude later, also set
   `env.scene.sar_site.spawn.survey_clearance` (trees have no colliders, but the drone would fly through foliage).

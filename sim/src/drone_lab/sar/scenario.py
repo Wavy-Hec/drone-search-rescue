@@ -16,12 +16,13 @@ terrace or crater wall), and "near_block" marks the people next to a collapsed b
 or stairs tile). The landing pad sits on the flat border next to the start of the default lawnmower path, with
 traffic cones at its corners.
 
-``people_style="natural"`` keeps that layout and then re-poses every person (:mod:`drone_lab.sar.people`): the
-victims lie on their back or side, sit or wave, at their place or slid towards their step (a sitting victim leans
-its back towards it), and a few responders look around, point or walk by the vehicle and the landing pad; each
-person shows its pose in one of its variants (mirror image, clip frame). A posed person rests on the
-terrain through the under-side height map of its pose: nothing pokes into the body, and the parts that carry it
-(back, seat, feet) are at most a few centimetres above the ground. The rest of the site is the T-pose site's.
+``people_style="natural"`` (the default) keeps that layout and then re-poses every person
+(:mod:`drone_lab.sar.people`): the victims lie on their back or side, sit or wave, at their place or slid towards
+their step (a sitting victim leans its back towards it), and a few responders look around, point or walk by the
+vehicle and the landing pad; each person shows its pose in one of its variants (mirror image, clip frame). A posed
+person rests on the terrain through the under-side height map of its pose: nothing pokes into the body, and the
+parts that carry it (back, seat, feet) are at most a few centimetres above the ground. The rest of the site is the
+T-pose site's (``people_style="tpose"``).
 
 Only numpy (+ Isaac Lab's CPU terrain generator through :mod:`drone_lab.terrain`) is needed; no simulator.
 """
@@ -70,9 +71,10 @@ class ScenarioCfg:
     """Fraction of people that must stand or lie right next to a step at least 0.6 m high (``near_step``). On this
     terrain that is mostly a block of a collapsed building (``near_block``), sometimes a pyramid terrace or the
     crater wall; the rule is kept as is so that every seed keeps its layout."""
-    people_style: str = "tpose"
-    """``tpose``: the characters' rest T-pose, standing or lying flat. ``natural``: the same places, re-posed as
-    victims lying on their back or side, sitting or waving, plus responders (see the module docstring)."""
+    people_style: str = "natural"
+    """``natural``: victims lying on their back or side, sitting or waving, plus responders (see the module
+    docstring). ``tpose``: the characters' rest T-pose, standing or lying flat, at the places the victims start
+    from."""
     num_responders: tuple[int, int] = (2, 3)
     """Responders by the vehicle and the landing pad (``natural`` only)."""
     num_vehicles: int = 1
