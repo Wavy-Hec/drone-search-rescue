@@ -27,12 +27,7 @@ from dataclasses import asdict, dataclass, field
 
 import numpy as np
 
-__all__ = ["FollowerCfg", "FollowerOutput", "PurePursuitFollower", "VelocityLimits", "wrap_to_pi"]
-
-
-def wrap_to_pi(a):
-    """Wrap angles to [-pi, pi)."""
-    return (np.asarray(a, dtype=float) + math.pi) % (2.0 * math.pi) - math.pi
+__all__ = ["FollowerCfg", "FollowerOutput", "PurePursuitFollower", "VelocityLimits"]
 
 
 @dataclass(frozen=True)
