@@ -1,14 +1,17 @@
 """Render a detector dataset of the SAR site in Isaac Sim: drone-camera RGB + instance segmentation (GPU).
 
-One simulator run renders many sites. For every scenario seed the dressed site is respawned in place and the drone
-is put at sampled views (:mod:`drone_lab.sar.capture`) under varied light and ground looks. Frames go to one
-folder per split, in the capture layout of the ground station's dataset tools (``drone_gcs/scripts/seg_to_yolo.py``):
+One simulator run renders many sites. A site is the survey terrain dressed by one scenario seed: the seed places the
+people and objects, the terrain is the same for every seed. For every seed the objects are respawned in place and
+the drone is put at sampled views (:mod:`drone_lab.sar.capture`) under varied light and ground looks. Frames go to
+one folder per split, in the capture layout of the ground station's dataset tools
+(``drone_gcs/scripts/seg_to_yolo.py``):
 
     <out>/train/   --train_seeds (default 1000-1035), --frames random views per site
     <out>/val/     --val_seeds   (default 2000-2006): other sites, held out from training
     <out>/test/    --test_seeds  (default 0, the demo mission's site): views along the survey path, mission light
 
-Seeds below 1000 never reach train or val, so any site picked with ``--seed`` in the other scripts is unseen.
+Seeds below 1000 never reach train or val, so the layout of any site picked with ``--seed`` in the other scripts is
+unseen.
 
 Per frame ``rgb_<key>.png``, ``instance_<key>.png`` (16-bit instance ids) and ``instance_<key>.json`` (id -> prim
 path and class, full boxes of the objects cut by the image edge, drone view, light). Per site ``seed_<n>.json``

@@ -7,8 +7,8 @@
   the site.
 * :func:`mission_views` -- views along the survey path at the survey height, nose along +X and the small tilts
   of the real flight: what the drone sees during the mission.
-* :func:`sample_lighting` / :func:`sample_ground_look` -- sun direction and strength, overcast skies, and
-  swapped or re-tinted ground materials.
+* :func:`sample_lighting` / :func:`sample_ground_look` -- sun azimuth and strength (the elevation stays at the
+  sky image's 43 deg), overcast skies, and swapped or re-tinted ground materials.
 * :func:`padded_spec` / :func:`crop` / :func:`unclipped_boxes` -- the camera renders a larger image with the
   same focal length and principal point offset, so the centre crop is exactly the mission camera's image and
   the margin shows how much of a cut-off object lies outside it.
@@ -223,7 +223,7 @@ def mission_views(
 
 
 def sample_lighting(rng: np.random.Generator, default_fraction: float = 0.3, overcast_fraction: float = 0.15):
-    """The mission's sun (``default_fraction``), an overcast sky, or a sun from another direction and strength."""
+    """The mission's sun (``default_fraction``), an overcast sky, or a sun from another azimuth and strength."""
     u = float(rng.uniform())
     if u < default_fraction:
         return Lighting()

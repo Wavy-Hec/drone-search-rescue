@@ -112,7 +112,7 @@ python scripts/sar_preview.py --people_style natural --closeups   # GPU, ~2 min:
 ```
 
 The ground station's detector (YOLO26n) is fine-tuned on that dataset. In the 183 test frames along the survey
-path over the demo site it finds every person (55 sightings) without a false alarm; the stock COCO model finds 27.
+path over the demo site it finds every person (55 sightings) without a false alarm; the stock COCO model finds 25.
 Details in the drone_gcs README.
 
 ## Live mission: Isaac Sim to the ground station
