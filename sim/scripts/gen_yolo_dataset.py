@@ -26,11 +26,11 @@ Examples (env_isaaclab, from the project root)::
 
     python scripts/gen_yolo_dataset.py                       # full dataset: 2118 frames, about 7 min
     python scripts/gen_yolo_dataset.py --train_seeds 1000 --val_seeds 2000 --frames 6 --out /tmp/sar_capture_smoke
-    python scripts/gen_yolo_dataset.py --people_style tpose --out ~/isaac_ws/datasets/drone_sar_yolo/capture
+    python scripts/gen_yolo_dataset.py --people_style tpose --out ../datasets/drone_sar_yolo/capture
 
 Then, in the ``vision`` env (classes in the order of :data:`drone_lab.sar.assets.CLASSES`)::
 
-    python ~/isaac_ws/projects/drone_gcs/scripts/seg_to_yolo.py --src <out> --out <yolo dataset> \\
+    python ../gcs/scripts/seg_to_yolo.py --src <out> --out <yolo dataset> \\
         --classes person,vehicle,crate,barrel,pallet,cone,landing_pad
 """
 
@@ -86,7 +86,11 @@ def parse_seeds(text: str) -> list[int]:
 
 def parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--out", default="~/isaac_ws/datasets/drone_sar_yolo_v2/capture", help="Capture folder.")
+    parser.add_argument(
+        "--out",
+        default=str(PROJECT_ROOT.parent / "datasets" / "drone_sar_yolo_v2" / "capture"),
+        help="Capture folder (default: datasets/drone_sar_yolo_v2/capture at the repository root).",
+    )
     parser.add_argument(
         "--people_style",
         choices=PEOPLE_STYLES,

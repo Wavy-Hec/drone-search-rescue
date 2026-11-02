@@ -4,8 +4,8 @@ Usage (no GPU needed; hide it so nothing touches the device)::
 
     CUDA_VISIBLE_DEVICES= python tests/run_cpu_tests.py
 
-With pytest available (e.g. ``~/anaconda3/bin/python -m pytest tests``) the same tests run under pytest; tests
-whose dependencies are missing (torch, Isaac Lab) are skipped there.
+In a Python with pytest (``python -m pytest tests``) the same tests run under pytest; tests whose dependencies
+are missing (torch, Isaac Lab) are skipped there.
 """
 
 from __future__ import annotations
