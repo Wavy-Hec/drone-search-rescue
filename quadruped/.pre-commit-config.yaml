@@ -3,6 +3,8 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+# USD assets are binary or generated layers: no text hooks on them
+exclude: '\.(usd|usda|usdc|usdz)$'
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.14.10

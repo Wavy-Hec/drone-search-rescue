@@ -213,11 +213,11 @@ def _ray_triangles(origin: np.ndarray, dirs: np.ndarray, tris: np.ndarray, chunk
         valid = np.abs(det) > 1e-12
         inv = np.where(valid, 1.0 / np.where(valid, det, 1.0), 0.0)
         tvec = o - v0
-        bu = np.einsum("rtk,tk->rt", p, tvec) * inv
+        bary_u = np.einsum("rtk,tk->rt", p, tvec) * inv
         q = np.cross(tvec, e1)
-        bv = (d @ q.T) * inv
+        bary_v = (d @ q.T) * inv
         dist = (q * e2).sum(1)[None] * inv
-        hit = valid & (bu >= 0) & (bv >= 0) & (bu + bv <= 1) & (dist > 1e-6)
+        hit = valid & (bary_u >= 0) & (bary_v >= 0) & (bary_u + bary_v <= 1) & (dist > 1e-6)
         best = np.minimum(best, np.where(hit, dist, np.inf).min(1))
     return best
 
