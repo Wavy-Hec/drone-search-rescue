@@ -113,9 +113,11 @@ python scripts/sar_preview.py --people_style tpose     # the T-pose people (runs
 # in any SAR task or script, the Hydra token:  env.scene.sar_site.spawn.people_style=tpose
 ```
 
-The ground station's detector (YOLO26n) is fine-tuned on that dataset. In the 183 test frames along the survey
-path over the demo site it finds every person (55 sightings) without a false alarm; the stock COCO model finds 25.
-Details in the drone_gcs README.
+The ground station's detector (YOLO26n) is fine-tuned on that dataset, natural people included. In the 183 test
+frames along the survey path over the demo site it finds every person (54 sightings) without a false alarm, and
+255 of the 256 people in the frames of 7 held-out sites; the stock COCO model finds 31 and 107. The first model,
+trained on T-pose people, misses 13 of those 256, most of them responders on their feet. Details in the drone_gcs
+README.
 
 ## Live mission: Isaac Sim to the ground station
 
