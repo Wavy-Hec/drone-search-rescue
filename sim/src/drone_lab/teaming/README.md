@@ -1,7 +1,7 @@
 # Rescue finale: air-ground teaming
 
 After the drone's survey, a ground robot gets the drone's elevation map and the pins of what it found, plans a safe
-route over the rubble and walks to a person. The robot is Hector's own quadruped (`quadruped_lab`, the converted
+route over the rubble and walks to a person. The robot is the custom quadruped (`quadruped_lab`, the converted
 Isaac Lab 2.x height-scan policy) on Isaac Sim PhysX, the same backend as the drone mission, on the same seeded
 terrain and dressed disaster site. A Unitree Go2 on Newton is the fallback.
 
@@ -17,8 +17,7 @@ pins (people, props) ┴─► slope / step / roughness ─► cost-weighted 8-c
 
 ## Run it
 
-From `~/isaac_ws/projects/drone_lab`, in `env_isaaclab` (`source ~/anaconda3/etc/profile.d/conda.sh && conda
-activate env_isaaclab`):
+From the project folder, in the conda env `env_isaaclab`:
 
 ```bash
 # CPU only: plan on the ground truth of the mission's site (seed 0) and write runs/<out>/plan.png + plan.json
@@ -30,8 +29,10 @@ python scripts/rescue_finale.py --video --out finale
 # 8 robots on the same route at once (small spawn jitter): success rate, falls, times
 python scripts/rescue_finale.py --num_envs 8 --out finale_x8
 
-# from the drone mission: its map and pins (a drone_gcs report directory, or a drone_lab survey run)
-python scripts/rescue_finale.py --report ~/isaac_ws/projects/drone_gcs/runs/<mission> --video --out from_drone
+# from the drone mission: its map and pins (a ground-station report directory, or a drone_lab survey run);
+# --goal_pin names a pin of the report (its id in report.md) instead of the planner's pick
+python scripts/rescue_finale.py --report ../gcs/runs/<mission> --video --out from_drone
+python scripts/rescue_finale.py --report ../gcs/runs/<mission> --goal_pin <id> --video --out from_drone_pin
 python scripts/rescue_finale.py --report runs/lawnmower_v1 --video --out from_survey   # map only: site pins
 
 # another person, stricter limits, another site
@@ -39,8 +40,8 @@ python scripts/rescue_finale.py --goal_pin person_04 --video --out person04
 python scripts/rescue_finale.py --max_slope 22 --video --out rim                    # stays on the crater rim
 python scripts/rescue_finale.py --sar_seed 3 --video --out site3
 
-# the Go2 fallback (Newton, the backend its checkpoint was trained on)
-python scripts/rescue_finale.py --robot go2 --video --out finale_go2
+# the Go2 fallback (Newton, the backend its policy was trained on), with your own Go2 rough-terrain checkpoint
+python scripts/rescue_finale.py --robot go2 --checkpoint <model_*.pt> --video --out finale_go2
 ```
 
 Outputs in `runs/<out>/`: `plan.png` (elevation + traversability cost with the route), `plan.json` (route, pins,
@@ -71,7 +72,7 @@ plans on the drone map alone (a start off the map then moves onto the map edge, 
 | `--robot` | Policy | Physics | Planner limits |
 |---|---|---|---|
 | `custom` (default) | `quadruped_lab/checkpoints_2x/height_scanner_model_rslrl5.pt` (task `Isaac-Velocity-Rough-Custom-Quad-v0`) | Isaac Sim PhysX | slope 23 deg, step 0.15 m, roughness 0.05 m, robot radius 0.45 m, slope fit over 0.45 m, cross-slope weight 6 |
-| `go2` | `IsaacLab/logs/rsl_rl/unitree_go2_rough/2026-11-01_15-38-28_demo_quadruped_cont/model_1498.pt` | Newton (MJWarp) | slope 22 deg, step 0.12 m, roughness 0.05 m, robot radius 0.35 m, slope fit over 0.35 m |
+| `go2` | a `model_*.pt` of Isaac Lab's `Isaac-Velocity-Rough-UnitreeGo2`, passed with `--checkpoint` | Newton (MJWarp) | slope 22 deg, step 0.12 m, roughness 0.05 m, robot radius 0.35 m, slope fit over 0.35 m |
 
 The custom quadruped trained on slopes up to 0.4 rise/run (21.8 deg), stairs up to 0.23 m, boxes up to 0.1 m and
 random rough ground up to 0.06 m. It is 0.89 m long and 0.47 m wide (feet included) and walks with its trunk about
@@ -87,17 +88,16 @@ from the person. The `--max_*`, `--robot_radius` and `--cross_slope_weight` flag
 **Steep ground along the fall line.** Turning on a steep descent is what makes this policy run away downhill. In the
 walk logs on this site (about 8,700 policy steps on ground of 17 deg and steeper), yaw-rate commands below 0.4 rad/s
 almost never lead to a speed above 1.2 m/s. Between 0.4 and 0.6 rad/s they do in 5 % of the cases at cruise speed
-and in 44 % while the robot slows down for the goal; above 0.6 rad/s in 43-74 %. On the live mission's map the old
-route came down the crater's gentler south-west corner and turned east on the wall in its last metre, into the only
-free lane next to the person: the recorded robot ran away there at 2.2 m/s and tumbled into the person half a second
-after arriving (with 32 robots on that route none fell, but one reached 1.62 m/s and one stopped 1.01 m from the
-pin). The custom quadruped's planner therefore also pays `6 (cross_slope / max_slope)^2` per metre for the slope
-across its direction of travel. The route on that map now turns on the flat border and comes straight down the fall
-line: 32 of 32 robots, top speed 1.33 m/s, closest stop 1.63 m from the pin, and the recorded walk arrives cleanly.
-On the rim route (`--max_slope 22`), which ends on the slope above the person, the weight also stops the run-aways
-while slowing down there: no robot of 32 above 1.2 m/s instead of 8, closest stop 2.02 m from the person instead of
-0.94 m. On the ground truth the route comes down the crater's corner, where the fall line itself runs diagonally,
-and stays as it was. The Go2 keeps the plain cost (weight 0).
+and in 44 % while the robot slows down for the goal; above 0.6 rad/s in 43-74 %. A route on a drone map that came
+down the crater's gentler south-west corner and turned east on the wall in its last metre, into the only free lane
+next to the person, made a recorded robot run away at 2.2 m/s and tumble into the person half a second after
+arriving. So the custom quadruped's planner also pays `6 (cross_slope / max_slope)^2` per metre for the slope across
+its direction of travel: its routes turn on flat ground and come straight down the fall line. On the recorded
+mission's report the route turns on the flat border and comes down the crater's west wall: 32 of 32 robots, top
+speed 1.33 m/s over the last 2.5 m, closest stop 1.63 m from the pin. On the rim route (`--max_slope 22`), which
+ends on the slope above the person, no robot of 32 goes faster than 1.2 m/s while slowing down there (closest stop
+1.97 m from the person). On the ground truth the route comes down the crater's corner, where the fall line itself
+runs diagonally. The Go2 keeps the plain cost (weight 0).
 
 ## Results (2026-11-01, RTX 5080)
 
@@ -106,28 +106,26 @@ spawn jitter), no second tries:
 
 | Map and pins | Route | Robots reached | Time | Planned / walked | Falls |
 |---|---|---|---|---|---|
-| the recorded live mission's report (`drone_gcs/runs/sar_mission_hero`: 10 of 10 people found), `--goal_pin 32` | north along the border, then straight down the crater's west wall to the drone's pin of person_08 (0.05 m from the true centre) | 32/32 | 23.9-24.7 s | 16.5 / 16.3-16.6 m | 0 |
-| an earlier full mission's report (`sar_demo_seed0`), T-pose people | the same way, to that mission's pin of person_08 | 32/32 | 24.9-25.4 s | 17.1 / 16.9-17.3 m | 0 |
-| a partial mission report (`e2e_v2_gt`: the first 90 s of the flight, 5 people found), T-pose people | border, past the crates to the drone's pin of person_02 (0.15 m off) | 32/32 | 19.8-21.5 s | 12.8 / 12.4-12.8 m | 0 |
+| the recorded live mission's report (10 of 10 people found), `--goal_pin 32` | north along the border, then straight down the crater's west wall to the drone's pin of person_08 (0.05 m from the true centre) | 32/32 | 23.9-24.7 s | 16.5 / 16.3-16.6 m | 0 |
 | the drone's survey map `runs/lawnmower_v1` (no detections: site pins) | along the crater's north rim, then down its north wall to person_08 | 32/32 | 32.4-33.1 s | 22.8 / 22.4-23.1 m | 1 |
 | ground truth (default) | down the crater's south-west corner to person_08, lying in the recovery position on the crater floor 1.4 m below the rim | 32/32 | 23.5-24.1 s | 16.1 / 15.5-15.8 m | 0 |
 | ground truth, `--goal_pin person_04` | past the collapsed buildings to person_04, lying face up | 32/32 | 28.3-29.3 s | 17.5 / 17.3-17.6 m | 0 |
 | ground truth, `--max_slope 22` | along the crater's north rim, stops on the slope above person_08 | 32/32 | 34.7-36.8 s | 23.7 / 23.0-23.4 m | 0 |
 | ground truth, `--sar_seed 3` (another site) | to that site's person_04, lying face up | 32/32 | 33.5-38.3 s | 20.7 / 20.4-20.8 m | 0 |
 
-The two rows marked T-pose people were walked before the site's people got their natural poses; the others are on
-the site as it is now. On the plain survey map the route now ends on the crater's north wall, and one robot of the 32
-tipped over there 0.1 s after arriving. Mean cross-track error 2-10 cm, at most 23 cm (on the rim route up to 0.7 m:
+On the plain survey map the route ends on the crater's north wall, and one robot of the 32 tipped over there 0.1 s
+after arriving. Mean cross-track error 2-10 cm, at most 23 cm (on the rim route up to 0.7 m:
 turning on the 22 deg slope above the person, a few robots drift downhill, with the cross-slope weight or without),
 walking speed 0.51-0.68 m/s at a cruise command of 0.7 m/s. The robots stop 0.8-2.2 m from the person's centre (the
 person's outline or, for a drone pin, a 1.2 m circle, plus the robot's clearance); from the live mission's report
 1.58-1.72 m from the real person's centre. With `--video` (one robot) on the live mission's report: 24.3 s, 16.5 m
-walked, no falls, stopped 1.74 m from the pin. In the earlier `sar_demo_seed0` report the detector also pinned a "barrel" 4.3 m above the landing pad (one of
-its three false alarms); the planner keeps clear of every pin, so that robot starts 0.75 m west of the pad's centre.
-The live mission's report has no such pin.
+walked, no falls, stopped 1.74 m from the pin; 8 robots at once: 8/8 in 24.0-24.4 s, no fall. Without
+`--goal_pin` the planner picks the person sitting at pin #37 on that report, 18.4 m from the pad: 8/8 in
+26.7-27.1 s, no fall. The planner keeps clear of every pin, false alarms included: a pin on the landing pad moves
+the start to the nearest free cell.
 
-**Go2 fallback, Newton**, the same dressed site: `--robot go2 --num_envs 4` reached person_08 4/4 along the crater
-rim (its limits keep it off the steeper wall), 32.5-32.7 s, 23.7 m, 0 falls.
+**Go2 fallback, Newton**, the same dressed site: `--robot go2 --checkpoint <model_*.pt> --num_envs 4` reached
+person_08 4/4 along the crater rim (its limits keep it off the steeper wall), 32.4-32.6 s, 23.7 m, 0 falls.
 
 ## PhysX and the textured site
 
@@ -200,7 +198,7 @@ After a fall the robot respawns where it fell, a little behind (`--retries`, def
 ## Tests
 
 ```bash
-~/anaconda3/bin/python -m pytest tests/test_teaming_*.py          # CPU (the task tests skip without Isaac Lab)
+python -m pytest tests/test_teaming_*.py                           # any Python with pytest (task tests need Isaac Lab)
 CUDA_VISIBLE_DEVICES= python tests/test_teaming_task.py              # env_isaaclab: task configs + CLI plan mode
 CUDA_VISIBLE_DEVICES= python tests/run_cpu_tests.py                  # env_isaaclab: the whole project, these included
 ```

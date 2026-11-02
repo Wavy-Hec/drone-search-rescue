@@ -14,10 +14,9 @@ has grass (hills, waves, border), soil (pyramids, pit), gravel (rough tile, rubb
 
 ## Run it
 
-```bash
-source ~/anaconda3/etc/profile.d/conda.sh && conda activate env_isaaclab
-cd ~/isaac_ws/projects/drone_lab
+From the project folder, in the conda env `env_isaaclab`:
 
+```bash
 python scripts/sar_preview.py --no_sim                 # CPU, ~3 s: runs/sar_preview_seed0/{ground_truth.json,object_map.png}
 python scripts/sar_preview.py                          # GPU: renders + drone frames + checks (~1 min, 1st run longer)
 python scripts/sar_preview.py --seed 3 --out sar_seed3 # another site
@@ -52,8 +51,8 @@ custom data `drone_lab:sar_ground_truth`). Without installing the project, use `
   something else: looking around, pointing ahead or walking (`group` `responders` in the ground truth). Every
   other object stays exactly where it was.
 * `tpose`: Isaac Sim's characters as shipped, standing or lying flat in their rest T-pose, without responders.
-  The first detector dataset (`~/isaac_ws/datasets/drone_sar_yolo`) used this; its sites and ground truth are byte
-  for byte what they were before natural people existed (`tests/test_sar_people.py`).
+  The T-pose detector dataset (`gen_yolo_dataset.py --people_style tpose`) uses it; `tests/test_sar_people.py`
+  pins the ground truth of these sites by its SHA-256, so they stay the same byte for byte.
 
 | Pose (`pose` in the ground truth) | Who | Clip frame and edits |
 |---|---|---|
