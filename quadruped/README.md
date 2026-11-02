@@ -54,12 +54,13 @@ Requirements: Isaac Lab 3.0 with Isaac Sim 6.2 (Python 3.12) and an NVIDIA RTX G
 Run everything from this folder.
 
 ```bash
-git lfs pull                            # robot USD files and checkpoints are Git LFS objects
+git lfs pull                            # the robot USD files are Git LFS objects
 python -m pip install --no-deps -e .    # registers the tasks with the isaaclab CLI (Isaac Lab is already installed)
 isaaclab list_envs                      # the three Custom-Quad tasks
 ```
 
-If the checkpoints are distributed as release assets instead, place them in `checkpoints_2x/`.
+The policies are release assets: `../scripts/download_assets.sh` puts them in `checkpoints_2x/` (see
+[Checkpoints](#checkpoints)).
 
 The pip install uses the Isaac Lab that is already installed. The template's uv setup works differently:
 `[tool.uv.sources]` in `pyproject.toml` expects an Isaac Lab checkout two folders up (`../../IsaacLab`), and without
@@ -126,7 +127,7 @@ scripts/
   make_newton_asset.py                     writes and checks robot_newton.usd
   depth_camera_study.py                    depth-camera self-occlusion and ground coverage (CPU ray cast)
   list_envs.py                             the template's wrapper for isaaclab list_envs
-checkpoints_2x/                            the 2.x checkpoints and the converted one
+checkpoints_2x/                            the 2.x policy and the converted one (release assets)
 docs/media/                                README media
 tests/                                     CPU tests (no Isaac Sim launch)
   data/                                    excerpt of an --info run log for the joint-order check test
@@ -139,7 +140,9 @@ PORT_NOTES.md                              engineering notes: port, measurements
 |---|---|
 | `checkpoints_2x/height_scanner_model_rslrl5.pt` | the rough-terrain policy in rsl-rl 5.5 format (use this one) |
 | `checkpoints_2x/height_scanner_model.pt` | the original Isaac Lab 2.x checkpoint (rsl-rl 3.x, iteration 13,900) |
-| `checkpoints_2x/depth_camera_model.pt` | the 2.x depth checkpoint, for reference only (its input matches no recorded camera config) |
+
+`../scripts/download_assets.sh` downloads both from the repository's releases. The 2.x depth checkpoint is not
+published: its input matches no recorded camera config (see PORT_NOTES.md).
 
 Re-run the conversion and its verification on the CPU:
 
