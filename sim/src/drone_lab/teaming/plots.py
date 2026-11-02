@@ -82,8 +82,17 @@ def _scale_bar(ax, th: Theme, x0: float, y0: float, span: float):
     length = max([n for n in nice if n <= 0.3 * span] or [nice[0]])
     h = 0.012 * span
     ax.add_patch(Rectangle((x0, y0), length, h, color=th.ink, lw=0, zorder=8))
-    ax.text(x0 + length + 0.015 * span, y0 + 0.5 * h, f"{length:g} m", ha="left", va="center", fontsize=7.5,
-            color=th.ink, zorder=8, path_effects=_text_halo(th))
+    ax.text(
+        x0 + length + 0.015 * span,
+        y0 + 0.5 * h,
+        f"{length:g} m",
+        ha="left",
+        va="center",
+        fontsize=7.5,
+        color=th.ink,
+        zorder=8,
+        path_effects=_text_halo(th),
+    )
 
 
 def _view_bounds(tmap: TraversabilityMap, pts: list[np.ndarray], margin: float, full: bool):
@@ -113,18 +122,26 @@ def _draw_pins(ax, th: Theme, pins, goal_pin, *, footprints=True, labels=True):
             name = p.label if str(p.id) in ("goal", "") or str(p.id).startswith(p.label) else f"{p.label} #{p.id}"
             name = str(p.id) if str(p.id).startswith(p.label) else name
             text = f"{name} (goal)" if is_goal else name
-            ax.annotate(text, (p.x, p.y), xytext=(6, 5), textcoords="offset points", fontsize=7,
-                        color=th.ink if is_goal else th.ink_secondary, zorder=10, path_effects=_text_halo(th))
+            ax.annotate(
+                text,
+                (p.x, p.y),
+                xytext=(6, 5),
+                textcoords="offset points",
+                fontsize=7,
+                color=th.ink if is_goal else th.ink_secondary,
+                zorder=10,
+                path_effects=_text_halo(th),
+            )
 
 
 def _draw_footprints(ax, th: Theme, tmap: TraversabilityMap):
     for fp in tmap.footprints:
         if getattr(fp, "polygon", None) is not None:
-            patch = Polygon(np.asarray(fp.polygon), closed=True, fill=False, ec=th.ink_secondary, lw=0.8,
-                            ls=(0, (2, 1.5)), zorder=7)
+            patch = Polygon(
+                np.asarray(fp.polygon), closed=True, fill=False, ec=th.ink_secondary, lw=0.8, ls=(0, (2, 1.5)), zorder=7
+            )
         else:
-            patch = Circle((fp.x, fp.y), fp.radius, fill=False, ec=th.ink_secondary, lw=0.8, ls=(0, (2, 1.5)),
-                           zorder=7)
+            patch = Circle((fp.x, fp.y), fp.radius, fill=False, ec=th.ink_secondary, lw=0.8, ls=(0, (2, 1.5)), zorder=7)
         ax.add_patch(patch)
 
 
@@ -133,17 +150,41 @@ def _cost_layers(ax, tmap: TraversabilityMap, th: Theme, cmax: float):
     cost = np.where(np.isfinite(tmap.cost), tmap.cost, np.nan)
     cmap = LinearSegmentedColormap.from_list("cost_blue", list(BLUE_SEQUENTIAL))
     cmap.set_bad((0, 0, 0, 0))
-    im = ax.imshow(cost, origin="lower", extent=g.extent, cmap=cmap, vmin=1.0, vmax=cmax, interpolation="nearest",
-                   zorder=1)
+    im = ax.imshow(
+        cost, origin="lower", extent=g.extent, cmap=cmap, vmin=1.0, vmax=cmax, interpolation="nearest", zorder=1
+    )
     lethal = np.where(tmap.lethal & ~tmap.unknown, 1.0, np.nan)
-    ax.imshow(lethal, origin="lower", extent=g.extent, cmap=ListedColormap([th.ink]), alpha=0.82, vmin=0, vmax=1,
-              interpolation="nearest", zorder=2)
+    ax.imshow(
+        lethal,
+        origin="lower",
+        extent=g.extent,
+        cmap=ListedColormap([th.ink]),
+        alpha=0.82,
+        vmin=0,
+        vmax=1,
+        interpolation="nearest",
+        zorder=2,
+    )
     unknown = np.where(tmap.unknown, 1.0, np.nan)
     if np.any(tmap.unknown):
-        ax.imshow(unknown, origin="lower", extent=g.extent, cmap=ListedColormap([th.surface]), vmin=0, vmax=1,
-                  interpolation="nearest", zorder=2)
-        ax.contour(*np.meshgrid(*g.cell_centers()), tmap.unknown.astype(float), levels=[0.5], colors=[th.ink_muted],
-                   linewidths=0.6, zorder=3)
+        ax.imshow(
+            unknown,
+            origin="lower",
+            extent=g.extent,
+            cmap=ListedColormap([th.surface]),
+            vmin=0,
+            vmax=1,
+            interpolation="nearest",
+            zorder=2,
+        )
+        ax.contour(
+            *np.meshgrid(*g.cell_centers()),
+            tmap.unknown.astype(float),
+            levels=[0.5],
+            colors=[th.ink_muted],
+            linewidths=0.6,
+            zorder=3,
+        )
     return im
 
 
@@ -151,8 +192,17 @@ def _route(ax, th: Theme, xy, color, *, lw=2.0, ls="-", zorder=6, halo=True, lab
     xy = np.asarray(xy, dtype=float).reshape(-1, 2)
     if len(xy) == 0:
         return None
-    (line,) = ax.plot(xy[:, 0], xy[:, 1], color=color, lw=lw, ls=ls, zorder=zorder, solid_capstyle="round",
-                      path_effects=_halo(th, lw + 2.2) if halo else None, label=label)
+    (line,) = ax.plot(
+        xy[:, 0],
+        xy[:, 1],
+        color=color,
+        lw=lw,
+        ls=ls,
+        zorder=zorder,
+        solid_capstyle="round",
+        path_effects=_halo(th, lw + 2.2) if halo else None,
+        label=label,
+    )
     return line
 
 
@@ -182,8 +232,13 @@ def plot_plan(
     cmax = float(np.percentile(finite, 99)) if finite.size else 2.0
     cmax = max(cmax, 1.5)
 
-    axes[0].imshow(_hillshade_rgb(tmap.elevation, th, g.resolution), origin="lower", extent=g.extent,
-                   interpolation="nearest", zorder=1)
+    axes[0].imshow(
+        _hillshade_rgb(tmap.elevation, th, g.resolution),
+        origin="lower",
+        extent=g.extent,
+        interpolation="nearest",
+        zorder=1,
+    )
     im = _cost_layers(axes[1], tmap, th, cmax)
     for ax, panel in zip(axes, ("Elevation the robot planned on", "Traversability cost and no-go cells"), strict=False):
         _style_axes(ax, th)
@@ -194,8 +249,16 @@ def plot_plan(
             _route(ax, th, plan.path_xy, th.series[1], lw=2.4, zorder=6)
         _draw_pins(ax, th, pins, goal_pin, labels=(ax is axes[0]))
         ax.plot(*plan.start_xy, marker="o", ms=9, mfc=th.surface, mec=th.ink, mew=1.8, zorder=10)
-        ax.annotate("start", plan.start_xy, xytext=(7, -11), textcoords="offset points", fontsize=7.5,
-                    color=th.ink, zorder=10, path_effects=_text_halo(th))
+        ax.annotate(
+            "start",
+            plan.start_xy,
+            xytext=(7, -11),
+            textcoords="offset points",
+            fontsize=7.5,
+            color=th.ink,
+            zorder=10,
+            path_effects=_text_halo(th),
+        )
         if plan.goal_snapped_xy is not None:
             ax.plot(*plan.goal_snapped_xy, marker="o", ms=6, color=th.series[1], mec=th.surface, mew=1.0, zorder=10)
         if goal_pin is None:
@@ -205,10 +268,20 @@ def plot_plan(
         ax.set_aspect("equal")
         ax.set_xlabel("x [m]")
         ax.set_ylabel("y [m]")
-        ax.text(0.0, 1.015, panel, transform=ax.transAxes, ha="left", va="bottom", fontsize=9.5, color=th.ink,
-                fontweight="semibold")
-        _scale_bar(ax, th, view[0] + 0.04 * (view[1] - view[0]), view[2] + 0.04 * (view[3] - view[2]),
-                   view[1] - view[0])
+        ax.text(
+            0.0,
+            1.015,
+            panel,
+            transform=ax.transAxes,
+            ha="left",
+            va="bottom",
+            fontsize=9.5,
+            color=th.ink,
+            fontweight="semibold",
+        )
+        _scale_bar(
+            ax, th, view[0] + 0.04 * (view[1] - view[0]), view[2] + 0.04 * (view[3] - view[2]), view[1] - view[0]
+        )
     cb = fig.colorbar(im, cax=cax)
     cb.set_label("cost per metre (1 = flat open ground)", color=th.ink_secondary, fontsize=8)
     cb.outline.set_edgecolor(th.axis)
@@ -225,17 +298,28 @@ def plot_plan(
         handles.append(Line2D([], [], color=th.ink_secondary, lw=0.8, ls=(0, (2, 1.5)), label="object footprint"))
     if np.any(tmap.unknown):
         handles.append(Patch(facecolor=th.surface, edgecolor=th.ink_muted, label="not seen by the drone"))
-    fig.legend(handles=handles, loc="upper left", bbox_to_anchor=(0.045, 0.892), ncol=4, frameon=False, fontsize=7.8,
-               labelcolor=th.ink_secondary, handlelength=2.2, columnspacing=1.6)
+    fig.legend(
+        handles=handles,
+        loc="upper left",
+        bbox_to_anchor=(0.045, 0.892),
+        ncol=4,
+        frameon=False,
+        fontsize=7.8,
+        labelcolor=th.ink_secondary,
+        handlelength=2.2,
+        columnspacing=1.6,
+    )
 
     if plan.success:
         title = f"Rescue route: {plan.length_m:.1f} m to the person"
     else:
         title = "Rescue route: no safe route found"
     summ = tmap.summary()
-    sub1 = (f"{robot} limits: slope <= {c.max_slope_deg:g} deg, step <= {c.max_step_m:g} m, roughness <= "
-            f"{c.max_roughness_m:g} m, robot radius {c.robot_radius_m:g} m  |  {100 * summ['free_fraction']:.0f} % "
-            f"of the map walkable")
+    sub1 = (
+        f"{robot} limits: slope <= {c.max_slope_deg:g} deg, step <= {c.max_step_m:g} m, roughness <= "
+        f"{c.max_roughness_m:g} m, robot radius {c.robot_radius_m:g} m  |  {100 * summ['free_fraction']:.0f} % "
+        f"of the map walkable"
+    )
     sub2 = source
     if plan.success and plan.goal_snap_m > 0.05:
         sub2 += f"  |  stops {plan.goal_snap_m:.1f} m from the person's centre"
@@ -281,11 +365,25 @@ def plot_walk(
     walked = np.column_stack([x, y]) if len(x) else np.zeros((0, 2))
     view = _view_bounds(tmap, [plan.path_xy, walked, plan.start_xy[None], plan.goal_xy[None]], 3.0, False)
 
-    ax.imshow(_hillshade_rgb(tmap.elevation, th, g.resolution), origin="lower", extent=g.extent,
-              interpolation="nearest", zorder=1)
+    ax.imshow(
+        _hillshade_rgb(tmap.elevation, th, g.resolution),
+        origin="lower",
+        extent=g.extent,
+        interpolation="nearest",
+        zorder=1,
+    )
     lethal = np.where(tmap.lethal & ~tmap.unknown, 1.0, np.nan)
-    ax.imshow(lethal, origin="lower", extent=g.extent, cmap=ListedColormap([th.ink]), alpha=0.35, vmin=0, vmax=1,
-              interpolation="nearest", zorder=2)
+    ax.imshow(
+        lethal,
+        origin="lower",
+        extent=g.extent,
+        cmap=ListedColormap([th.ink]),
+        alpha=0.35,
+        vmin=0,
+        vmax=1,
+        interpolation="nearest",
+        zorder=2,
+    )
     _style_axes(ax, th)
     _draw_footprints(ax, th, tmap)
     _route(ax, th, plan.path_xy, th.series[1], lw=2.0, ls=(0, (4, 2)), zorder=5)
@@ -294,8 +392,16 @@ def plot_walk(
     ax.plot(*plan.start_xy, marker="o", ms=9, mfc=th.surface, mec=th.ink, mew=1.8, zorder=10)
     for k, (tf, xf, yf) in enumerate(walk.get("falls", []) or []):
         ax.plot(xf, yf, marker="X", ms=11, color=STATUS_CRITICAL, mec=th.surface, mew=1.0, zorder=11)
-        ax.annotate(f"fall {k + 1} ({tf:.0f} s)", (xf, yf), xytext=(7, 6), textcoords="offset points", fontsize=7.5,
-                    color=th.ink, zorder=11, path_effects=_text_halo(th))
+        ax.annotate(
+            f"fall {k + 1} ({tf:.0f} s)",
+            (xf, yf),
+            xytext=(7, 6),
+            textcoords="offset points",
+            fontsize=7.5,
+            color=th.ink,
+            zorder=11,
+            path_effects=_text_halo(th),
+        )
     if len(walked):
         ax.plot(*walked[-1], marker="o", ms=7, color=th.series[0], mec=th.surface, mew=1.2, zorder=10)
     ax.set_xlim(view[0], view[1])
@@ -303,8 +409,7 @@ def plot_walk(
     ax.set_aspect("equal")
     ax.set_xlabel("x [m]")
     ax.set_ylabel("y [m]")
-    _scale_bar(ax, th, view[0] + 0.04 * (view[1] - view[0]), view[2] + 0.04 * (view[3] - view[2]),
-               view[1] - view[0])
+    _scale_bar(ax, th, view[0] + 0.04 * (view[1] - view[0]), view[2] + 0.04 * (view[3] - view[2]), view[1] - view[0])
     handles = [
         Line2D([], [], color=th.series[1], lw=2.0, ls=(0, (4, 2)), label="planned route"),
         Line2D([], [], color=th.series[0], lw=2.2, label=f"walked ({robot} policy)"),
@@ -313,8 +418,15 @@ def plot_walk(
     ]
     if walk.get("falls"):
         handles.append(Line2D([], [], marker="X", ls="", ms=9, color=STATUS_CRITICAL, label="fall"))
-    fig.legend(handles=handles, loc="upper left", bbox_to_anchor=(0.045, 0.915), ncol=5, frameon=False, fontsize=7.8,
-               labelcolor=th.ink_secondary)
+    fig.legend(
+        handles=handles,
+        loc="upper left",
+        bbox_to_anchor=(0.045, 0.915),
+        ncol=5,
+        frameon=False,
+        fontsize=7.8,
+        labelcolor=th.ink_secondary,
+    )
 
     # speed over time (one measure per axis; no dual axes)
     for a in (ax_v, ax_d):
@@ -327,8 +439,14 @@ def plot_walk(
         if "speed" in walk:
             ax_v.plot(t, walk["speed"], color=th.series[0], lw=1.4, label="actual speed")
         ax_v.set_ylabel("speed [m/s]")
-        ax_v.legend(loc="lower right", bbox_to_anchor=(1.0, 1.0), ncol=2, frameon=False, fontsize=7.5,
-                    labelcolor=th.ink_secondary)
+        ax_v.legend(
+            loc="lower right",
+            bbox_to_anchor=(1.0, 1.0),
+            ncol=2,
+            frameon=False,
+            fontsize=7.5,
+            labelcolor=th.ink_secondary,
+        )
         if "dist_goal" in walk:
             ax_d.plot(t, walk["dist_goal"], color=th.ink_secondary, lw=1.6)
             ax_d.set_ylabel("distance to the goal [m]")
@@ -340,8 +458,9 @@ def plot_walk(
         ax_d.set_xlim(t[0], t[-1])
         ax_d.set_ylim(bottom=0)
     ax_v.text(0.0, 1.03, "Speed", transform=ax_v.transAxes, fontsize=9.5, color=th.ink, fontweight="semibold")
-    ax_d.text(0.0, 1.03, "Distance to the goal", transform=ax_d.transAxes, fontsize=9.5, color=th.ink,
-              fontweight="semibold")
+    ax_d.text(
+        0.0, 1.03, "Distance to the goal", transform=ax_d.transAxes, fontsize=9.5, color=th.ink, fontweight="semibold"
+    )
 
     ok = bool(summary.get("success"))
     title = "Rescue walk: reached the person" if ok else f"Rescue walk: {summary.get('outcome', 'did not arrive')}"
@@ -389,11 +508,20 @@ def render_minimap(
     dpi = 100
     fig = plt.figure(figsize=(size_px / dpi, size_px / dpi), dpi=dpi, facecolor=th.surface)
     ax = fig.add_axes([0, 0, 1, 1])
-    ax.imshow(_hillshade_rgb(tmap.elevation, th, g.resolution), origin="lower", extent=g.extent,
-              interpolation="nearest")
+    ax.imshow(
+        _hillshade_rgb(tmap.elevation, th, g.resolution), origin="lower", extent=g.extent, interpolation="nearest"
+    )
     lethal = np.where(tmap.lethal & ~tmap.unknown, 1.0, np.nan)
-    ax.imshow(lethal, origin="lower", extent=g.extent, cmap=ListedColormap([th.ink]), alpha=0.45, vmin=0, vmax=1,
-              interpolation="nearest")
+    ax.imshow(
+        lethal,
+        origin="lower",
+        extent=g.extent,
+        cmap=ListedColormap([th.ink]),
+        alpha=0.45,
+        vmin=0,
+        vmax=1,
+        interpolation="nearest",
+    )
     _route(ax, th, plan.path_xy, th.series[1], lw=2.0)
     _draw_pins(ax, th, pins, goal_pin, footprints=False, labels=False)
     if goal_pin is None:

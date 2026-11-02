@@ -88,8 +88,12 @@ class PathFollowCommand(CommandTerm):
         self.metrics["cross_track"] = torch.zeros(n, device=self.device)
         self.metrics["distance_to_goal"] = torch.zeros(n, device=self.device)
         # markers along the route (every marker_spacing metres, slightly above the ground)
-        k = max(1, int(round(cfg.marker_spacing / max(np.median(np.diff(self.path_s)) if len(self.path_s) > 1 else 1.0,
-                                                       1e-3))))
+        k = max(
+            1,
+            int(
+                round(cfg.marker_spacing / max(np.median(np.diff(self.path_s)) if len(self.path_s) > 1 else 1.0, 1e-3))
+            ),
+        )
         pts = np.column_stack([path_xy[::k], path_z[::k] + 0.06])
         self._route_marker_points = torch.tensor(pts, dtype=torch.float32, device=self.device)
         goal = np.array([[path_xy[-1, 0], path_xy[-1, 1], path_z[-1] + 0.03]])
@@ -228,10 +232,12 @@ class PathFollowCommand(CommandTerm):
         self.metrics["progress"][:] = torch.as_tensor(
             self.progress_s / max(self.path_length, 1e-6), dtype=torch.float32, device=self.device
         )
-        self.metrics["cross_track"][:] = torch.as_tensor(np.abs(self.cross_track), dtype=torch.float32,
-                                                          device=self.device)
-        self.metrics["distance_to_goal"][:] = torch.as_tensor(self.distance_to_goal, dtype=torch.float32,
-                                                               device=self.device)
+        self.metrics["cross_track"][:] = torch.as_tensor(
+            np.abs(self.cross_track), dtype=torch.float32, device=self.device
+        )
+        self.metrics["distance_to_goal"][:] = torch.as_tensor(
+            self.distance_to_goal, dtype=torch.float32, device=self.device
+        )
 
     def _resample_command(self, env_ids: Sequence[int] | slice):
         for i in _env_id_list(env_ids, self.num_envs):

@@ -113,8 +113,9 @@ def test_roughness_from_bumps():
     g = _grid(n=60, res=0.1)
     for sigma, lethal in ((0.12, True), (0.005, False)):
         z = rng.normal(0.0, sigma, g.shape)
-        t = compute_traversability(z, g, _cfg(max_roughness_m=0.05, max_step_m=10.0, max_slope_deg=89.0,
-                                              inflation_buffer_m=0.0))
+        t = compute_traversability(
+            z, g, _cfg(max_roughness_m=0.05, max_step_m=10.0, max_slope_deg=89.0, inflation_buffer_m=0.0)
+        )
         r = np.median(_interior(t.roughness))
         assert 0.6 * sigma < r < 1.2 * sigma, (sigma, r)
         assert np.mean(_interior(t.lethal)) > 0.9 if lethal else not _interior(t.lethal).any()
@@ -182,8 +183,10 @@ def test_polygon_footprints():
     # a sliver thinner than a cell still blocks the cells under its outline
     sliver = rasterize_footprints(g, [Footprint(2, 2, 1, polygon=((1.0, 2.01), (3.0, 2.01), (3.0, 2.03), (1.0, 2.03)))])
     assert sliver[20, 10:30].all()
-    assert points_in_polygon(np.array([0.5, 1.5]), np.array([0.5, 0.5]), [(0, 0), (1, 0), (1, 1), (0, 1)]).tolist() \
-        == [True, False]
+    assert points_in_polygon(np.array([0.5, 1.5]), np.array([0.5, 0.5]), [(0, 0), (1, 0), (1, 1), (0, 1)]).tolist() == [
+        True,
+        False,
+    ]
 
 
 def test_queries_height_and_sample():

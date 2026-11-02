@@ -197,8 +197,18 @@ class PurePursuitFollower:
         near_end = self.length - self.progress <= c.goal_tolerance_m + c.lookahead_m
         if self.done or (dist_goal <= c.goal_tolerance_m and near_end):
             self.done = True
-            return FollowerOutput(0.0, 0.0, 0.0, True, self.progress, cross_track, 0.0, dist_goal,
-                                  (float(goal[0]), float(goal[1])), "goal")
+            return FollowerOutput(
+                0.0,
+                0.0,
+                0.0,
+                True,
+                self.progress,
+                cross_track,
+                0.0,
+                dist_goal,
+                (float(goal[0]), float(goal[1])),
+                "goal",
+            )
         target = self.point_at(self.progress + c.lookahead_m)
         rel = target - pos
         cy, sy = math.cos(yaw), math.sin(yaw)
@@ -229,5 +239,6 @@ class PurePursuitFollower:
             vy = float(np.clip(c.lateral_gain * off_b_y, -c.max_lateral_speed, c.max_lateral_speed))
             mode = "track"
         vx, vy, wz = c.limits.clip(vx, vy, wz)
-        return FollowerOutput(vx, vy, wz, False, self.progress, cross_track, alpha, dist_goal,
-                              (float(target[0]), float(target[1])), mode)
+        return FollowerOutput(
+            vx, vy, wz, False, self.progress, cross_track, alpha, dist_goal, (float(target[0]), float(target[1])), mode
+        )

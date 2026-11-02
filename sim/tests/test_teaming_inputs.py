@@ -17,16 +17,28 @@ def test_load_pins_drone_gcs_and_plain_formats():
 
     with tempfile.TemporaryDirectory() as tmp:
         gcs = Path(tmp) / "detections.json"
-        gcs.write_text(json.dumps({
-            "frame": "world (local ENU) [m]",
-            "objects": [
-                {"id": 1, "class": "person", "x": 2.2, "y": -14.7, "z": 3.5, "confidence": 0.92, "confirmed": True},
-                {"id": 2, "class": "car", "x": 7.5, "y": -14.8, "confirmed": True},
-                {"id": 3, "class": "person", "x": 1.0, "y": 1.0, "confirmed": False},
-                {"id": 4, "label": "Traffic Cone", "position": [3.0, 4.0, 0.1]},
-                {"id": 5, "x": 1.0},  # malformed: skipped
-            ],
-        }))
+        gcs.write_text(
+            json.dumps(
+                {
+                    "frame": "world (local ENU) [m]",
+                    "objects": [
+                        {
+                            "id": 1,
+                            "class": "person",
+                            "x": 2.2,
+                            "y": -14.7,
+                            "z": 3.5,
+                            "confidence": 0.92,
+                            "confirmed": True,
+                        },
+                        {"id": 2, "class": "car", "x": 7.5, "y": -14.8, "confirmed": True},
+                        {"id": 3, "class": "person", "x": 1.0, "y": 1.0, "confirmed": False},
+                        {"id": 4, "label": "Traffic Cone", "position": [3.0, 4.0, 0.1]},
+                        {"id": 5, "x": 1.0},  # malformed: skipped
+                    ],
+                }
+            )
+        )
         pins = load_pins(gcs)
         assert [p.id for p in pins] == ["1", "2", "4"]
         assert pins[0].label == "person" and abs(pins[0].confidence - 0.92) < 1e-12 and pins[0].z == 3.5
@@ -54,11 +66,28 @@ def test_ground_truth_records_become_pins_with_exact_footprints():
     from drone_lab.teaming.inputs import footprints_from_pins, pins_from_data
 
     records = [
-        {"id": 9, "name": "person_03", "class": "person", "category": "person", "pose": "lying_face_down",
-         "x": -4.2, "y": -11.0, "position": [-4.2, -11.0, 0.0], "center": [-5.09, -10.97, 0.22],
-         "footprint_xy": [[-6.0, -11.3], [-4.2, -11.3], [-4.2, -10.6], [-6.0, -10.6]]},
-        {"id": 30, "name": "tree_01", "class": None, "category": "tree", "x": 3.0, "y": 4.0,
-         "center": [3.0, 4.0, 2.0], "footprint_xy": [[2.5, 3.5], [3.5, 3.5], [3.5, 4.5], [2.5, 4.5]]},
+        {
+            "id": 9,
+            "name": "person_03",
+            "class": "person",
+            "category": "person",
+            "pose": "lying_face_down",
+            "x": -4.2,
+            "y": -11.0,
+            "position": [-4.2, -11.0, 0.0],
+            "center": [-5.09, -10.97, 0.22],
+            "footprint_xy": [[-6.0, -11.3], [-4.2, -11.3], [-4.2, -10.6], [-6.0, -10.6]],
+        },
+        {
+            "id": 30,
+            "name": "tree_01",
+            "class": None,
+            "category": "tree",
+            "x": 3.0,
+            "y": 4.0,
+            "center": [3.0, 4.0, 2.0],
+            "footprint_xy": [[2.5, 3.5], [3.5, 3.5], [3.5, 4.5], [2.5, 4.5]],
+        },
         {"id": 0, "name": "landing_pad_00", "class": "landing_pad", "category": "landing_pad", "x": -23, "y": -18},
     ]
     pins = pins_from_data(records)
@@ -170,6 +199,27 @@ def test_extend_with_apron_keeps_the_drone_cells_and_the_lattice():
         raise AssertionError("a grid that does not match the array must be rejected")
 
 
+def test_apron_fills_the_unmapped_border_of_a_site_sized_map():
+    """A drone_gcs map spans the whole site but knows only what the drone scanned: the unmapped apron cells get the
+    apron height; measured cells (on the apron too) and the unmapped terrain stay as they are."""
+    from drone_lab.mapping import GridSpec
+    from drone_lab.teaming.inputs import extend_with_apron
+
+    terrain, site = (-20.0, 20.0, -20.0, 20.0), (-26.0, 26.0, -26.0, 26.0)
+    grid = GridSpec(-26.125, -26.125, 0.25, 209, 209)
+    xs, ys = grid.cell_centers()
+    z = np.full(grid.shape, np.nan)
+    z[ys < -10.0, :] = 0.05  # the drone scanned the southern strip only, border included
+    z2, g2, apron = extend_with_apron(z, grid, terrain, site)
+    assert g2 == grid and apron.any()
+    assert np.array_equal(z2[~apron], z[~apron], equal_nan=True)
+    assert np.isnan(z[apron]).all() and np.all(z2[apron] == 0.0)
+    iy0, iy_south = int(np.argmin(np.abs(ys))), int(np.argmin(np.abs(ys + 23.0)))
+    ix_west, ix0 = int(np.argmin(np.abs(xs + 23.0))), int(np.argmin(np.abs(xs)))
+    assert apron[iy0, ix_west] and np.isnan(z2[iy0, ix0])  # unscanned border filled, unscanned terrain not
+    assert z2[iy_south, ix_west] == 0.05 and not apron[iy_south, ix_west]  # the drone's own border cells kept
+
+
 def test_a_start_on_the_apron_plans_from_the_landing_pad():
     """The landing pad lies on the border, off the survey map: without the apron the start is off the map (the
     start's problem, whatever the goal); with it the route starts on the pad."""
@@ -227,17 +277,44 @@ def test_plan_walk_and_minimap_figures():
     assert plan.success
     with tempfile.TemporaryDirectory() as tmp:
         for theme in ("light", "dark"):
-            p1 = plot_plan(t, plan, Path(tmp) / f"plan_{theme}.png", pins=[person, Pin("2", "crate", 3, 9)],
-                           goal_pin=person, source="synthetic", theme=theme)
+            p1 = plot_plan(
+                t,
+                plan,
+                Path(tmp) / f"plan_{theme}.png",
+                pins=[person, Pin("2", "crate", 3, 9)],
+                goal_pin=person,
+                source="synthetic",
+                theme=theme,
+            )
             assert p1.stat().st_size > 20_000
-        walk = {"t": np.linspace(0, 20, 50), "x": plan.path_xy[::4, 0][:50], "y": plan.path_xy[::4, 1][:50],
-                "speed": np.full(50, 0.6), "cmd_vx": np.full(50, 0.7), "dist_goal": np.linspace(9, 0.2, 50),
-                "falls": [(7.0, 4.0, 3.0)]}
+        walk = {
+            "t": np.linspace(0, 20, 50),
+            "x": plan.path_xy[::4, 0][:50],
+            "y": plan.path_xy[::4, 1][:50],
+            "speed": np.full(50, 0.6),
+            "cmd_vx": np.full(50, 0.7),
+            "dist_goal": np.linspace(9, 0.2, 50),
+            "falls": [(7.0, 4.0, 3.0)],
+        }
         n = min(len(walk["x"]), 50)
         walk = {k: (v[:n] if isinstance(v, np.ndarray) else v) for k, v in walk.items()}
-        p2 = plot_walk(t, plan, walk, Path(tmp) / "walk.png", pins=[person], goal_pin=person,
-                       summary={"success": True, "time_s": 20.0, "walked_length_m": 9.0, "planned_length_m": 9.2,
-                                "falls": 1, "final_distance_to_person_m": 1.1, "physics": "newton_mjwarp"})
+        p2 = plot_walk(
+            t,
+            plan,
+            walk,
+            Path(tmp) / "walk.png",
+            pins=[person],
+            goal_pin=person,
+            summary={
+                "success": True,
+                "time_s": 20.0,
+                "walked_length_m": 9.0,
+                "planned_length_m": 9.2,
+                "falls": 1,
+                "final_distance_to_person_m": 1.1,
+                "physics": "newton_mjwarp",
+            },
+        )
         assert p2.stat().st_size > 20_000
     img, to_px = render_minimap(t, plan, pins=[person], goal_pin=person, size_px=200)
     assert img.shape == (200, 200, 3) and img.dtype == np.uint8

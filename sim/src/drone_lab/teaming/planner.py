@@ -431,8 +431,9 @@ def plan_path(
         return res
     start_cell, d_start = snap_to_free(free, (iy[0], ix[0]))
     if start_cell is None or d_start * grid.resolution > max_start_snap_m:
-        res.message = (f"no free cell within {max_start_snap_m} m of the start "
-                       f"(nearest {d_start * grid.resolution:.2f} m)")
+        res.message = (
+            f"no free cell within {max_start_snap_m} m of the start (nearest {d_start * grid.resolution:.2f} m)"
+        )
         res.failure = "start_blocked"
         return res
     reach = reachable_mask(tmap.cost, start_cell)
@@ -448,12 +449,15 @@ def plan_path(
     res.goal_snapped_xy = np.array([float(gxw), float(gyw)])
     res.goal_snap_m = float(np.linalg.norm(res.goal_snapped_xy - goal_xy))
     if res.goal_snap_m > max_goal_snap_m:
-        res.message = (f"the goal is not reachable: the closest reachable cell is {res.goal_snap_m:.2f} m away "
-                       f"(limit {max_goal_snap_m} m)")
+        res.message = (
+            f"the goal is not reachable: the closest reachable cell is {res.goal_snap_m:.2f} m away "
+            f"(limit {max_goal_snap_m} m)"
+        )
         res.failure = "unreachable"
         return res
-    cells, gcost, expanded = astar(tmap.cost, start_cell, goal_cell, resolution=grid.resolution,
-                                   heuristic_weight=heuristic_weight)
+    cells, gcost, expanded = astar(
+        tmap.cost, start_cell, goal_cell, resolution=grid.resolution, heuristic_weight=heuristic_weight
+    )
     res.expanded = expanded
     if len(cells) == 0:  # cannot happen when the goal is in the start's component; kept as a guard
         res.message = "A* found no path"
@@ -473,6 +477,8 @@ def plan_path(
     res.path_cost = path_cost(tmap, res.path_xy) if len(res.path_xy) > 1 else 0.0
     res.path_z = tmap.height_at(res.path_xy) if len(res.path_xy) else np.zeros(0)
     res.success = True
-    res.message = (f"path {res.length_m:.1f} m (A* {res.raw_length_m:.1f} m, {expanded} nodes expanded); "
-                   f"goal moved {res.goal_snap_m:.2f} m to a reachable free cell")
+    res.message = (
+        f"path {res.length_m:.1f} m (A* {res.raw_length_m:.1f} m, {expanded} nodes expanded); "
+        f"goal moved {res.goal_snap_m:.2f} m to a reachable free cell"
+    )
     return res

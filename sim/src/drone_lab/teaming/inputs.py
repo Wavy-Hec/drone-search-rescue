@@ -9,9 +9,9 @@ Elevation sources (all give ``(elevation (ny, nx), GridSpec, description)``):
   ``SURVEY_TERRAIN_CFG`` the simulator builds) -- for when no drone run exists.
 
 A ``drone_lab`` survey map covers the surveyed 40 m x 40 m terrain only, while the base (the landing pad the ground
-robot deploys from) sits on the flat 6 m apron around it. :func:`extend_with_apron` grows such a map to the whole
-site: the drone's cells stay as measured, the added apron cells get the apron's (flat) height, and terrain the drone
-did not see stays unknown.
+robot deploys from) sits on the flat 6 m apron around it; a ``drone_gcs`` map spans the whole site but knows only what
+the drone scanned. :func:`extend_with_apron` grows a map to the whole site and gives the apron cells the drone did not
+map the apron's (flat) height: the drone's cells stay as measured, and terrain the drone did not see stays unknown.
 
 Pins (``load_pins``): the ``drone_gcs`` ``detections.json`` (``{"objects": [{"class", "x", "y", "z",
 "confirmed", ...}]}``), a ``{"pins": [...]}`` / ``{"detections": [...]}`` dict, or a plain list. Each pin needs a
@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -38,6 +38,7 @@ __all__ = [
     "extend_with_apron",
     "footprints_from_pins",
     "ground_truth_elevation",
+    "infer_person_poses",
     "load_elevation",
     "load_pins",
     "on_map",
@@ -159,8 +160,9 @@ def _pin_from_dict(d: dict, index: int) -> Pin | None:
 
 def load_pins(path: str | Path, *, confirmed_only: bool = True) -> list[Pin]:
     """Read pins from a JSON file (see the module docstring for the accepted layouts)."""
-    return pins_from_data(json.loads(Path(path).expanduser().read_text()), confirmed_only=confirmed_only,
-                          source=str(path))
+    return pins_from_data(
+        json.loads(Path(path).expanduser().read_text()), confirmed_only=confirmed_only, source=str(path)
+    )
 
 
 def pins_from_data(data, *, confirmed_only: bool = True, source: str = "data") -> list[Pin]:
@@ -226,6 +228,39 @@ def select_goal_pin(pins, *, pin_id: str | None = None, label: str = "person", n
     return min(cands, key=lambda p: float(np.linalg.norm(p.xy - near)))
 
 
+def infer_person_poses(
+    pins,
+    z: np.ndarray,
+    grid: GridSpec,
+    *,
+    ring_m: tuple[float, float] = (1.2, 2.0),
+    max_lying_height_m: float = 0.7,
+) -> list[Pin]:
+    """Give person pins without a pose one from the map: lying or standing, by the pin's height above the ground.
+
+    The drone's camera looks straight down, so a pin geolocated on a standing person sits on their head and
+    shoulders (1.3-1.8 m above the ground on the demo site), and one on a person lying down on their back (at most
+    0.4 m). The ground is the lower quartile of the known map cells ``ring_m`` away from the pin (the person's own
+    cells and objects right next to them stay out of it). Pins with a pose, without a height or without known
+    ground around them are returned unchanged.
+    """
+    xs, ys = grid.cell_centers()
+    out = []
+    for p in pins:
+        if p.label != "person" or p.pose or not math.isfinite(p.z):
+            out.append(p)
+            continue
+        r = np.hypot(xs[None, :] - p.x, ys[:, None] - p.y)
+        ring = z[(r >= ring_m[0]) & (r <= ring_m[1])]
+        ring = ring[np.isfinite(ring)]
+        if ring.size == 0:
+            out.append(p)
+            continue
+        height = p.z - float(np.percentile(ring, 25))
+        out.append(replace(p, pose="lying" if height < max_lying_height_m else "standing"))
+    return out
+
+
 # ------------------------------------------------------------------------------------------------ elevation
 def _grid_from_json(path: Path) -> GridSpec:
     d = json.loads(path.read_text())
@@ -274,9 +309,7 @@ def load_elevation(source: str | Path, grid_json: str | Path | None = None, *, l
     return z, grid, f"drone map {npy}"
 
 
-def ground_truth_elevation(
-    resolution: float = 0.25, *, terrain_cfg=None, padding: float = 0.0, supersample: int = 3
-):
+def ground_truth_elevation(resolution: float = 0.25, *, terrain_cfg=None, padding: float = 0.0, supersample: int = 3):
     """Terrain ground truth: the exact survey terrain mesh rasterised to a grid (CPU, needs Isaac Lab's terrain
     generator but not the simulator).
 
@@ -325,12 +358,13 @@ def survey_site_bounds(terrain_cfg=None) -> tuple[tuple[float, ...], tuple[float
 
 
 def extend_with_apron(z: np.ndarray, grid: GridSpec, terrain, site, *, height: float = 0.0):
-    """Grow a map to the whole site, adding the flat apron (the border) around the surveyed terrain.
+    """Grow a map to the whole site and fill in the flat apron (the border) around the surveyed terrain.
 
     The grid grows to cover ``site`` with the same cell size and the same cell edges, so the map's own cells are
-    copied unchanged (nothing is resampled). An added cell that lies entirely on the apron (inside ``site``,
-    outside ``terrain``) gets ``height``; every other added cell (terrain the map does not cover, or a cell across
-    the site edge) stays unknown (NaN). The apron is known flat ground; the terrain is never made up.
+    copied unchanged (nothing is resampled). A cell without a height (added, or not seen by the drone) that lies
+    entirely on the apron (inside ``site``, outside ``terrain``) gets ``height``; every other unknown cell (terrain
+    the map does not cover, or a cell across the site edge) stays unknown (NaN). The apron is known flat ground; a
+    measured cell is never changed and the terrain is never made up.
 
     Args:
         z: ``(ny, nx)`` elevation [m], NaN = unknown.
@@ -341,8 +375,8 @@ def extend_with_apron(z: np.ndarray, grid: GridSpec, terrain, site, *, height: f
         height: Apron height [m]; Isaac Lab's terrain generator puts the top of its flat border at z = 0.
 
     Returns:
-        ``(elevation, grid, apron mask)``; the mask marks the added apron cells. A map that already covers the
-        site comes back as a copy with an empty mask.
+        ``(elevation, grid, apron mask)``; the mask marks the apron cells that got ``height``. A map that already
+        covers the site and its apron comes back as a copy with an empty mask.
     """
     z = np.asarray(z, dtype=float)
     if z.shape != grid.shape:
@@ -355,12 +389,11 @@ def extend_with_apron(z: np.ndarray, grid: GridSpec, terrain, site, *, height: f
     east = max(0, math.ceil((sx1 - grid.x_max) / res - 1e-9))
     south = max(0, math.ceil((grid.y_min - sy0) / res - 1e-9))
     north = max(0, math.ceil((sy1 - grid.y_max) / res - 1e-9))
-    new = GridSpec(grid.x_min - west * res, grid.y_min - south * res, res, grid.nx + west + east,
-                   grid.ny + south + north)
+    new = GridSpec(
+        grid.x_min - west * res, grid.y_min - south * res, res, grid.nx + west + east, grid.ny + south + north
+    )
     out = np.full(new.shape, np.nan)
     out[south : south + grid.ny, west : west + grid.nx] = z
-    added = np.ones(new.shape, dtype=bool)
-    added[south : south + grid.ny, west : west + grid.nx] = False
     xs, ys = new.cell_centers()
     lo_x, hi_x, lo_y, hi_y = xs - 0.5 * res, xs + 0.5 * res, ys - 0.5 * res, ys + 0.5 * res
     eps = 1e-9
@@ -370,6 +403,6 @@ def extend_with_apron(z: np.ndarray, grid: GridSpec, terrain, site, *, height: f
     off_terrain_y = (hi_y <= ty0 + eps) | (lo_y >= ty1 - eps)
     in_site = in_site_y[:, None] & in_site_x[None, :]
     off_terrain = off_terrain_y[:, None] | off_terrain_x[None, :]
-    apron = added & in_site & off_terrain
+    apron = np.isnan(out) & in_site & off_terrain
     out[apron] = float(height)
     return out, new, apron
