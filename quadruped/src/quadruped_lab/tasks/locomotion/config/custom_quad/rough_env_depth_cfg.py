@@ -16,9 +16,9 @@ Design (3.0 APIs):
   the trunk (:data:`DEPTH_CAMERA_POS`) with the 2.x orientation: looking forward, pitched 50 deg down, 60 x 46.8 deg
   field of view. The 2.x mount (0.7 m above and 0.25 m behind the trunk origin) is not kept: from there the robot's
   own visual meshes filled a third of the image, and the nearest visible ground was 1.26 m ahead of the trunk origin
-  on the centre line and 0.89 m in the foot tracks. At the default standing pose (trunk origin 0.451 m above flat
+  on the centre line and 0.89 m in the foot tracks. At the default standing pose (trunk origin 0.452 m above flat
   ground) the front-face camera is 0.53 m above the ground, no pixel sees the robot, and flat ground is visible from
-  0.63 m to ~1.5 m ahead of the trunk origin (``scripts/depth_camera_study.py``; PORT_NOTES.md section 8).
+  0.63 m to ~1.5 m ahead of the trunk origin (``scripts/depth_camera_study.py``; PORT_NOTES.md, depth-camera task).
 * The offset quaternion is the 2.x (w, x, y, z) = (0.66446, 0.24184, -0.24184, -0.66446) in the 3.0 (x, y, z, w) order.
 * Far clip raised from 1.0 m to :data:`DEPTH_MAX_RANGE` (4 m). Flat ground is 0.56-1.32 m away along the pixel rays of
   this mount, so the 2.x 1.0 m clip would blank the top sixth of the image; 4 m leaves headroom for downhill terrain
@@ -37,10 +37,10 @@ Design (3.0 APIs):
   ``privileged`` height scan (asymmetric actor-critic). The actor never sees the height scan.
 * Renderer: Newton Warp by default (kit-less Warp ray tracer, documented pairing with Isaac Sim PhysX, much lighter
   than RTX for depth-only images). ``renderer=isaacsim_rtx`` switches to the legacy Isaac RTX renderer inside Kit.
-  OVRTX is not offered: it cannot share a process with Kit (Isaac Sim PhysX) and its runtime is not installed.
-* Size: 64x48 pixels and 1024 envs by default (see PORT_NOTES.md for the 16 GB memory budget). Measured on the
-  RTX 5080 (2026-11-01, 1024 envs, training): 5.5 GB with Newton Warp, 7.3 GB with RTX; the camera render takes
-  4-5 ms (Warp) vs 17.5 ms (RTX) of a 70-110 ms env step, most of which is PhysX.
+  OVRTX is not offered: it cannot share a process with Kit, which Isaac Sim PhysX needs.
+* Size: 64x48 pixels and 1024 envs by default. Measured on the RTX 5080 (2026-11-01, 1024 envs, training): 5.5 GB
+  of GPU memory with Newton Warp, 7.3 GB with RTX; the camera render takes 4-5 ms (Warp) vs 17.5 ms (RTX) of a
+  70-110 ms env step, most of which is PhysX.
 """
 
 from typing import TYPE_CHECKING
@@ -123,8 +123,8 @@ class body_mounted_image_depth(mdp.image_depth):
     Before every read this term composes the link pose (``body_link_pose_w``, which brings the articulation
     kinematics up to date after resets) with the camera's configured offset and writes it with
     :meth:`~isaaclab.sensors.Camera.set_world_poses`. The renderer then draws from the current pose (measured: camera
-    pose = trunk pose x offset to 4e-6 m; >= 99.998 % of the pixels match a terrain-only ray cast within 3 cm or lie
-    beyond the far clip in both, also right after resets; the rest are the robot's own legs).
+    pose error at most 2.4e-7 m; >= 99.998 % of the pixels match a terrain-only ray cast within 3 cm or lie beyond
+    the far clip in both, also right after resets; the rest are the robot's own legs).
     The term is active only for Isaac Sim PhysX with a non-Kit renderer. The RTX images already follow the trunk
     (measured), and in a control test a pose written this way did not reach the RTX image. Newton physics computes
     the camera pose from the body state (``NewtonSiteFrameView``; measured error 1e-7 m).
@@ -134,7 +134,8 @@ class body_mounted_image_depth(mdp.image_depth):
     * ``asset_cfg``: the articulation and the single body the camera prim is attached to.
     """
 
-    def __init__(self, cfg: ObsTerm, env: "ManagerBasedEnv"):
+    def __init__(self, cfg: ObsTerm, env: "ManagerBasedEnv") -> None:
+        """Resolve the camera and its parent body and decide whether this backend needs the pose refresh."""
         super().__init__(cfg, env)
         from isaaclab_physx.physics import PhysxCfg  # runtime import: keeps the cfg module light
 
@@ -179,6 +180,7 @@ class body_mounted_image_depth(mdp.image_depth):
         frame_stack: int = 1,
         asset_cfg: SceneEntityCfg = _DEFAULT_ROBOT_CFG,
     ) -> torch.Tensor:
+        """Write the camera pose from its parent body (if needed), then return :class:`mdp.image_depth`'s image."""
         if self.refresh_pose:
             link_pose = self._asset.data.body_link_pose_w.torch[:, self._body_id]
             link_quat = link_pose[:, 3:7]
@@ -250,7 +252,8 @@ class CustomQuadDepthObservationsCfg(ObservationsCfg):
             clip=(0.0, 1.0),
         )
 
-        def __post_init__(self):
+        def __post_init__(self) -> None:
+            """Image noise during training; the group is the single ``(N, 1, H, W)`` image tensor."""
             self.enable_corruption = True
             self.concatenate_terms = True
 
@@ -264,7 +267,8 @@ class CustomQuadDepthObservationsCfg(ObservationsCfg):
             clip=(-1.0, 1.0),
         )
 
-        def __post_init__(self):
+        def __post_init__(self) -> None:
+            """Noise-free height scan as one flat tensor."""
             self.enable_corruption = False
             self.concatenate_terms = True
 
@@ -279,8 +283,8 @@ class CustomQuadRoughDepthEnvCfg(CustomQuadRoughEnvCfg):
     scene: CustomQuadDepthSceneCfg = CustomQuadDepthSceneCfg(num_envs=DEPTH_NUM_ENVS, env_spacing=2.5)
     observations: CustomQuadDepthObservationsCfg = CustomQuadDepthObservationsCfg()
 
-    def __post_init__(self):
-        # post init of parent (robot, terrain scaling, events, rewards, physics default)
+    def __post_init__(self) -> None:
+        """Rough-task settings (robot, terrain, events, rewards, physics), without the height scan for the actor."""
         super().__post_init__()
 
         # the actor sees proprioception + depth only; the height scan feeds the privileged critic group

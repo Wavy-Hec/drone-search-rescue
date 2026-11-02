@@ -29,8 +29,13 @@ import argparse
 import math
 import re
 import sys
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from isaaclab.sensors import CameraCfg
 
 MOUNT_2X = ((-0.25, 0.0, 0.7), (0.24184, -0.24184, -0.66446, 0.66446))
 """Camera offset (pos, rot xyzw, OpenGL convention) of the 2.x depth-camera patch, for reference."""
@@ -38,7 +43,7 @@ MOUNT_2X = ((-0.25, 0.0, 0.7), (0.24184, -0.24184, -0.66446, 0.66446))
 GEOMETRY_KINDS = ("visuals", "collisions")
 
 
-def quat_to_matrix(quat_xyzw) -> np.ndarray:
+def quat_to_matrix(quat_xyzw: Sequence[float]) -> np.ndarray:
     """Rotation matrix of a unit quaternion given as (x, y, z, w)."""
     x, y, z, w = quat_xyzw
     return np.array(
@@ -62,12 +67,13 @@ def pitch_down_quat(pitch_deg: float) -> tuple[float, float, float, float]:
     return (x, y, z, w)
 
 
-def _usd_matrix(m) -> np.ndarray:
+def _usd_matrix(m: Sequence[Sequence[float]]) -> np.ndarray:
     """USD (row-vector) 4x4 matrix -> column-vector numpy matrix."""
     return np.array(m, dtype=float).T
 
 
-def _joint_frame(pos, rot) -> np.ndarray:
+def _joint_frame(pos: Sequence[float], rot: object) -> np.ndarray:
+    """4x4 transform of a joint frame from its local position and ``Gf.Quatf`` rotation."""
     frame = np.eye(4)
     imag = rot.GetImaginary()
     frame[:3, :3] = quat_to_matrix((imag[0], imag[1], imag[2], rot.GetReal()))
@@ -76,6 +82,7 @@ def _joint_frame(pos, rot) -> np.ndarray:
 
 
 def _axis_rotation(axis: str, angle: float) -> np.ndarray:
+    """4x4 rotation by ``angle`` [rad] about the ``X``, ``Y`` or ``Z`` axis."""
     c, s = math.cos(angle), math.sin(angle)
     rot = {"X": [[1, 0, 0], [0, c, -s], [0, s, c]], "Y": [[c, 0, s], [0, 1, 0], [-s, 0, c]]}
     rot["Z"] = [[c, -s, 0], [s, c, 0], [0, 0, 1]]
@@ -167,8 +174,8 @@ def posed_robot_triangles(
 
 
 def camera_rays(
-    pos,
-    rot_xyzw,
+    pos: Sequence[float],
+    rot_xyzw: Sequence[float],
     width: int,
     height: int,
     focal_length: float,
@@ -184,7 +191,8 @@ def camera_rays(
     return np.asarray(pos, dtype=float), dirs @ quat_to_matrix(rot_xyzw).T
 
 
-def _ray_aabb(origin, dirs, lo, hi) -> np.ndarray:
+def _ray_aabb(origin: np.ndarray, dirs: np.ndarray, lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
+    """Which rays hit the axis-aligned box ``[lo, hi]`` (slab test)."""
     with np.errstate(divide="ignore", invalid="ignore"):
         t1, t2 = (lo - origin) / dirs, (hi - origin) / dirs
     t_near = np.nanmax(np.minimum(t1, t2), axis=1)
@@ -192,7 +200,7 @@ def _ray_aabb(origin, dirs, lo, hi) -> np.ndarray:
     return t_far >= np.maximum(t_near, 0.0)
 
 
-def _ray_triangles(origin, dirs, tris, chunk: int = 2048) -> np.ndarray:
+def _ray_triangles(origin: np.ndarray, dirs: np.ndarray, tris: np.ndarray, chunk: int = 2048) -> np.ndarray:
     """Distance to the nearest triangle hit per ray (Moller-Trumbore), inf for a miss."""
     best = np.full(len(dirs), np.inf)
     d = dirs.astype(np.float32)
@@ -214,7 +222,9 @@ def _ray_triangles(origin, dirs, tris, chunk: int = 2048) -> np.ndarray:
     return best
 
 
-def study_mount(origin, dirs, triangles: dict, kind: str, standing_height: float, far_clip: float) -> dict:
+def study_mount(
+    origin: np.ndarray, dirs: np.ndarray, triangles: dict, kind: str, standing_height: float, far_clip: float
+) -> dict:
     """Self-occlusion and ground-coverage metrics of one camera mount for one geometry kind."""
     t_robot = np.full(len(dirs), np.inf)
     for (_, k), tris in triangles.items():
@@ -247,8 +257,8 @@ def study_mount(origin, dirs, triangles: dict, kind: str, standing_height: float
     }
 
 
-def configured_setup():
-    """Camera and robot settings of the depth task, read from the project configs (no Kit)."""
+def configured_setup() -> tuple[CameraCfg, str, dict[str, float]]:
+    """Camera cfg, robot USD path and default joint positions of the depth task, from the project configs (no Kit)."""
     from quadruped_lab.tasks.locomotion.config.custom_quad.rough_env_depth_cfg import CustomQuadRoughDepthEnvCfg
 
     cfg = CustomQuadRoughDepthEnvCfg()
@@ -260,6 +270,7 @@ def configured_setup():
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Print the study for the configured mount, the 2.x mount and any ``--mount``; exit 1 above ``--max-robot-pct``."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--mount", action="append", default=[], help="Extra mount NAME:X,Y,Z:PITCH_DEG (trunk frame).")
     parser.add_argument("--markdown", action="store_true", help="Print a Markdown table.")

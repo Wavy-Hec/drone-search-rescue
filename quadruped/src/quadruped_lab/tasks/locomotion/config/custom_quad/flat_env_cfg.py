@@ -19,8 +19,8 @@ from .rough_env_cfg import CustomQuadRoughEnvCfg
 class CustomQuadFlatEnvCfg(CustomQuadRoughEnvCfg):
     """Custom quadruped on a flat plane without height scan or terrain curriculum."""
 
-    def __post_init__(self):
-        # post init of parent
+    def __post_init__(self) -> None:
+        """Switch the rough task to a flat plane and drop the height scan and the terrain curriculum."""
         super().__post_init__()
 
         # override rewards

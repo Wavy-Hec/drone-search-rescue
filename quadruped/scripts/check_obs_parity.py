@@ -9,7 +9,7 @@ The 2.x side is read statically (Python AST) from the read-only sources it was b
 
 * the Isaac Lab 2.3.2 velocity base config (``git show HEAD:...`` in the 2.3.2 clone, i.e. without the local
   depth-camera patch; the patch only appends a ``depth_scan`` term that the rough task sets to None),
-* Hector's 2.x task files (``rough_env_cfg.py``, ``custom_quad.py``).
+* the 2.x task files (``rough_env_cfg.py``, ``custom_quad.py``).
 
 The 3.0 side is the instantiated :class:`CustomQuadRoughEnvCfg`. Dimensions come from the robot USD (revolute joints,
 via ``pxr``), the ray-caster grid pattern (evaluated on the CPU) and the checkpoint's first actor layer.
@@ -17,7 +17,7 @@ via ``pxr``), the ray-caster grid pattern (evaluated on the CPU) and the checkpo
 Checked:
 
 * the policy observation terms (order, function, size, noise, clip, scale) against the checkpoint input;
-* every value the 2.x configs set explicitly (2.3.2 base class bodies and ``__post_init__``, then Hector's
+* every value the 2.x configs set explicitly (2.3.2 base class bodies and ``__post_init__``, then the 2.x task's
   ``__post_init__``, with ``ROUGH_TERRAINS_CFG`` from the 2.3.2 ``terrains/config/rough.py``): actions, commands,
   rewards, terminations, events, curriculum, height scanner, contact sensor, terrain importer and generator, timing,
   number of envs and the PhysX scene setting; term parameters a config leaves out are compared through the term
@@ -46,6 +46,7 @@ import math
 import operator
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -74,7 +75,8 @@ DEFAULT_CHECKPOINT = PROJECT / "checkpoints_2x" / "height_scanner_model.pt"
 FIXED_DIMS = {"base_lin_vel": 3, "base_ang_vel": 3, "projected_gravity": 3, "generated_commands": 3}
 
 
-def _literal(node: ast.AST | None, names: dict | None = None):
+def _literal(node: ast.AST | None, names: dict | None = None) -> object:
+    """Value of a literal expression; simple expressions over ``names`` are evaluated without builtins."""
     if node is None:
         return None
     try:
@@ -83,7 +85,7 @@ def _literal(node: ast.AST | None, names: dict | None = None):
         return eval(compile(ast.Expression(node), "<ast>", "eval"), {"__builtins__": {}}, names or {})  # noqa: S307
 
 
-def old_policy_terms(base_src: str, rough_src: str) -> list[dict]:
+def old_policy_terms(base_src: str, rough_src: str) -> tuple[list[dict], list[str]]:
     """Ordered policy terms of the 2.x rough task: 2.3.2 base PolicyCfg minus the terms the task sets to None."""
     tree = ast.parse(base_src)
     policy = next(
@@ -138,7 +140,8 @@ def old_robot_cfg(custom_quad_src: str) -> dict:
     return out
 
 
-def new_policy_terms(cfg) -> list[dict]:
+def new_policy_terms(cfg: CustomQuadRoughEnvCfg) -> list[dict]:
+    """Ordered policy terms of the 3.0 rough task, in the format of :func:`old_policy_terms`."""
     from isaaclab.managers import ObservationTermCfg
 
     group = cfg.observations.policy
@@ -165,6 +168,7 @@ def new_policy_terms(cfg) -> list[dict]:
 
 
 def usd_dof_joints(usd_path: str) -> list[str]:
+    """Names of the revolute and prismatic joints of a USD asset, in prim order."""
     from pxr import Usd, UsdPhysics
 
     stage = Usd.Stage.Open(usd_path)
@@ -219,7 +223,7 @@ class StaticConfig:
     None`` tests. Anything else is recorded in :attr:`skipped`.
     """
 
-    def __init__(self, source: str, symbols: dict | None = None):
+    def __init__(self, source: str, symbols: dict | None = None) -> None:
         self.tree = ast.parse(source)
         self.aliases = {
             a.asname: a.name
@@ -233,7 +237,7 @@ class StaticConfig:
         self.state: Call | None = None
         self.skipped: list[str] = []
 
-    def module_value(self, name: str):
+    def module_value(self, name: str) -> object:
         """Value of a module-level assignment ``name = ...``."""
         for node in self.tree.body:
             if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
@@ -255,7 +259,8 @@ class StaticConfig:
         fields.update(kwargs or {})
         return Call(cls.name, [], fields)
 
-    def expr(self, node: ast.AST, scope: dict | None = None):  # noqa: C901 - a small expression interpreter
+    def expr(self, node: ast.AST, scope: dict | None = None) -> object:  # noqa: C901 - a small interpreter
+        """Evaluate an expression node; unsupported constructs are recorded in :attr:`skipped`."""
         scope = scope or {}
         if isinstance(node, ast.Constant):
             return node.value
@@ -295,7 +300,7 @@ class StaticConfig:
         self.skipped.append(f"expression {ast.unparse(node)}")
         return Ref(ast.unparse(node))
 
-    def _call(self, node: ast.Call, scope: dict):
+    def _call(self, node: ast.Call, scope: dict) -> object:
         callee = _dotted(node.func) or ast.unparse(node.func)
         args = [self.expr(a, scope) for a in node.args]
         kwargs = {k.arg: self.expr(k.value, scope) for k in node.keywords if k.arg is not None}
@@ -311,7 +316,7 @@ class StaticConfig:
         return Call(name, args, kwargs)
 
     @staticmethod
-    def _attr(obj, name, default=None):
+    def _attr(obj: object, name: str, default: object = None) -> object:
         if isinstance(obj, Call):
             return obj.kwargs.get(name, default)
         if isinstance(obj, dict):
@@ -319,15 +324,15 @@ class StaticConfig:
         return default
 
     @staticmethod
-    def _item(obj, key):
+    def _item(obj: object, key: object) -> object:
         return obj.kwargs[key] if isinstance(obj, Call) else obj[key]
 
-    def _get(self, obj, path: list[str]):
+    def _get(self, obj: object, path: list[str]) -> object:
         for name in path:
             obj = self._attr(obj, name)
         return obj
 
-    def _assign(self, target: ast.AST, value) -> None:
+    def _assign(self, target: ast.AST, value: object) -> None:
         steps = []
         node = target
         while isinstance(node, ast.Attribute | ast.Subscript):
@@ -363,12 +368,13 @@ class StaticConfig:
                 self.skipped.append(f"statement {ast.unparse(stmt).splitlines()[0]}")
 
     def post_init(self, class_name: str) -> list[ast.stmt]:
+        """Statements of the ``__post_init__`` method of a module-level class."""
         cls = self.classes[class_name]
         return next(n.body for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "__post_init__")
 
 
 def old_env_cfg(base_src: str, rough_src: str, rough_terrains_src: str) -> tuple[Call, list[str]]:
-    """The 2.x rough env cfg as the sources define it: base class body, base ``__post_init__``, Hector's overrides."""
+    """The 2.x rough env cfg as the sources define it: base class body, base ``__post_init__``, the task's overrides."""
     terrains = StaticConfig(rough_terrains_src).module_value("ROUGH_TERRAINS_CFG")
     base = StaticConfig(base_src, symbols={"ROUGH_TERRAINS_CFG": terrains})
     base.state = base.expand_class(base.classes["LocomotionVelocityRoughEnvCfg"])
@@ -404,7 +410,7 @@ REQUIRED = Ref("<required>")
 ABSENT = Ref("<absent>")
 
 
-def new_function_defaults(func) -> dict:
+def new_function_defaults(func: Callable | str) -> dict:
     """Keyword defaults of a 3.0 term function or term class ``__call__``."""
     if isinstance(func, str):
         from isaaclab.utils.string import string_to_callable
@@ -423,7 +429,7 @@ class CfgComparer:
 
     TERM_CLASSES = ("EventTermCfg", "RewardTermCfg", "TerminationTermCfg", "CurriculumTermCfg")
 
-    def __init__(self, old_defaults: dict[str, dict], allowed: dict[str, str], excluded: tuple[str, ...] = ()):
+    def __init__(self, old_defaults: dict[str, dict], allowed: dict[str, str], excluded: tuple[str, ...] = ()) -> None:
         self.old_defaults = old_defaults
         self.allowed = allowed  # path -> reason of a known, documented difference
         self.excluded = excluded  # paths compared elsewhere or irrelevant (rendering)
@@ -433,15 +439,18 @@ class CfgComparer:
 
     @property
     def checked(self) -> int:
+        """Number of compared leaf values."""
         return len(self.compared)
 
-    def differ(self, path: str, old, new) -> None:
+    def differ(self, path: str, old: object, new: object) -> None:
+        """Record a difference: a note if it is a known one, a problem otherwise."""
         if path in self.allowed:
             self.notes.append(f"{path}: 2.x {old!r} -> 3.0 {new!r} (expected: {self.allowed[path]})")
         else:
             self.problems.append(f"{path}: 2.x {old!r} != 3.0 {new!r}")
 
-    def compare(self, path: str, old, new) -> None:  # noqa: C901
+    def compare(self, path: str, old: object, new: object) -> None:  # noqa: C901
+        """Compare a 2.x value (literal, :class:`Call`, :class:`Ref`, container) with the 3.0 value at ``path``."""
         if (isinstance(old, Ref) and old == "MISSING") or path in self.excluded:
             return
         if isinstance(old, Call):
@@ -475,7 +484,7 @@ class CfgComparer:
             if not same:
                 self.differ(path, old, new)
 
-    def _compare_call(self, path: str, old: Call, new) -> None:
+    def _compare_call(self, path: str, old: Call, new: object) -> None:
         if new is None:
             return self.differ(path, old.name, None)
         expected = CLASS_RENAMES.get(old.name, old.name)
@@ -497,7 +506,7 @@ class CfgComparer:
         if is_term:
             self._compare_params(path, str(kwargs["func"]), kwargs.get("params", {}), new)
 
-    def _compare_params(self, path: str, func_name: str, old_params: dict, new) -> None:
+    def _compare_params(self, path: str, func_name: str, old_params: dict, new: object) -> None:
         old_defaults = self.old_defaults.get(func_name)
         new_defaults = new_function_defaults(new.func)
         if old_defaults is None:
@@ -530,11 +539,11 @@ MOVED_PATHS = {"sim.physx": ("sim", "physics", "default")}  # PhysX scene settin
 EXCLUDED_ROOTS = ("observations", "scene.robot", "scene.sky_light", "scene.terrain.visual_material")
 
 
-def compare_with_2x(old_state: Call, cfg, old_defaults: dict[str, dict]) -> CfgComparer:
+def compare_with_2x(old_state: Call, cfg: CustomQuadRoughEnvCfg, old_defaults: dict[str, dict]) -> CfgComparer:
     """Compare every 2.x explicit setting (outside :data:`EXCLUDED_ROOTS`) with the instantiated 3.0 cfg."""
     comparer = CfgComparer(old_defaults, ALLOWED_DIFFERENCES, EXCLUDED_ROOTS)
 
-    def walk(path: str, old, new) -> None:
+    def walk(path: str, old: object, new: object) -> None:
         is_container = isinstance(old, Call) and old.name in (
             "<inherited>",
             "LocomotionVelocityRoughEnvCfg",
@@ -596,7 +605,7 @@ def execution_checks(old: dict, cfg: CustomQuadRoughEnvCfg) -> dict[str, tuple[o
 
 
 def load_old_sources(old_lab: Path, old_task: Path) -> dict:
-    """Read the 2.x sources (2.3.2 files from git HEAD, Hector's task files) and evaluate the rough env cfg."""
+    """Read the 2.x sources (2.3.2 files from git HEAD, the 2.x task files) and evaluate the rough env cfg."""
 
     def old_file(rel: str) -> str:
         return subprocess.run(
@@ -615,9 +624,10 @@ def load_old_sources(old_lab: Path, old_task: Path) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run every check and print the report; exit code 0 when the 3.0 task matches the 2.x interface."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--old-lab", type=Path, default=DEFAULT_OLD_LAB, help="Isaac Lab 2.3.2 git clone (read only).")
-    parser.add_argument("--old-task", type=Path, default=DEFAULT_OLD_TASK, help="Hector's 2.x task folder.")
+    parser.add_argument("--old-task", type=Path, default=DEFAULT_OLD_TASK, help="The 2.x task folder.")
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT, help="2.x checkpoint to compare with.")
     parser.add_argument("--markdown", action="store_true", help="Print the layout as a Markdown table.")
     parser.add_argument("--verbose", action="store_true", help="List every compared 2.x setting.")

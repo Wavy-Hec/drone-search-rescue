@@ -46,9 +46,17 @@ import math
 import os
 import sys
 import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import torch
+    from tensordict import TensorDict
+
+    from isaaclab_physx.assets.articulation.actuator_control import PhysxActuatorControl
 
 
 def _parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
+    """Script options, launcher options and the remaining preset / Hydra tokens."""
     from isaaclab.app import add_launcher_args
 
     from isaaclab_tasks.utils import setup_preset_cli
@@ -78,6 +86,7 @@ def _parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Evaluate the policy for ``--episodes`` complete episodes per env and print (and optionally save) the metrics."""
     argv = sys.argv[1:] if argv is None else argv
     args_cli, hydra_args = _parse_args(argv)
     sys.argv = [sys.argv[0]] + hydra_args  # preset tokens + Hydra overrides, read by resolve_task_config
@@ -144,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
             mode = args_cli.native_refresh
             first = [True]
 
-            def _patched_cna(self, collection, dt):
+            def _patched_cna(self: PhysxActuatorControl, collection: object, dt: float) -> object:
                 if not self._native_actuator_path_active or self._actuator_runtime is None:
                     return _orig_cna(self, collection, dt)
                 data = self._articulation._data
@@ -196,19 +205,19 @@ def main(argv: list[str] | None = None) -> int:
             inference = runner.get_inference_policy(device=device)
             print(f"[EVAL] loaded {args_cli.checkpoint} (iteration {runner.current_learning_iteration})")
 
-            def act(obs):
+            def act(obs: TensorDict) -> torch.Tensor:
                 return inference(obs)
 
         elif args_cli.policy == "zero":
             zeros = torch.zeros(num_envs, env.num_actions, device=device)
 
-            def act(obs):
+            def act(obs: TensorDict) -> torch.Tensor:
                 return zeros
 
         else:
             gen = torch.Generator(device=device).manual_seed(args_cli.seed)
 
-            def act(obs):
+            def act(obs: TensorDict) -> torch.Tensor:
                 return 2.0 * torch.rand(num_envs, env.num_actions, device=device, generator=gen) - 1.0
 
         robot = uenv.scene["robot"]
@@ -236,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
         bc_hit = torch.zeros(num_envs, len(bc_ids), dtype=torch.bool, device=device)
         _orig_bc = bc_cfg.func
 
-        def _bc_attributed(env_, **params):
+        def _bc_attributed(env_: object, **params: object) -> torch.Tensor:
             out = _orig_bc(env_, **params)
             hist = contact.data.net_normal_forces_w_history.torch[:, :, bc_ids]
             bc_hit.copy_(torch.linalg.norm(hist, dim=-1).max(dim=1)[0] > params["threshold"])
@@ -425,16 +434,20 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def summarize(records: list[dict], term_names: list[str], max_episode_length_s: float, dt: float) -> dict:
+    """Aggregate per-episode records: fractions over episodes, tracking and contact metrics over alive steps.
+
+    Episode rewards follow the Isaac Lab ``Episode_Reward`` convention (episode sum / ``max_episode_length_s``).
+    """
     n = len(records)
     if n == 0:
         return {"episodes": 0}
 
-    def mean(key):
+    def mean(key: str) -> float:
         return sum(r[key] for r in records) / n
 
     steps = sum(r["alive_steps"] for r in records) or 1.0
 
-    def step_mean(key):  # mean over all alive steps (episodes weighted by their length)
+    def step_mean(key: str) -> float:  # mean over all alive steps (episodes weighted by their length)
         return sum(r[key] * r["alive_steps"] for r in records) / steps
 
     lengths = [r["length_s"] for r in records]

@@ -44,6 +44,10 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pxr import Sdf, Usd
 
 PROJECT = Path(__file__).resolve().parents[1]
 ASSET_DIR = PROJECT / "src" / "quadruped_lab" / "assets" / "data" / "robots" / "custom_quad"
@@ -61,7 +65,7 @@ HEADER = (
 )
 
 
-def _collider_xforms(stage, root="/colliders"):
+def _collider_xforms(stage: Usd.Stage, root: str = "/colliders") -> list[tuple[Sdf.Path, list[Sdf.Path], str | None]]:
     """Collider prims below ``root`` that carry the collision APIs but are not Gprims, with the Mesh prims below each.
 
     ``/colliders`` holds the sources of the instanceable ``<body>/collisions`` prims (internal references).
@@ -81,6 +85,7 @@ def _collider_xforms(stage, root="/colliders"):
 
 
 def write_layers(approximation: str = DEFAULT_APPROXIMATION) -> None:
+    """Write ``configuration/robot_physics_newton.usd`` and ``robot_newton.usd`` (the existing files are untouched)."""
     from pxr import Sdf, Usd
 
     # the collider prototypes live under /colliders of the physics layer stack (robot_physics.usd + robot_base.usd)
@@ -124,7 +129,7 @@ def write_layers(approximation: str = DEFAULT_APPROXIMATION) -> None:
     print(f"wrote {written} and {NEWTON_USD.relative_to(PROJECT)}")
 
 
-def _authored(stage, root="/quadruped_robot"):
+def _authored(stage: Usd.Stage, root: str = "/quadruped_robot") -> dict[str, tuple]:
     """{prim path: (type, applied schemas, {property: value})} of the composed subtree (instance proxies included).
 
     Array values (points, indices, ...) are compared by length and an md5 of their bytes, everything else by value.
@@ -150,6 +155,7 @@ def _authored(stage, root="/quadruped_robot"):
 
 
 def check(approximation: str = DEFAULT_APPROXIMATION) -> int:
+    """Verify that robot_newton.usd differs from robot.usd only in the moved collision APIs; 0 if it does."""
     from pxr import Usd, UsdGeom, UsdPhysics
 
     old = Usd.Stage.Open(str(ROBOT_USD), load=Usd.Stage.LoadAll)
@@ -161,7 +167,7 @@ def check(approximation: str = DEFAULT_APPROXIMATION) -> int:
     if sel != "Newton":
         problems.append(f"robot_newton.usd: Physics variant is {sel!r}, expected 'Newton'")
 
-    def colliders(stage):
+    def colliders(stage: Usd.Stage) -> tuple[list[Usd.Prim], list[Usd.Prim]]:
         on_gprims, on_others = [], []
         for prim in Usd.PrimRange(stage.GetPrimAtPath("/quadruped_robot"), Usd.TraverseInstanceProxies()):
             if prim.HasAPI(UsdPhysics.CollisionAPI):
@@ -202,6 +208,7 @@ def check(approximation: str = DEFAULT_APPROXIMATION) -> int:
 
 
 def _report(problems: list[str]) -> int:
+    """Print the problems and the verdict; 0 without problems, 1 otherwise."""
     for p in problems:
         print("PROBLEM:", p, file=sys.stderr)
     print("Newton asset OK" if not problems else "Newton asset check FAILED")
@@ -236,6 +243,7 @@ def newton_collision_shapes(usd_path: Path) -> dict[str, int]:
 
 
 def newton_check() -> int:
+    """Import both assets with Newton (CPU) and check that every body of robot_newton.usd has a collider."""
     problems = []
     for path in (ROBOT_USD, NEWTON_USD):
         shapes = newton_collision_shapes(path)
@@ -247,6 +255,7 @@ def newton_check() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Write the Newton layers (unless ``--check``), verify them and optionally import them with Newton."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--check", action="store_true", help="only verify the existing robot_newton.usd")
     parser.add_argument(

@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Articulation configuration for Hector's custom 12-DOF quadruped.
+"""Articulation configuration of the custom 12-DOF quadruped.
 
 Ported from the Isaac Lab 2.3.2 task ``custom_quadruped/custom_quad.py``. Changes for Isaac Lab 3.0:
 

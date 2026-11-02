@@ -17,10 +17,10 @@ from isaaclab.utils import configclass, replace
 from isaaclab_rl.rsl_rl import RslRlCNNModelCfg, RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
 
 ROUGH_PPO_ALGORITHM_CFG = RslRlPpoAlgorithmCfg(
-    value_loss_coef=0.5,  # 1.0
+    value_loss_coef=0.5,  # A1 template: 1.0
     use_clipped_value_loss=True,
     clip_param=0.2,
-    entropy_coef=0.0025,  # 0.01
+    entropy_coef=0.0025,  # A1 template: 0.01
     num_learning_epochs=5,
     num_mini_batches=4,
     learning_rate=1.0e-3,
@@ -45,8 +45,10 @@ fixed 1.5e-4 or 3e-4, or an adaptive schedule starting at 1e-4.
 
 @configclass
 class CustomQuadRoughPPORunnerCfg(RslRlOnPolicyRunnerCfg):
+    """PPO runner of the rough task: MLP actor and critic on the 235-value policy group (the 2.x network)."""
+
     num_steps_per_env = 24
-    max_iterations = 80000  # 1500
+    max_iterations = 80000  # A1 template: 1500
     save_interval = 50
     experiment_name = "custom_quad_rough"
     # 2.x: no obs_groups -> rsl-rl used the "policy" group for both networks
@@ -69,13 +71,16 @@ class CustomQuadRoughPPORunnerCfg(RslRlOnPolicyRunnerCfg):
 
 @configclass
 class CustomQuadFlatPPORunnerCfg(CustomQuadRoughPPORunnerCfg):
-    def __post_init__(self):
+    """PPO runner of the flat task: the rough settings on the 48-value proprioceptive policy group."""
+
+    def __post_init__(self) -> None:
+        """Name the experiment and keep the rough network size."""
         super().__post_init__()
 
         self.max_iterations = 80000
         self.experiment_name = "custom_quad_flat"
-        self.actor.hidden_dims = [512, 256, 128]  # [128, 128, 128]
-        self.critic.hidden_dims = [512, 256, 128]  # [128, 128, 128]
+        self.actor.hidden_dims = [512, 256, 128]  # A1 template: [128, 128, 128]
+        self.critic.hidden_dims = [512, 256, 128]  # A1 template: [128, 128, 128]
 
 
 @configclass

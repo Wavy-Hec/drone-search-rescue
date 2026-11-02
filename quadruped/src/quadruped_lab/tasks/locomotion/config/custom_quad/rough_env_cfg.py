@@ -63,8 +63,8 @@ class UseNewtonActuatorsCfg(PresetCfg):
 class CustomQuadRoughEnvCfg(LocomotionVelocityRoughEnvCfg):
     """Custom quadruped on the stock rough-terrain generator with a 187-ray height scan."""
 
-    def __post_init__(self):
-        # post init of parent
+    def __post_init__(self) -> None:
+        """Apply the custom quadruped's robot, terrain, MDP and physics settings to the velocity base task."""
         super().__post_init__()
 
         # physics: the 3.0 velocity base defaults to Newton MJWarp; default to Isaac Sim PhysX, the backend of the 2.x
@@ -74,9 +74,9 @@ class CustomQuadRoughEnvCfg(LocomotionVelocityRoughEnvCfg):
         # position iteration, which makes the 2.x policy track its commands worse)
         physics.isaacsim_physx.enable_external_forces_every_iteration = False
         physics.default = physics.isaacsim_physx
-        # ``physics=physx`` is an auto preset that picks OvPhysX (not installed here) for kit-less runs and Isaac Sim
-        # PhysX for Kit runs, i.e. different backends for headless train and ``--viz kit`` play. Alias it to
-        # Isaac Sim PhysX so a stray ``physics=physx`` cannot switch backends.
+        # ``physics=physx`` is an auto preset that picks OvPhysX for kit-less runs and Isaac Sim PhysX for Kit runs,
+        # i.e. different backends for headless train and ``--viz kit`` play. Alias it to Isaac Sim PhysX so a stray
+        # ``physics=physx`` cannot switch backends.
         physics.physx = physics.isaacsim_physx
         # actuators: Isaac Lab's actuator path on Isaac Sim PhysX, native actuators on Newton (UseNewtonActuatorsCfg)
         self.sim.use_newton_actuators = UseNewtonActuatorsCfg()
@@ -95,7 +95,6 @@ class CustomQuadRoughEnvCfg(LocomotionVelocityRoughEnvCfg):
 
         # events
         self.events.push_robot = None
-        # self.events.push_robot.mode = "interval"
         # 3.0 changed this term's defaults to a multiplicative log-uniform +-25 %; with only the range overridden it
         # raises "log-uniform bounds must be > 0". Keep the 2.x semantics: add U(-1, 3) kg to the trunk.
         self.events.add_base_mass.params["mass_distribution_params"] = (-1.0, 3.0)
@@ -125,7 +124,6 @@ class CustomQuadRoughEnvCfg(LocomotionVelocityRoughEnvCfg):
         self.rewards.track_lin_vel_xy_exp.weight = 1.5
         self.rewards.track_ang_vel_z_exp.weight = 0.75
         self.rewards.dof_acc_l2.weight = -2.5e-7
-        # self.rewards.robot_height.weight = 0.1
 
         # terminations
         self.terminations.base_contact.params["sensor_cfg"].body_names = ["trunk", ".*_thigh"]

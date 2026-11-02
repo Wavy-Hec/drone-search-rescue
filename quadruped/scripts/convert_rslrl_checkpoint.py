@@ -45,8 +45,14 @@ import re
 import sys
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import torch
+
+if TYPE_CHECKING:
+    from tensordict import TensorDict
+
+    from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg
 
 DEFAULT_AGENT_CFG = (
     "quadruped_lab.tasks.locomotion.config.custom_quad.agents.rsl_rl_ppo_cfg:CustomQuadRoughPPORunnerCfg"
@@ -215,7 +221,7 @@ def old_forward(model_state_dict: dict[str, torch.Tensor], net: str, obs: torch.
 class _FakeVecEnv:
     """Minimal stand-in for ``RslRlVecEnvWrapper``: enough for ``OnPolicyRunner`` construction on the CPU."""
 
-    def __init__(self, obs: dict[str, torch.Tensor], num_actions: int):
+    def __init__(self, obs: dict[str, torch.Tensor], num_actions: int) -> None:
         from tensordict import TensorDict
 
         self._obs = TensorDict(obs, batch_size=[next(iter(obs.values())).shape[0]])
@@ -226,11 +232,13 @@ class _FakeVecEnv:
         self.device = "cpu"
         self.cfg = {}
 
-    def get_observations(self):
+    def get_observations(self) -> TensorDict:
+        """The fixed observations, as the wrapper returns them."""
         return self._obs
 
 
-def _load_agent_cfg(spec: str):
+def _load_agent_cfg(spec: str) -> RslRlOnPolicyRunnerCfg:
+    """Instantiate an agent config given as ``module:Class``."""
     module_name, class_name = spec.split(":")
     return getattr(importlib.import_module(module_name), class_name)()
 
@@ -305,6 +313,7 @@ def verify(old_path: Path, new_path: Path, agent_cfg_spec: str, num_samples: int
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Convert (and/or verify) a checkpoint; exit code 1 if the verification exceeds the tolerance."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("input", type=Path, help="rsl-rl <= 3.x checkpoint (read only).")
     parser.add_argument("output", type=Path, help="Destination of the rsl-rl 5.x checkpoint.")

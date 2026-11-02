@@ -19,7 +19,7 @@ The run's order is read from its log. Two INFO records carry it; ``--info`` make
   (``isaaclab_physx/isaaclab_physx/assets/articulation/articulation.py:4317``; Newton:
   ``isaaclab_newton/isaaclab_newton/assets/articulation/articulation.py:3718``).
 
-Usage (GPU phase, from the project root)::
+Usage (from the project root)::
 
     mkdir -p logs
     isaaclab zero_agent --task Isaac-Velocity-Rough-Custom-Quad-v0 --num_envs 16 --max_steps 200 --viz none --info \\
@@ -98,6 +98,7 @@ def parse_log(text: str) -> dict[str, list[str]]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Compare the joint orders found in a run log with the expected order; see the module docstring for exit codes."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("log", type=Path, help="Console log of an isaaclab zero_agent/play/train run (with --info).")
     parser.add_argument("--usd", type=Path, default=DEFAULT_USD, help="Robot USD the expected order is derived from.")
