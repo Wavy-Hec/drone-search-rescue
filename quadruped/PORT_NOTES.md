@@ -465,10 +465,12 @@ a launch fails with `PxgCudaDeviceMemoryAllocator failed to allocate memory` or 
 From the project root, in the Python environment that has Isaac Lab 3.0. The commands ran on the RTX 5080 with
 the current defaults (shorter `--max_iterations` for training), or before the default change with the two execution
 settings passed explicitly, which resolves to the identical config. The 2.x parity check needs the 2.x sources
-(defaults: `~/IsaacLab` at 2.3.2 and `~/quadruped_rough_terrain/custom_quadruped`).
+(defaults: `~/IsaacLab` at 2.3.2 and `~/quadruped_rough_terrain/custom_quadruped`). The CPU block needs no GPU and
+takes about 15 s on that machine: 7-9 s for the tests (the first run compiles a few Warp kernels) and 1-3 s for each
+script.
 
 ```bash
-# CPU: tests, parity with the 2.x sources, conversion check, Newton asset, depth-camera study
+# CPU (about 15 s): tests, parity with the 2.x sources, conversion check, Newton asset, depth-camera study
 python -m pytest
 python scripts/check_obs_parity.py --markdown
 python scripts/convert_rslrl_checkpoint.py checkpoints_2x/height_scanner_model.pt \
