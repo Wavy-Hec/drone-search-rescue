@@ -1,10 +1,11 @@
 """Render a detector dataset of the SAR site in Isaac Sim: drone-camera RGB + instance segmentation (GPU).
 
 One simulator run renders many sites. A site is the survey terrain dressed by one scenario seed: the seed places the
-people and objects, the terrain is the same for every seed. For every seed the objects are respawned in place and
-the drone is put at sampled views (:mod:`drone_lab.sar.capture`) under varied light and ground looks. Frames go to
-one folder per split, in the capture layout of the ground station's dataset tools
-(``drone_gcs/scripts/seg_to_yolo.py``):
+people and objects, the terrain is the same for every seed. The people are those of the missions (``--people_style``,
+default ``natural``: posed victims and responders; ``tpose``: the characters' rest T-pose), one style per capture
+folder. For every seed the objects are respawned in place and the drone is put at sampled views
+(:mod:`drone_lab.sar.capture`) under varied light and ground looks. Frames go to one folder per split, in the
+capture layout of the ground station's dataset tools (``drone_gcs/scripts/seg_to_yolo.py``):
 
     <out>/train/   --train_seeds (default 1000-1035), --frames random views per site
     <out>/val/     --val_seeds   (default 2000-2006): other sites, held out from training
@@ -15,7 +16,7 @@ unseen.
 
 Per frame ``rgb_<key>.png``, ``instance_<key>.png`` (16-bit instance ids) and ``instance_<key>.json`` (id -> prim
 path and class, full boxes of the objects cut by the image edge, drone view, light). Per site ``seed_<n>.json``
-(objects, ground look, label checks, timing); a site that has it is skipped when the run is repeated.
+(objects, people style, ground look, label checks, timing); a site that has it is skipped when the run is repeated.
 
 The camera renders 960 x 720 px with the focal length of the mission camera. The centre 640 x 480 crop is exactly
 the mission camera's image; the margin shows the full extent of every object cut by the crop's edge, so the
@@ -25,6 +26,7 @@ Examples (env_isaaclab, from the project root)::
 
     python scripts/gen_yolo_dataset.py                       # full dataset: 2118 frames, about 7 min
     python scripts/gen_yolo_dataset.py --train_seeds 1000 --val_seeds 2000 --frames 6 --out /tmp/sar_capture_smoke
+    python scripts/gen_yolo_dataset.py --people_style tpose --out ~/isaac_ws/datasets/drone_sar_yolo/capture
 
 Then, in the ``vision`` env (classes in the order of :data:`drone_lab.sar.assets.CLASSES`)::
 
@@ -60,6 +62,8 @@ from drone_lab.sar.capture import (  # noqa: E402
     sample_views,
     unclipped_boxes,
 )
+from drone_lab.sar.people import PEOPLE_STYLES  # noqa: E402
+from drone_lab.sar.scenario import ScenarioCfg  # noqa: E402
 
 TASK = "DroneLab-SAR-ARL-Robot-1-v0"
 SEG = "instance_segmentation"
@@ -82,7 +86,13 @@ def parse_seeds(text: str) -> list[int]:
 
 def parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--out", default="~/isaac_ws/datasets/drone_sar_yolo/capture", help="Capture folder.")
+    parser.add_argument("--out", default="~/isaac_ws/datasets/drone_sar_yolo_v2/capture", help="Capture folder.")
+    parser.add_argument(
+        "--people_style",
+        choices=PEOPLE_STYLES,
+        default=ScenarioCfg.people_style,
+        help="People of the sites: 'natural' (posed victims and responders, the task's default) or 'tpose'.",
+    )
     parser.add_argument("--train_seeds", default="1000-1035", help="Sites of the training split, e.g. 1000-1035.")
     parser.add_argument("--val_seeds", default="2000-2006", help="Held-out sites of the validation split.")
     parser.add_argument("--test_seeds", default="0", help="Sites rendered along the mission path ('' for none).")
@@ -312,6 +322,10 @@ def main() -> int:  # noqa: C901
             if s in seen:
                 sys.exit(f"[gen_yolo_dataset] seed {s} is in both {seen[s]} and {split}")
             seen[s] = split
+    for meta_path in sorted(out.glob("*/seed_*.json")):
+        style = json.loads(meta_path.read_text()).get("people_style", "tpose")  # the first captures predate the key
+        if style != args.people_style:
+            sys.exit(f"[gen_yolo_dataset] {meta_path} has {style} people, not {args.people_style}: use another --out")
     todo = [(split, s) for split in SPLITS for s in plan[split] if not (out / split / f"seed_{s:04d}.json").exists()]
     if not todo:
         print(f"[gen_yolo_dataset] every site is already in {out}")
@@ -331,7 +345,11 @@ def main() -> int:  # noqa: C901
     from drone_lab.sar.scene import sar_camera_cfg
 
     first_seed = todo[0][1]
-    overrides = list(hydra_overrides) + ["physics=isaacsim_physx", f"env.scene.sar_site.spawn.seed={first_seed}"]
+    overrides = list(hydra_overrides) + [
+        "physics=isaacsim_physx",
+        f"env.scene.sar_site.spawn.seed={first_seed}",
+        f"env.scene.sar_site.spawn.people_style={args.people_style}",
+    ]
     env_cfg = parse_env_cfg(TASK, device=getattr(args, "device", None) or "cpu", num_envs=1, overrides=overrides)
     pad = (args.pad, round(args.pad * SAR_CAMERA.height / SAR_CAMERA.width))
     env_cfg.scene.sar_camera = sar_camera_cfg(padded_spec(SAR_CAMERA, *pad), data_types=("rgb", SEG))
@@ -382,6 +400,7 @@ def main() -> int:  # noqa: C901
             meta = {
                 "seed": seed,
                 "split": split,
+                "people_style": scenario.cfg.people_style,
                 "frames": len(views),
                 "views": "mission path" if mission else f"{args.frames} random",
                 "objects": {k: v for k, v in scenario.counts().items() if v},
@@ -404,6 +423,7 @@ def main() -> int:  # noqa: C901
             )
         summary = {
             "task": TASK,
+            "people_style": args.people_style,
             "seeds": {k: v for k, v in plan.items()},
             "frames_this_run": totals,
             "frames_per_site": args.frames,
