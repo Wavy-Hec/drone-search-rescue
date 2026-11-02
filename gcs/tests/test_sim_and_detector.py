@@ -181,7 +181,7 @@ class TestDetectors(unittest.TestCase):
         det3 = YoloDetector(COCO_WEIGHTS, device="cpu", classes="car", class_map="truck=car")
         self.assertEqual(det3.class_ids, sorted([ids["car"], ids["truck"]]))
         with self.assertRaises(ValueError) as cm:
-            YoloDetector(COCO_WEIGHTS, device="cpu", classes="persn")  # a typo used to silently remove every detection
+            YoloDetector(COCO_WEIGHTS, device="cpu", classes="persn")  # a typo must not silently remove every detection
         self.assertIn("persn", str(cm.exception))
         with self.assertRaises(ValueError):
             YoloDetector(COCO_WEIGHTS, device="cpu", classes="bench", class_map="bench=")  # nothing would be left

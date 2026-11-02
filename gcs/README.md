@@ -159,7 +159,7 @@ fake drone. With the default `--detector yolo` you get false positives such as "
 | `q` / `Esc` | quit (writes the report). Closing the window does the same |
 
 Arrow keys and other non-character keys are ignored. (With OpenCV's Qt backend they arrive as X key codes
-whose low byte is a letter: Left used to read as `q` and quit, Right as `s`.)
+whose low byte is a letter: read naively, Left would be `q` and quit, Right `s`.)
 
 HUD (bottom bar):
 
@@ -226,8 +226,8 @@ Or call the `Sender` methods directly with numpy arrays, CPU or GPU torch tensor
   `python scripts/gcs.py --addr tcp://0.0.0.0:47800`, or set `DRONE_GCS_ADDR` on both sides.
 * Import check (it passes, see the tests):
   `conda activate env_isaaclab && python -c "import os, sys; sys.path.insert(0, os.path.expanduser('~/isaac_ws/projects/drone_gcs')); from drone_gcs.link import Sender"`.
-  `pip install --no-deps -e .` also works (base dependency: numpy only). It was **not** done, to leave
-  env_isaaclab untouched.
+  `pip install --no-deps -e .` also works (base dependency: numpy only); the path import keeps env_isaaclab
+  untouched.
 
 ## Outputs: `runs/<name>/`
 
@@ -256,9 +256,9 @@ Or call the `Sender` methods directly with numpy arrays, CPU or GPU torch tensor
 * Weights: `--weights <file.pt>`; by default `$DRONE_GCS_WEIGHTS`, else the YOLO26n fine-tuned on simulator
   images (`~/isaac_ws/assets/models/drone_sar_yolo26n.pt`: person, vehicle, crate, barrel, pallet, cone,
   landing_pad) when it exists, else the stock COCO model (`yolo26n.pt`, same folder). Defaults
-  `--conf 0.25 --iou 0.45 --imgsz 640 --device cpu`. YOLO runs on the **CPU** by default (about 19 ms per 640×480 frame, plenty for a 5–10 Hz camera): the GPU
-  belongs to Isaac Sim and the RL jobs. `--device cuda:0` opts in; `--device auto` uses the GPU only when
-  `nvidia-smi` shows at least 2 GiB free on it.
+  `--conf 0.25 --iou 0.45 --imgsz 640 --device cpu`. YOLO runs on the **CPU** by default (about 19 ms per
+  640×480 frame, plenty for a 5–10 Hz camera): the GPU belongs to Isaac Sim and the RL jobs. `--device cuda:0`
+  opts in; `--device auto` uses the GPU only when `nvidia-smi` shows at least 2 GiB free on it.
 * `--classes person,car` keeps only those classes; a name matches the model's class name or the name after
   `--class-map` (`--classes car --class-map truck=car` keeps cars and trucks). A name the model does not
   have is an error if nothing would be left, else a warning. `--class-map truck=car,bench=` renames or drops
