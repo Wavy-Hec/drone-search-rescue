@@ -32,16 +32,39 @@ python scripts/gcs.py --name sar_live
 # terminal 2: the mission in Isaac Sim, with a window that follows the drone, conda env 'env_isaaclab'
 source ~/anaconda3/etc/profile.d/conda.sh && conda activate env_isaaclab
 cd ~/isaac_ws/projects/drone_lab
-python scripts/sar_mission.py --viz kit --checkpoint \
+python scripts/sar_mission.py --viz kit --video --out sar_live --checkpoint \
     ~/isaac_ws/IsaacLab/logs/rsl_rl/arl_robot_1_track_position_state_based/2026-11-01_14-45-20_demo_drone_track/exported/policy.pt
+
+# afterwards, terminal 1: the demo video, both recordings side by side and in step
+python scripts/compose_video.py --gcs runs/sar_live --sim ~/isaac_ws/projects/drone_lab/runs/sar_live
 ```
+
+![The demo video: the Isaac Sim chase view next to the ground station](docs/images/sar_mission_demo.jpg)
+
+*Frame of the demo video, 81 s into the mission: the Isaac Sim window (a follow camera over the drone, its
+mapping rays glowing on the ground) and the ground station, whose detector has just boxed a person and three
+crates and pinned five people so far.*
 
 The drone takes off from its landing pad, flies a lawnmower over the 40 × 40 m site (8 lines, 5 m apart, 7.5 m
 up), comes back and lands on the pad: about 6 minutes of flight. The flight plan and its camera-overlap math are
 in drone_lab (`src/drone_lab/sar/mission.py`). The ground station uses the YOLO26n fine-tuned on simulator images
 (`~/isaac_ws/assets/models/drone_sar_yolo26n.pt`) when it exists, otherwise the stock COCO model; `--weights`
 picks another one. After the landing the window shows MISSION END and stays open; `q` (or closing it) writes
-the report to `runs/sar_live/` (`report.md` first).
+the report to `runs/sar_live/` (`report.md` first); `--exit-on-end` does that by itself a few seconds after the
+landing.
+
+**The demo video.** The two sides record on their own clocks: the simulator one frame per 0.1 s step
+(`mission.mp4`), the ground station its dashboard in wall-clock time (`dashboard.mp4`); each writes the sim time
+of every frame next to its video (`mission_frames.csv`, `dashboard_frames.csv`). `scripts/compose_video.py` puts
+them side by side on the simulator's clock: next to every simulator frame it shows the newest dashboard frame of
+that moment or an earlier one, and after the touchdown the dashboard plays on for 4 s (MISSION END). `--speed 3`
+makes a 2-minute version with every frame kept (30 frames/s), `--layout stack` puts the two views on top of each
+other, `--crf` trades size for quality (the default 28 gives about 660 MB for the 6-minute mission at
+3200 × 900; text stays sharp).
+
+* Two monitors: `gcs.py --window-pos X Y` and `sar_mission.py --window_pos X Y` place the two windows. The
+  Isaac Sim window shows only its viewport (`--kit_ui` brings back the menus and panels); on this GNOME desktop
+  it takes the size of the monitor it opens on, whatever size it asks for.
 
 * Without windows (record only; both sides exit at the end and the report is written right away):
   `python scripts/gcs.py --headless` and `python scripts/sar_mission.py --checkpoint ...` (headless is the
@@ -212,6 +235,8 @@ Or call the `Sender` methods directly with numpy arrays, CPU or GPU torch tensor
 |---|---|
 | `report.md` | the mission report: scorecard, photo and elevation maps with the flight path and the pins, list of finds with coordinates and their ground-truth match |
 | `dashboard.mp4` | the exact dashboard canvas at the dashboard rate. OpenCV writes it (mp4v), then system ffmpeg re-encodes it to H.264 so it plays in browsers and Obsidian (`--no-transcode` keeps mp4v) |
+| `dashboard_frames.csv` | the sim time shown in every frame of `dashboard.mp4` (empty before the first message) |
+| `demo.mp4` | written by `scripts/compose_video.py`: the simulator's view and the dashboard side by side, in step |
 | `final_map_elevation.png`, `final_map_photo.png`, `coverage.png` | final maps, each with the flown trajectory, planned path, detections and (if known) ground truth |
 | `maps/` | raw arrays: `elevation_{mean,max,min}.npy`, `hit_count.npy`, `photo_rgb.png`, `photo_filled.npy`, `grid.json`. Arrays are (ny, nx), row 0 = south |
 | `detections.csv` / `.json` | objects: class, x, y, z (world / local ENU, m), confidence (mean, max), hits, first/last seen, spread, confirmed. Also the matched ground-truth id and error when GT_OBJECTS was sent |
@@ -326,7 +351,7 @@ figure above. The training curves are in `runs/train/drone_sar_yolo26n/`.
 ## Tests
 
 ```bash
-./run_tests.sh                      # all 83 tests, ~25 s, CPU only (activates 'vision' itself)
+./run_tests.sh                      # all 86 tests, ~25 s, CPU only (activates 'vision' itself)
 DRONE_GCS_SKIP_E2E=1 ./run_tests.sh # without the end-to-end run
 ```
 
@@ -337,7 +362,7 @@ DRONE_GCS_SKIP_E2E=1 ./run_tests.sh # without the end-to-end run
 | Geometry | Isaac Lab xyzw → wxyz, and the world/opengl → ROS camera conversion checked against Isaac Lab 3.0's fixed constants and a re-implementation of its matrix formula (no Isaac Lab import). Projection round trips |
 | Mapping | Running statistics vs brute force. Cell centres on the area lattice for any area size and padding. Grid cap for huge missions. Orthomosaic from depth and from the map, self-occlusion depth ignored. Geolocation by depth, map and plane. Tracker merging. Precision and recall. Map height error, all cells and away from steps |
 | Isaac adapter | Only one env row leaves the GPU. Each capture is sent once (`camera.frame`). Async-rendering capture pose. `world=True` origin handling, terrain truth included |
-| App | Arrow keys neither quit nor take screenshots. Data / END of another mission ignored; a new mission clears an old END. Rollover keeps ground truth and drops the old mission's late detections. Every drone gets detection. Boxes sent by the simulator (`--detector gt`) land on the map. Short link label. Video keeps real time through stalls |
+| App | Arrow keys neither quit nor take screenshots. Data / END of another mission ignored; a new mission clears an old END. Rollover keeps ground truth and drops the old mission's late detections. Every drone gets detection. Boxes sent by the simulator (`--detector gt`) land on the map. Short link label. Video keeps real time through stalls and logs the sim time of every frame. `compose_video` pairs each simulator frame with the newest dashboard frame not ahead of it, and joins the two videos in step |
 | Fake world | Rays and depth lie on the height field |
 | Detectors | The blob detector finds every object. The worker keeps the newest frame. Default weights: `$DRONE_GCS_WEIGHTS`, else the fine-tuned model if present, else COCO. YOLO wrapper: 2 CPU inferences on Ultralytics' `bus.jpg`; class filters validated (typos raise) and matched after `--class-map` |
 | Dataset tools | `seg_to_yolo` on synthetic segmentation gives exact labels, keeps cut-off boxes, paints over tiny ones. Split capture folders stay the splits, and the full box of a cut-off object decides whether it stays. Block split gives train data and ~15 % val from 8 to 2000 frames. `train_detector --dry-run` |
@@ -380,15 +405,20 @@ the landing pad (bottom left) and back, and the 42 pins.*
   by less than 10 cm from cell to cell (31 % of the area) the map is within 4 mm RMSE.
 * The tracker keeps a separate pin per object: same class within 1.5 m for people, 0.8 m for crates, barrels and
   cones (they stand in piles), 1 m for pallets, 3 m for the forklift.
+* **The recorded live mission** (both windows open, the Isaac Sim view recorded, the demo video above; report in
+  `runs/sar_mission_final`): the same flight and the same finds with the fine-tuned detector, 9 / 9 people,
+  39 / 39 objects, 2 false alarms (the standing person's hands called cones), pins 0.06 m from the truth
+  (people 0.13 m), 100 % scanned, 99.8 % photographed, map height error 0.10 m RMSE (4 mm away from steps),
+  closest approach 2.4 m, landed 7 mm from the centre of the pad after 6 min 16 s.
 
 Loop rates (RTX 5080, Ryzen 7 9800X3D, nothing else on the GPU unless noted):
 
 | | |
 |---|---|
-| Simulation | 17-21 env steps/s headless (1.7-2.1x real time; one step = 0.1 s of flight: 10 physics steps and the RTX render of the drone camera, 46 ms mean); 12-13 steps/s with the Isaac Sim window and video recording; 6-10 steps/s while a YOLO training job shares the GPU |
+| Simulation | 17-21 env steps/s headless (1.7-2.1x real time; one step = 0.1 s of flight: 10 physics steps and the RTX render of the drone camera, 46 ms mean); 14.5 steps/s (1.45x real time) with the Isaac Sim window, its chase view (1.8 ms per step) and the video recording (3.9 ms per frame); 6-10 steps/s while a YOLO training job shares the GPU |
 | Link, simulator side | 0.9 ms per step (p95 1.1 ms) to copy and queue telemetry, scan and the camera frame; a background thread writes them. 0 messages dropped in every run, 8.1 GB per mission |
 | Ground station | dashboard 22-26 ms per frame, drawn at 12 fps; YOLO on the CPU 16-18 ms per frame (74 ms with the Isaac Sim window on the same machine; the worker then skips frames, 6 % in that run) |
-| GPU memory | Isaac Sim with the drone camera: 5.2 GiB after the start, 5.9 GiB peak over a full headless mission, 6.2 GiB with window and video. The ground station uses none |
+| GPU memory | Isaac Sim with the drone camera: 5.2 GiB after the start, 5.9 GiB peak over a full headless mission, 6.2-6.4 GiB with window and video. The ground station uses none |
 
 ### Fake drone
 
@@ -443,7 +473,7 @@ use needs an Ultralytics Enterprise License. Everything except `drone_gcs/detect
 drone_gcs/        protocol.py link.py geometry.py isaac_bridge.py   <- sender side: stdlib + numpy only
                   mapping.py state.py detector.py dashboard.py text.py report.py app.py dataset.py
                   sim/fake_world.py sim/flight.py                   <- stand-in simulator
-scripts/          gcs.py  fake_drone.py  seg_to_yolo.py  train_detector.py  eval_detector.py
+scripts/          gcs.py  fake_drone.py  compose_video.py  seg_to_yolo.py  train_detector.py  eval_detector.py
 tests/            unittest suite (./run_tests.sh)
 PROTOCOL.md       message types, fields, units, frames, Isaac Lab conversions
 models/           fine-tuned detector goes here (Git LFS)
