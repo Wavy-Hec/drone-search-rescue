@@ -35,10 +35,41 @@ custom data `drone_lab:sar_ground_truth`). Without installing the project, use `
 | `assets.py` | verified asset URLs (Isaac Sim 6.2 bucket), measured sizes, unit fixes (trees and DigitalTwin assets are in cm), classes, ground materials |
 | `camera.py` | camera intrinsics and mount, and the pixel-budget math (below) |
 | `scenario.py` | seeded placement on a CPU copy of the terrain (height queries, flatness, spacing) and the ground-truth JSON |
+| `people.py` | natural poses: animation frames retargeted onto the characters and baked into static meshes; `people_poses.json` holds their boxes and under-side height maps |
 | `scene.py` | Isaac Lab spawner of the whole site (`SarSiteCfg`), ground materials on face subsets, landing pad, camera / light configs, persistent asset cache |
 | `labels.py` | instance segmentation -> object names, classes, 2D boxes (numpy only; for auto-labelling) |
 | `capture.py` | drone views, lights and ground looks of the detector dataset (`scripts/gen_yolo_dataset.py`; numpy only) |
 | `topdown.py` | top-down object map figure |
+
+## People: T-pose or natural
+
+`people_style` (`SarSiteCfg`, `ScenarioCfg`; default `tpose`) picks how the people look:
+
+* `tpose`: Isaac Sim's characters as shipped, standing or lying flat in their rest T-pose. The detector dataset
+  and the missions so far use this; its sites and ground truth are byte for byte what they were before the
+  option existed (`tests/test_sar_people.py`).
+* `natural`: the same layout, re-posed. Victims lie on their back or in the recovery position, sit on the ground or
+  wave; a victim next to a step slides up to it (a sitting one with its back to the block), at most 1 m from its
+  T-pose place. Two or three responders in uniform stand by the forklift and around the helipad (`group`
+  `responders` in the ground truth). Every other object stays exactly where it was.
+
+Switch it with `env.scene.sar_site.spawn.people_style=natural` (any SAR task or script) or
+`scripts/sar_preview.py --people_style natural`; `--closeups` adds a low oblique close-up of every pose.
+
+How the poses are made (`people.py`): the clips of `Isaac/People/Animations` drive the Biped rig of
+`Characters/Biped_Setup.usd`, not the characters' own (Reallusion) skeletons, and Isaac Lab's apps do not load
+`omni.anim.graph` that retargets them at runtime. So one clip frame (idle, wave, sit, look-around) is retargeted on
+the CPU (world-space joint rotations from the Biped's T-pose applied to the character's T-pose), adjusted with a few
+joint turns (bent knees, the recovery position) and ground searches that put a heel, a hand or a knee on the
+floor, skinned with the character's own weights and written as a static copy of the character: same meshes,
+UVs and materials, no skeleton. The copies are baked on first use into `<asset cache>/posed_people` (about 1 s
+each). `people_poses.json` holds every character's box and under-side height map in every pose, so placement needs
+no assets; regenerate it after changing the poses with `python -m drone_lab.sar.people --write-data`.
+
+Placement of a posed person: its under-side height map (5 cm squares) is laid over the terrain; it rests on the
+highest terrain point under it, so nothing pokes into the body, and it must rest on the parts that carry it (back,
+seat, soles) with the ground under them at most 5-6 cm lower (on a slope). The spawned meshes are checked point by
+point against the terrain by `scripts/sar_preview.py` (`people_on_terrain` in `checks.json`).
 
 ## Placement rules (all checked by `tests/test_sar_scenario.py`)
 
@@ -105,7 +136,7 @@ MDL ground materials and the sky HDRI are loaded by Kit itself.
 
 ## Notes
 
-* The people are Isaac Sim's characters in their rest T-pose (no animation).
+* The people are Isaac Sim's characters in their rest T-pose unless `people_style=natural` (see above).
 * Trees are sized for the survey height at spawn time (`survey_clearance`, copied from
   `commands.survey_target.altitude` when the config is built). If a script lowers the altitude later, also set
   `env.scene.sar_site.spawn.survey_clearance` (trees have no colliders, but the drone would fly through foliage).

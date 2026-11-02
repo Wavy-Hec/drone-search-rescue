@@ -90,6 +90,25 @@ python scripts/sar_preview.py --no_sim   # CPU, seconds: ground truth + object m
 python scripts/gen_yolo_dataset.py       # GPU, ~7 min: detector dataset, 2118 labelled frames of 44 sites
 ```
 
+**Natural people (opt-in).** By default the people are Isaac Sim's characters in their rest T-pose, which the
+detector dataset and the missions here were made with. `people_style=natural` poses them: victims lie on their
+back or in the recovery position, sit against the rubble or wave for help, and two or three responders stand by the
+forklift and the helipad. Each pose is a frame of Isaac Sim's own animation clips (idle, wave, sit, look-around),
+retargeted onto the character's skeleton on the CPU and baked into a static mesh
+([`people.py`](src/drone_lab/sar/people.py)), so it looks the same in RGB, depth and segmentation (class `person`)
+and costs nothing per frame. The rest of the site does not change; the victims keep their names and stay within
+1 m of their old places, resting on the terrain through the under-side height map of their pose.
+
+![Natural people on the demo site: sitting, lying on the back and on the side, waving](docs/images/sar_people_natural.jpg)
+
+*Close-ups from `sar_preview.py --people_style natural --closeups` (seeds 0 and 1): a worker sitting against a block,
+a woman waving next to a police responder, an officer on her back by the forklift, a woman in the recovery position.*
+
+```bash
+python scripts/sar_preview.py --people_style natural --closeups   # GPU, ~2 min: + close-ups of every pose
+# in any SAR task or script, the Hydra token:  env.scene.sar_site.spawn.people_style=natural
+```
+
 The ground station's detector (YOLO26n) is fine-tuned on that dataset. In the 183 test frames along the survey
 path over the demo site it finds every person (55 sightings) without a false alarm; the stock COCO model finds 27.
 Details in the drone_gcs README.
