@@ -13,15 +13,21 @@ The trained tracking policy takes off from the landing pad, flies a lawnmower su
 The flight plan math (spacing, height, overlaps) is in :mod:`drone_lab.sar.mission`. Start the ground station
 first (``python scripts/gcs.py`` in the drone_gcs project, conda env ``vision``); either side may start first.
 
+The Isaac Sim window (``--viz kit``) and the video (``--video``) show the same camera: by default a smooth follow
+camera that keeps the drone and its scan in view, with the mapping rays' hits glowing on the ground and the ground
+running on to the horizon (:mod:`drone_lab.sar.chase_view`). Only that camera sees these extras; the drone's own
+camera renders the site alone.
+
 Outputs in ``runs/<out>/`` (default ``runs/sar_mission_seed<seed>``): ``mission.json`` (plan, outcome, loop rates,
-link and GPU statistics), ``trajectory.csv``, ``ground_truth.json`` and, with ``--video``, ``mission.mp4``.
+link and GPU statistics), ``trajectory.csv``, ``ground_truth.json`` and, with ``--video``, ``mission.mp4`` plus
+``mission_frames.csv`` (the sim time of every frame, for drone_gcs ``scripts/compose_video.py``).
 
 Examples (env_isaaclab, from the project root)::
 
     python scripts/sar_mission.py --checkpoint <run>/exported/policy.pt                     # headless, full mission
-    python scripts/sar_mission.py --checkpoint <policy.pt> --viz kit                        # live Isaac Sim window
+    python scripts/sar_mission.py --checkpoint <policy.pt> --viz kit --video                # live window + recording
     python scripts/sar_mission.py --checkpoint <policy.pt> --max_time 90 --out sar_short    # short test flight
-    python scripts/sar_mission.py --checkpoint <policy.pt> --video --view chase             # record a chase video
+    python scripts/sar_mission.py --checkpoint <policy.pt> --video --view overview          # fixed view of the site
 
 Trailing ``key=value`` tokens are Hydra overrides of the task config.
 """
@@ -64,12 +70,27 @@ parser.add_argument(
     action="store_true",
     help="Attach the boxes of the instance segmentation to every frame (for the ground station's --detector gt).",
 )
-parser.add_argument("--view", choices=("chase", "overview"), default="chase", help="Camera of the window / video.")
-parser.add_argument("--video", action="store_true", help="Record runs/<out>/mission.mp4 from a headless Kit camera.")
+parser.add_argument(
+    "--view",
+    choices=("chase", "overview"),
+    default="chase",
+    help="Camera of the window / video: a smooth follow camera, or a fixed view of the whole site.",
+)
+parser.add_argument("--no_scan_rays", action="store_true", help="Do not draw the mapping rays in the window / video.")
+parser.add_argument("--video", action="store_true", help="Record runs/<out>/mission.mp4 of the window's camera.")
 parser.add_argument(
     "--video_fps", type=int, default=10, help="Video frame rate; one frame per 0.1 s step, so 10 is real time."
 )
 parser.add_argument("--video_size", type=int, nargs=2, default=(1280, 720), metavar=("W", "H"))
+parser.add_argument(
+    "--window_pos",
+    type=int,
+    nargs=2,
+    default=None,
+    metavar=("X", "Y"),
+    help="Position of the Isaac Sim window (--viz kit); it shows the viewport only.",
+)
+parser.add_argument("--kit_ui", action="store_true", help="Keep Isaac Sim's menus and panels around the viewport.")
 parser.add_argument(
     "--markers",
     action="store_true",
@@ -88,12 +109,22 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 import numpy as np
 import torch
 
 import drone_lab.tasks  # noqa: F401  (registers the DroneLab gym ids)
 from drone_lab.sar.camera import SAR_CAMERA
+from drone_lab.sar.chase_view import (
+    FollowCamera,
+    ScanRays,
+    ground_below,
+    isolate_chase_view,
+    rim_points,
+    set_focal_length,
+    spawn_ground_skirt,
+)
 from drone_lab.sar.mission import (
     ClearanceMonitor,
     MissionPlan,
@@ -107,7 +138,8 @@ from drone_lab.video import capture_frame, find_kit_visualizer, open_mp4_writer,
 
 ZERO_THRUST = -1.0
 """Raw action that the thrust action term maps to 0 N (scale 3, offset 3)."""
-WINDOW_SIZE_KIT_ARGS = "--/app/window/width=1920 --/app/window/height=1080"
+VIEWER_CAMERA = "/OmniverseKit_Persp"
+"""Camera prim of the Kit viewport; the video recorder renders the same prim."""
 
 
 def run_dir_for(out: str | None, seed: int) -> Path:
@@ -161,28 +193,32 @@ def configure(env_cfg, plan) -> None:
 
         open_window = "kit" in (args_cli.visualizer or [])
         w, h = args_cli.video_size
-        if args_cli.view == "chase":
-            viz = KitVisualizerCfg(
-                headless=not open_window,
-                window_width=w,
-                window_height=h,
-                origin_type="asset",
-                origin_track_path="robot",
-                origin_env_index=0,
-                eye=(-6.0, -8.0, 5.0),
-                lookat=(0.0, 0.0, -1.0),
-            )
+        if args_cli.view == "chase":  # placed every step by FollowCamera; this is the first frame's view
+            lookat = tuple(plan.waypoints[0])
+            eye = tuple(np.add(lookat, FollowCamera.offset))
         else:
             eye, lookat = overview_camera(env_cfg.scene.terrain.terrain_generator)
-            viz = KitVisualizerCfg(headless=not open_window, window_width=w, window_height=h, eye=eye, lookat=lookat)
+        # background_color=None: the sky dome is the background, not a flat colour behind the terrain
+        viz = KitVisualizerCfg(
+            headless=not open_window, window_width=w, window_height=h, eye=eye, lookat=lookat, background_color=None
+        )
         env_cfg.sim.visualizer_cfgs = [viz]
         if open_window:
-            # Kit's main window has no size in the Isaac Lab app file; give it room for the viewport and panels
-            args_cli.kit_args = f"{args_cli.kit_args or ''} {WINDOW_SIZE_KIT_ARGS}".strip()
+            args_cli.kit_args = f"{args_cli.kit_args or ''} {window_kit_args()}".strip()
         else:
             args_cli.headless = True
     else:
         args_cli.headless = True
+
+
+def window_kit_args() -> str:
+    """Kit settings for the main window: its position and (unless --kit_ui) the viewport filling it."""
+    kit = []
+    if args_cli.window_pos is not None:
+        kit += [f"--/app/window/x={args_cli.window_pos[0]}", f"--/app/window/y={args_cli.window_pos[1]}"]
+    if not args_cli.kit_ui:
+        kit.append("--/app/window/hideUi=true")
+    return " ".join(kit)
 
 
 def terrain_truth(site: TerrainSite, resolution: float = 0.25) -> tuple[np.ndarray, float, float]:
@@ -239,9 +275,66 @@ class Flight:
     rows: list[list] = field(default_factory=list)
     step_ms: list[float] = field(default_factory=list)
     stream_ms: list[float] = field(default_factory=list)
+    viewer_ms: list[float] = field(default_factory=list)
     video_ms: list[float] = field(default_factory=list)
+    video_t: list[float] = field(default_factory=list)
+    """Sim time of every video frame [s]."""
     camera_frames: int = 0
     vram_peak_mib: int = 0
+
+
+@dataclass
+class Viewer:
+    """The camera of the window and the video, and the extras only it sees (see :mod:`drone_lab.sar.chase_view`)."""
+
+    viz: Any
+    """The Kit visualizer (window or headless recorder)."""
+    camera: FollowCamera | None
+    """None: the fixed overview."""
+    rays: ScanRays | None
+
+    def update(self, pos: np.ndarray, hits: np.ndarray | None, dt: float) -> None:
+        """Place the camera for the next render and show the latest scan (``hits`` None before the first one)."""
+        if self.camera is not None:
+            from isaaclab_physx.renderers.kit_viewport_utils import set_kit_renderer_camera_view
+
+            eye, target = self.camera.update(pos, None if hits is None else ground_below(hits), dt)
+            eye, target = tuple(eye.tolist()), tuple(target.tolist())
+            # as the visualizer's own asset tracking does: its view, then the renderer's camera (needed headless)
+            self.viz.set_camera_view(eye, target)
+            set_kit_renderer_camera_view(eye=eye, target=target, camera_prim_path=VIEWER_CAMERA)
+        if self.rays is not None and hits is not None:
+            self.rays.update(hits)
+
+
+def setup_viewer(base, mission: Mission) -> Viewer | None:
+    """Follow camera, ground skirt and scan rays for the Kit visualizer (None without one).
+
+    The skirt and the rays are drawn only once the drone camera is in its own render partition: the detector
+    must never see them.
+    """
+    import isaaclab.sim as sim_utils
+
+    viz = find_kit_visualizer(base.sim)
+    if viz is None:
+        return None
+    x0, x1, y0, y1 = mission.site.bounds
+    camera = FollowCamera(bounds=(x0 + 1.0, x1 - 1.0, y0 + 1.0, y1 - 1.0)) if args_cli.view == "chase" else None
+    stage = base.sim.stage
+    if camera is not None:
+        set_focal_length(stage, VIEWER_CAMERA, camera.focal_length)
+    drone_cameras = sim_utils.find_matching_prim_paths(base.scene.sensors["sar_camera"].cfg.prim_path)
+    try:
+        isolate_chase_view(stage, VIEWER_CAMERA, drone_cameras)
+    except RuntimeError as exc:
+        print(f"[sar_mission] WARNING: {exc}: the window shows the site only")
+        return Viewer(viz, camera, None)
+    rim_z = float(np.min(mission.site.heights(rim_points(mission.site.bounds))))  # the flat border of the site
+    spawn_ground_skirt(stage, mission.site.bounds, rim_z - 0.005, f"{SITE}/Looks/ground_grass")
+    rays = None
+    if not args_cli.no_scan_rays:
+        rays = ScanRays(stage, base.scene.sensors["mapping_scanner"].num_rays)
+    return Viewer(viz, camera, rays)
 
 
 def prepare_mission(env_cfg) -> Mission:
@@ -292,10 +385,13 @@ def announce(stream, mission: Mission) -> None:
     stream.gt_terrain(heights, x_min, y_min, 0.25)
 
 
-def fly(base, policy, plan: MissionPlan, stream, clearance: ClearanceMonitor, video=None) -> Flight:
+def fly(
+    base, policy, plan: MissionPlan, stream, clearance: ClearanceMonitor, viewer: Viewer | None = None, video=None
+) -> Flight:
     """Fly the plan with the policy, stream every step, stop after the touchdown (or a crash or the time limit).
 
-    ``video`` is ``(writer, visualizer)`` or None."""
+    ``viewer`` places the window / video camera and the scan rays before every step (so the step's render shows
+    them); ``video`` is the mp4 writer or None."""
     step_dt = base.step_dt
     term = base.command_manager.get_term("survey_target")
     robot = base.scene["robot"]
@@ -307,6 +403,8 @@ def fly(base, policy, plan: MissionPlan, stream, clearance: ClearanceMonitor, vi
     motors_off = torch.full((base.num_envs, base.action_manager.total_action_dim), ZERO_THRUST, device=base.device)
     flight = Flight(vram_peak_mib=gpu_memory_mib() or 0)
     obs, _ = base.reset()
+    pos = robot.data.root_pos_w.torch[0].cpu().numpy()
+    hits = None  # no scan before the first step
     t_wall = time.time()
     print(f"[sar_mission] flying: {plan.length:.0f} m planned, time limit {max_time:.0f} s", flush=True)
     try:
@@ -316,6 +414,10 @@ def fly(base, policy, plan: MissionPlan, stream, clearance: ClearanceMonitor, vi
                 phase = plan.phase(s)
                 term.cfg.speed = 0.0 if step < settle_steps else plan.speed(s)
                 actions = motors_off if flight.touchdown_t is not None else policy(obs["policy"])
+                if viewer is not None:
+                    t0 = time.perf_counter()
+                    viewer.update(pos, hits, step_dt)
+                    flight.viewer_ms.append(1000.0 * (time.perf_counter() - t0))
                 t1 = time.perf_counter()
                 obs, _, terminated, _, _ = base.step(actions)
                 _ = camera.data  # a headless camera renders when its data is first read: count that as the step
@@ -335,7 +437,8 @@ def fly(base, policy, plan: MissionPlan, stream, clearance: ClearanceMonitor, vi
                     flight.touchdown_t = t
                     print(f"[sar_mission] touchdown at t={t:.1f} s: motors off", flush=True)
                 pos = robot.data.root_pos_w.torch[0].cpu().numpy()
-                clearance.update(t, pos, phase, scanner.data.ray_hits_w.torch[0].cpu().numpy())
+                hits = scanner.data.ray_hits_w.torch[0].cpu().numpy()
+                clearance.update(t, pos, phase, hits)
                 if stream is not None:
                     t2 = time.perf_counter()
                     stream.telemetry(t, robot, wp_index=plan.waypoint_index(s), carrot=term.carrot_w[0], phase=phase)
@@ -350,9 +453,10 @@ def fly(base, policy, plan: MissionPlan, stream, clearance: ClearanceMonitor, vi
                 flight.rows.append([round(t, 3), phase, *pos.round(4), *quat.round(5), *vel.round(4), *carrot.round(4)])
                 if video is not None and step >= settle_steps:
                     t3 = time.perf_counter()
-                    frame = capture_frame(base.sim, video[1])
+                    frame = capture_frame(base.sim, viewer.viz)
                     if frame is not None and frame.any():
-                        video[0].append_data(frame)
+                        video.append_data(frame)
+                        flight.video_t.append(round(t, 3))
                     flight.video_ms.append(1000.0 * (time.perf_counter() - t3))
                 if step % 100 == 0:
                     flight.vram_peak_mib = max(flight.vram_peak_mib, gpu_memory_mib() or 0)
@@ -394,6 +498,7 @@ def save_outputs(run_dir: Path, mission: Mission, flight: Flight, stats: dict, l
         "timing_ms": {
             "env_step": percentiles(flight.step_ms),
             "streaming": percentiles(flight.stream_ms),
+            "viewer": percentiles(flight.viewer_ms),
             "video": percentiles(flight.video_ms),
         },
         "loop_hz": round(len(flight.step_ms) / wall, 2),
@@ -409,6 +514,11 @@ def save_outputs(run_dir: Path, mission: Mission, flight: Flight, stats: dict, l
         w = csv.writer(fh)
         w.writerow(["t", "phase", "x", "y", "z", "qx", "qy", "qz", "qw", "vx", "vy", "vz", "cx", "cy", "cz"])
         w.writerows(flight.rows)
+    if flight.video_t:  # lines the video up with the ground station's recording (drone_gcs compose_video.py)
+        with open(run_dir / "mission_frames.csv", "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["frame", "t"])
+            w.writerows(enumerate(flight.video_t))
     return summary
 
 
@@ -464,18 +574,18 @@ def main() -> None:
             announce(stream, mission)
             if args_cli.wait_gcs > 0 and not sender.wait_connected(args_cli.wait_gcs):
                 print(f"[sar_mission] no ground station after {args_cli.wait_gcs:g} s: flying anyway (it may join)")
+        viewer = setup_viewer(base, mission)
         video = None
         if args_cli.video:
-            viz = find_kit_visualizer(base.sim)
-            if viz is None:
+            if viewer is None:
                 print("[sar_mission] WARNING: no Kit visualizer is active; no video will be recorded.")
             else:
-                video = (open_mp4_writer(run_dir / "mission.mp4", args_cli.video_fps), viz)
+                video = open_mp4_writer(run_dir / "mission.mp4", args_cli.video_fps)
                 speedup = playback_speedup(args_cli.video_fps, base.step_dt)
                 print(f"[sar_mission] video: {args_cli.video_fps} fps = {speedup:g}x real time")
 
         clearance = ClearanceMonitor(mission.scenario.objects)
-        flight = fly(base, policy, plan, stream, clearance, video)
+        flight = fly(base, policy, plan, stream, clearance, viewer, video)
         stats = {
             "closest_approach": clearance.summary(),
             "flight_time_s": round(flight.t, 2),
@@ -488,7 +598,7 @@ def main() -> None:
             link = sender.stats()
             sender.close()
         if video is not None:
-            video[0].close()
+            video.close()
         summary = save_outputs(run_dir, mission, flight, stats, link)
         steps = summary["timing_ms"]
         print(
