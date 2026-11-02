@@ -1,7 +1,5 @@
-# Copyright (c) 2026, Hector.
-# All rights reserved.
-#
-# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Hector Lugo
+# SPDX-License-Identifier: MIT
 
 """rsl-rl 3.x -> 5.x checkpoint conversion (``scripts/convert_rslrl_checkpoint.py``), on the CPU."""
 

@@ -159,3 +159,10 @@ Built on [NVIDIA Isaac Lab](https://github.com/isaac-sim/IsaacLab) and Isaac Sim
 [rsl-rl](https://github.com/leggedrobotics/rsl_rl), [skrl](https://github.com/Toni-SM/skrl) and
 [Newton](https://github.com/newton-physics/newton). The project layout comes from the Isaac Lab external-project
 template.
+
+## License
+
+MIT ([LICENSE](LICENSE)), except for the files that come from Isaac Lab, which keep its
+[BSD-3-Clause license](https://github.com/isaac-sim/IsaacLab/blob/main/LICENSE): the files generated from the Isaac Lab
+project template, and the robot, task and agent configurations, which started from Isaac Lab's Unitree A1 example.
+The header of each source file names its license.

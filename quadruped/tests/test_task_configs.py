@@ -1,7 +1,5 @@
-# Copyright (c) 2026, Hector.
-# All rights reserved.
-#
-# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Hector Lugo
+# SPDX-License-Identifier: MIT
 
 """Resolved task configs: physics and execution defaults per backend, the 2.x policy interface, the depth task.
 

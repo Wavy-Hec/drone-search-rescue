@@ -1,7 +1,5 @@
-# Copyright (c) 2026, Hector.
-# All rights reserved.
-#
-# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Hector Lugo
+# SPDX-License-Identifier: MIT
 
 """Check the joint order of an Isaac Lab 3.0 run against the order the 2.x height-scan checkpoint was trained with.
 

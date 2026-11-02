@@ -1,7 +1,5 @@
-# Copyright (c) 2026, Hector.
-# All rights reserved.
-#
-# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Hector Lugo
+# SPDX-License-Identifier: MIT
 
 """Convert an rsl-rl <= 3.x ``ActorCritic`` checkpoint (Isaac Lab 2.x) to the rsl-rl 5.x format (Isaac Lab 3.0).
 

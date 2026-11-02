@@ -1,7 +1,5 @@
-# Copyright (c) 2026, Hector.
-# All rights reserved.
-#
-# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Hector Lugo
+# SPDX-License-Identifier: MIT
 
 """Check that the ported 3.0 rough task matches the 2.x interface of ``height_scanner_model.pt`` (CPU only, no Kit).
 

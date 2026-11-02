@@ -1,7 +1,5 @@
-# Copyright (c) 2026, Hector.
-# All rights reserved.
-#
-# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Hector Lugo
+# SPDX-License-Identifier: MIT
 
 """The project's tools in ``scripts/``: joint-order check, depth-camera study, evaluation summary, Newton asset and
 the 2.x parity check.
