@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# GCS run outputs (maps, videos, reports) and Ultralytics training runs
+runs/
+datasets/
+
+# editor
+.vscode/settings.json
+pyrightconfig.json

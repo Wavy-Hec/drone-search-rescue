@@ -1,0 +1,11 @@
+# Binaries go to Git LFS (repo-local: git lfs install --local)
+*.pt filter=lfs diff=lfs merge=lfs -text
+*.onnx filter=lfs diff=lfs merge=lfs -text
+*.engine filter=lfs diff=lfs merge=lfs -text
+*.mp4 filter=lfs diff=lfs merge=lfs -text
+*.npy filter=lfs diff=lfs merge=lfs -text
+*.npz filter=lfs diff=lfs merge=lfs -text
+# The README images in docs/ are plain files, so they show without Git LFS (ZIP downloads, clones without LFS)
+
+*.sh text eol=lf
+*.py text eol=lf
