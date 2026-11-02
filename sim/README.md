@@ -182,21 +182,20 @@ may pin them), `--gt_boxes` (adds the objects' boxes from the instance segmentat
 station's `--detector gt`), `--jpeg`, `--camera_every N`, `--gcs <address>`, `--no_gcs`. Outputs in `runs/<out>/` (default `sar_mission_seed<seed>`): `mission.json` (plan,
 outcome, closest approach, loop and link timing, GPU memory), `trajectory.csv`, `ground_truth.json`.
 
-**Result** (seed 0, the full mission, headless, the ground station with the fine-tuned detector): the drone lands
-on its pad after 6 min 16 s and 428 m. The ground station scanned 100 % of the area and photographed 99.8 %,
-found all 9 people and all 39 objects with 3 false alarms (all on one standing person), with pins 6 cm from the
-truth on average; its height map is within 4 mm of the true terrain where the ground has no step (0.10 m RMSE
-with the block walls). Closest approach to an obstacle: 2.4 m, the crown of a tree. The simulation runs at 17-21
-steps per second headless (1.7-2.1x real time) and the link costs it 0.9 ms per step. Comparison with the stock
-COCO detector, the geometry check with perfect boxes and the loop rates: the drone_gcs README (Results).
-
-**The recorded live mission** (both windows open, the chase video recorded, the commands above): the same flight
-and the same finds, 9 / 9 people, 39 / 39 objects, 2 false alarms (cones on the hands of the standing person),
-pins 6 cm from the truth on average. The drone lands 7 mm from the centre of the pad; over the survey it holds
-7.68 m with 0.10 m standard deviation and tilts 0.7 degrees on average. With the window, the video and the
+**Result: the recorded live mission** (seed 0, the commands above: both windows open, the chase view recorded,
+the ground station with the fine-tuned detector). The drone lands on its pad after 6 min 16 s and 428 m, 7 mm
+from its centre; over the survey it holds 7.68 m with 0.10 m standard deviation and tilts 0.7 degrees on
+average. The ground station scanned 100 % of the area and photographed 99.8 %, found all 9 people and all 39
+objects with 2 false alarms (cones on the hands of the one standing person), with pins 6 cm from the truth on
+average; its height map is within 4 mm of the true terrain where the ground has no step (0.10 m RMSE with the
+block walls). Closest approach to an obstacle: 2.4 m, the crown of a tree. With the window, the video and the
 ground station's YOLO on the same machine the simulation runs at 14.5 steps per second (1.45x real time): the
-step with the RTX render 61 ms, the chase view 1.8 ms, the video frame 3.9 ms, the link 0.9 ms; 6.4 GiB of GPU
+step with the RTX render 61 ms, the chase view 1.8 ms, the video frame 3.9 ms, the link 0.9 ms; 6.2 GiB of GPU
 memory at the peak.
+
+Headless, the same flight runs at 17-21 steps per second (1.7-2.1x real time), and a run with the same detector
+found the same 39 objects with 3 false alarms, all on that standing person. Comparison with the stock COCO
+detector, the geometry check with perfect boxes and the loop rates: the drone_gcs README (Results).
 
 ## Rescue finale: Hector's quadruped walks to a person the drone found
 
@@ -401,7 +400,7 @@ over time with the RMSE), `trajectory_eval.csv` and `eval_summary.json`; with `-
 conda activate env_isaaclab           # or the isaac terminal
 CUDA_VISIBLE_DEVICES= python scripts/preview_area.py --pattern lawnmower           # runs/preview_lawnmower/
 CUDA_VISIBLE_DEVICES= python scripts/synthetic_survey.py --out synthetic_lawnmower  # whole pipeline, ~4 s
-CUDA_VISIBLE_DEVICES= python tests/run_cpu_tests.py                                 # 51 tests
+CUDA_VISIBLE_DEVICES= python tests/run_cpu_tests.py                                 # every CPU test, ~1 min
 ~/anaconda3/bin/python -m pytest tests                                             # numpy-only subset
 ```
 
@@ -448,8 +447,8 @@ CUDA_VISIBLE_DEVICES= python tests/run_cpu_tests.py                             
 
 ## Fixes before the first flight (2026-11-01)
 
-Six issues were found in the first version. Each was checked against the Isaac Lab 3.0 source and fixed.
-These were CPU-side changes, made before the first flight in Isaac Sim (see Results).
+Six issues of the first version were found and fixed before the first flight in Isaac Sim (see Results), each
+checked against the Isaac Lab 3.0 source. All six are CPU-side changes.
 
 * **Map grid aligned with the rays (major).** The survey lines sit at 2, 6, 10 ... m from the area edge, so the
   0.25 m rows of rays fell exactly on the 0.25 m cell edges. Every cell was measured along its edge, which
