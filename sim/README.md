@@ -130,9 +130,28 @@ python scripts/gcs.py --name sar_live
 # terminal 2: the mission, with an Isaac Sim window that follows the drone, conda env 'env_isaaclab'
 source ~/anaconda3/etc/profile.d/conda.sh && conda activate env_isaaclab
 cd ~/isaac_ws/projects/drone_lab
-python scripts/sar_mission.py --viz kit --checkpoint \
+python scripts/sar_mission.py --viz kit --video --out sar_live --checkpoint \
     ~/isaac_ws/IsaacLab/logs/rsl_rl/arl_robot_1_track_position_state_based/2026-11-01_14-45-20_demo_drone_track/exported/policy.pt
+
+# afterwards: the demo video, both recordings side by side and in step (drone_gcs, conda env 'vision')
+python scripts/compose_video.py --gcs runs/sar_live --sim ~/isaac_ws/projects/drone_lab/runs/sar_live
 ```
+
+![The live mission: the Isaac Sim chase view next to the ground station](docs/images/sar_mission_demo.jpg)
+
+*Frame of the demo video, 81 s into the mission: on the left the Isaac Sim window, a follow camera over the drone
+with its mapping rays glowing on the gravel; on the right the ground station, whose detector has just boxed a
+person and three crates in the drone camera's frame and pinned five people on the map so far.*
+
+**The Isaac Sim window** shows only the viewport (`--kit_ui` brings back Isaac Sim's menus and panels;
+`--window_pos X Y` places it, e.g. on a second monitor) and the same view is recorded with `--video`. The camera
+(`src/drone_lab/sar/chase_view.py`) follows the drone from behind and above with a wide lens, looking at a point
+30 % of the way from the drone down to the ground, so the drone and its scan stay in the frame; it glides
+(first-order smoothing, 0.4 s) and never looks in from beyond the terrain edge. Two extras dress the view: the
+mapping scanner's 441 ray hits glow on the ground, and the site's grass runs on to the horizon instead of the
+terrain ending in a void. Only the window's camera sees them: they live in their own RTX scene partition, and the
+drone camera gets a partition of its own, so the detector and the photo map get exactly the frames they get
+without the extras (checked: not one scan-dot pixel in the photo map of a full mission).
 
 **Flight plan** (`src/drone_lab/sar/mission.py`, which also has the math):
 
@@ -154,7 +173,8 @@ approach to obstacles. The sender copies the data and returns at once (0.9 ms pe
 writes it, and a slow or missing ground station only costs dropped frames, never a stalled simulation.
 
 Options: `--seed` (site), `--spacing`, `--altitude`, `--speed`, `--max_time` (sim seconds), `--video` and
-`--view chase|overview` (records `runs/<out>/mission.mp4`, real time by default), `--markers` (the carrot and path
+`--view chase|overview` (records `runs/<out>/mission.mp4`, real time by default, and `mission_frames.csv`, the sim
+time of every frame), `--no_scan_rays`, `--window_pos X Y`, `--kit_ui`, `--markers` (the carrot and path
 markers; off by default because the drone camera sees the ones below it at take-off and landing, and the detector
 may pin them), `--gt_boxes` (adds the objects' boxes from the instance segmentation to every frame, for the ground
 station's `--detector gt`), `--jpeg`, `--camera_every N`, `--gcs <address>`, `--no_gcs`. Outputs in `runs/<out>/` (default `sar_mission_seed<seed>`): `mission.json` (plan,
@@ -167,6 +187,14 @@ truth on average; its height map is within 4 mm of the true terrain where the gr
 with the block walls). Closest approach to an obstacle: 2.4 m, the crown of a tree. The simulation runs at 17-21
 steps per second headless (1.7-2.1x real time) and the link costs it 0.9 ms per step. Comparison with the stock
 COCO detector, the geometry check with perfect boxes and the loop rates: the drone_gcs README (Results).
+
+**The recorded live mission** (both windows open, the chase video recorded, the commands above): the same flight
+and the same finds, 9 / 9 people, 39 / 39 objects, 2 false alarms (cones on the hands of the standing person),
+pins 6 cm from the truth on average. The drone lands 7 mm from the centre of the pad; over the survey it holds
+7.68 m with 0.10 m standard deviation and tilts 0.7 degrees on average. With the window, the video and the
+ground station's YOLO on the same machine the simulation runs at 14.5 steps per second (1.45x real time): the
+step with the RTX render 61 ms, the chase view 1.8 ms, the video frame 3.9 ms, the link 0.9 ms; 6.4 GiB of GPU
+memory at the peak.
 
 ## Rescue finale: Hector's quadruped walks to a person the drone found
 
@@ -231,7 +259,7 @@ src/drone_lab/
   reference.py      reference trajectories for the tracking task                            (torch only)
   register.py       task-registration callback for the isaaclab CLI without pip install
   sar/              search-and-rescue site: assets, seeded scenario + ground truth, camera, spawner, labels,
-                    mission plan
+                    mission plan, chase view (follow camera, scan rays, ground skirt)
   teaming/          rescue finale: traversability, A* planner, pure-pursuit follower, inputs, robots, figures
   tasks/
     physics.py      physics preset (Isaac Sim PhysX)
