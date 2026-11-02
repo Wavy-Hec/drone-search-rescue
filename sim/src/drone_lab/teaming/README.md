@@ -11,7 +11,8 @@ drone elevation map ─┐
 pins (people, props) ┴─► slope / step / roughness ─► cost-weighted 8-conn. A* ─► pure pursuit ─────────► locomotion
                          + object footprints          start/goal snapping         (vx, vy, yaw rate)        policy
                          + robot-radius inflation     shortcuts + smoothing       clipped to the policy's   (unchanged)
-                         = cost map (inf = no-go)     = route                     command ranges
+                         + cross-slope cost           = route                     command ranges
+                         = cost map (inf = no-go)
 ```
 
 ## Run it
@@ -69,7 +70,7 @@ plans on the drone map alone (a start off the map then moves onto the map edge, 
 
 | `--robot` | Policy | Physics | Planner limits |
 |---|---|---|---|
-| `custom` (default) | `quadruped_lab/checkpoints_2x/height_scanner_model_rslrl5.pt` (task `Isaac-Velocity-Rough-Custom-Quad-v0`) | Isaac Sim PhysX | slope 23 deg, step 0.15 m, roughness 0.05 m, robot radius 0.45 m, slope fit over 0.45 m |
+| `custom` (default) | `quadruped_lab/checkpoints_2x/height_scanner_model_rslrl5.pt` (task `Isaac-Velocity-Rough-Custom-Quad-v0`) | Isaac Sim PhysX | slope 23 deg, step 0.15 m, roughness 0.05 m, robot radius 0.45 m, slope fit over 0.45 m, cross-slope weight 6 |
 | `go2` | `IsaacLab/logs/rsl_rl/unitree_go2_rough/2026-11-01_15-38-28_demo_quadruped_cont/model_1498.pt` | Newton (MJWarp) | slope 22 deg, step 0.12 m, roughness 0.05 m, robot radius 0.35 m, slope fit over 0.35 m |
 
 The custom quadruped trained on slopes up to 0.4 rise/run (21.8 deg), stairs up to 0.23 m, boxes up to 0.1 m and
@@ -80,29 +81,48 @@ line and end on the crater floor. At 24 deg the planner also takes the steepest 
 truth the robots still walked straight down them (8 of 8), but on the drone's map the last two metres then ran
 across the wall, and while slowing down for the goal the robots drifted 0.4 m downhill and ended beside the person's
 legs (still 8 of 8 reached). With `--max_slope 22` the route stays on the crater rim and stops on the slope 1.8-2.2 m
-from the person. The `--max_*` and `--robot_radius` flags override any limit; `--task`, `--checkpoint`, `--physics`,
-`--speed` and `--lookahead` override the robot's walk settings.
+from the person. The `--max_*`, `--robot_radius` and `--cross_slope_weight` flags override any limit or weight;
+`--task`, `--checkpoint`, `--physics`, `--speed` and `--lookahead` override the robot's walk settings.
+
+**Steep ground along the fall line.** Turning on a steep descent is what makes this policy run away downhill. In the
+walk logs on this site (about 8,700 policy steps on ground of 17 deg and steeper), yaw-rate commands below 0.4 rad/s
+almost never lead to a speed above 1.2 m/s. Between 0.4 and 0.6 rad/s they do in 5 % of the cases at cruise speed
+and in 44 % while the robot slows down for the goal; above 0.6 rad/s in 43-74 %. On the live mission's map the old
+route came down the crater's gentler south-west corner and turned east on the wall in its last metre, into the only
+free lane next to the person: the recorded robot ran away there at 2.2 m/s and tumbled into the person half a second
+after arriving (with 32 robots on that route none fell, but one reached 1.62 m/s and one stopped 1.01 m from the
+pin). The custom quadruped's planner therefore also pays `6 (cross_slope / max_slope)^2` per metre for the slope
+across its direction of travel. The route on that map now turns on the flat border and comes straight down the fall
+line: 32 of 32 robots, top speed 1.33 m/s, closest stop 1.50 m from the pin, and the recorded walk arrives cleanly.
+On the rim route (`--max_slope 22`), which ends on the slope above the person, the weight also stops the run-aways
+while slowing down there: no robot of 32 above 1.2 m/s instead of 8, closest stop 2.02 m from the person instead of
+0.94 m. On the ground truth the route comes down the crater's corner, where the fall line itself runs diagonally,
+and stays as it was. The Go2 keeps the plain cost (weight 0).
 
 ## Results (2026-11-01, RTX 5080)
 
-**Custom quadruped, Isaac Sim PhysX, dressed site seed 0**, robots starting on the landing pad, 8 at once (small
+**Custom quadruped, Isaac Sim PhysX, dressed site seed 0**, robots starting on the landing pad, 32 at once (small
 spawn jitter), no second tries:
 
 | Map and pins | Route | Robots reached | Time | Planned / walked | Falls |
 |---|---|---|---|---|---|
-| the drone mission's report (`drone_gcs/runs/sar_demo_seed0`: full survey, 9 of 9 people found) | border, then down the crater wall to the drone's pin of person_08 (0.24 m from the true centre) | 8/8 | 23.1-23.7 s | 16.1 / 15.9 m | 0 |
-| a partial mission report (`e2e_v2_gt`: the first 90 s of the flight, 5 people found) | border, past the crates to the drone's pin of person_02 (0.15 m off) | 8/8 | 20.0-20.9 s | 12.8 / 12.7 m | 0 |
-| the drone's survey map `runs/lawnmower_v1` (no detections: site pins) | down the crater wall to person_08 | 8/8 | 23.2-23.7 s | 16.0 / 15.7 m | 0 |
-| ground truth (default) | down the crater's south-west wall to person_08, lying face down on the crater floor (z = -1.1 m) | 8/8 | 22.5-23.1 s | 15.6 / 15.4 m | 0 |
-| ground truth, `--goal_pin person_04` | past the collapsed buildings to person_04, lying face up | 8/8 | 29.7-30.1 s | 18.6 / 18.4 m | 0 |
-| ground truth, `--max_slope 22` | along the crater's north rim, stops on the slope above person_08 | 8/8 | 35.0-35.8 s | 23.7 / 23.1 m | 0 |
+| the recorded live mission's report (`drone_gcs/runs/sar_mission_final`: 9 of 9 people found) | north along the border, then straight down the crater's west wall to the drone's pin of person_08 (0.24 m from the true centre) | 32/32 | 23.9-24.7 s | 16.5 / 16.3-16.6 m | 0 |
+| an earlier full mission's report (`sar_demo_seed0`) | the same way, to that mission's pin of person_08 | 32/32 | 24.9-25.4 s | 17.1 / 16.9-17.3 m | 0 |
+| a partial mission report (`e2e_v2_gt`: the first 90 s of the flight, 5 people found) | border, past the crates to the drone's pin of person_02 (0.15 m off) | 32/32 | 19.8-21.5 s | 12.8 / 12.4-12.8 m | 0 |
+| the drone's survey map `runs/lawnmower_v1` (no detections: site pins) | down the crater's west wall to person_08 | 32/32 | 24.6-25.1 s | 16.9 / 16.7-17.1 m | 0 |
+| ground truth (default) | down the crater's south-west corner to person_08, lying face down on the crater floor 1.4 m below the rim | 32/32 | 22.5-23.4 s | 15.6 / 15.4-15.7 m | 0 |
+| ground truth, `--goal_pin person_04` | past the collapsed buildings to person_04, lying face up | 32/32 | 29.7-30.2 s | 18.6 / 18.3-18.6 m | 0 |
+| ground truth, `--max_slope 22` | along the crater's north rim, stops on the slope above person_08 | 32/32 | 34.7-36.8 s | 23.7 / 23.0-23.4 m | 0 |
+| ground truth, `--sar_seed 3` (another site) | to that site's person_04, lying face down | 32/32 | 31.5-33.4 s | 19.5 / 19.2-19.6 m | 0 |
 
-Mean cross-track error 2-6 cm (max 10-32 cm), walking speed 0.55-0.65 m/s at a cruise command of 0.7 m/s. The robots
-stop 1.2-2.2 m from the person's centre (the person's outline or, for a drone pin, a 1.2 m circle, plus the robot's
-clearance); from the full mission report 1.35-1.68 m from the real person's centre. With `--video` (one robot): the
-mission report 23.6 s, the ground truth 22.7 s, no falls. In the mission report the detector also pinned a "barrel"
-4.3 m above the landing pad (one of its three false alarms); the planner keeps clear of every pin, so that robot
-starts 0.75 m west of the pad's centre.
+Mean cross-track error 2-10 cm, at most 17 cm (on the rim route up to 0.7 m: turning on the 22 deg slope above the
+person, a few robots drift downhill, with the cross-slope weight or without), walking speed 0.53-0.64 m/s at a cruise
+command of 0.7 m/s. The robots stop 1.35-2.2 m from the person's centre (the person's outline or, for a drone pin, a
+1.2 m circle, plus the robot's clearance); from the live mission's report 1.54-1.68 m from the real person's centre.
+With `--video` (one robot) on the live mission's report: 24.3 s, 16.5 m walked, no falls, stopped 1.62 m from the
+pin. In the earlier `sar_demo_seed0` report the detector also pinned a "barrel" 4.3 m above the landing pad (one of
+its three false alarms); the planner keeps clear of every pin, so that robot starts 0.75 m west of the pad's centre.
+The live mission's report has no such pin.
 
 **Go2 fallback, Newton**, the same dressed site: `--robot go2 --num_envs 4` reached person_08 4/4 along the crater
 rim (its limits keep it off the steeper wall), 32.5-32.7 s, 23.7 m, 0 falls.
@@ -133,14 +153,18 @@ A cell is no-go when the slope, the step or the roughness exceeds the robot's li
 (never seen by the drone), or when it lies inside a known object footprint (circles per class, or the exact outline
 from a ground-truth file). No-go cells are inflated by the robot radius, and a soft band beyond that keeps the route
 off edges when there is room. Free cells cost `1 + 6 (slope/max)^2 + 4 (step/max)^2 + 3 (roughness/max)^2 + band`
-per metre, so flat open ground costs 1 and the planner pays for every degree and every centimetre.
+per metre, so flat open ground costs 1 and the planner pays for every degree and every centimetre. With a cross-slope
+weight `w` (`w_cross_slope`; the custom quadruped: 6) a move also pays `w (cross_slope/max)^2` per metre, where
+`cross_slope` is the slope across its direction, from the gradient of the same plane fit: steep ground is then
+crossed along the fall line, and turns move to flatter ground.
 
-**Planner** (`planner.py`). 8-connected A* where a move costs its length times the mean cost of its two cells, with
-an octile heuristic scaled by the cheapest cell (admissible, so the path is optimal on the grid; a test checks it
-against Dijkstra). Diagonal moves may not cut the corner of a no-go cell. The start snaps to the nearest free cell;
-the goal (a person, whose own cells are no-go) snaps to the nearest free cell *reachable from the start*, so the
-robot stops next to the person. The grid path is then shortcut by line of sight (never through a no-go cell, never
-more expensive than the stretch it replaces), its corners are rounded where that stays safe, and it is resampled
+**Planner** (`planner.py`). 8-connected A* where a move costs its length times the mean cost of its two cells (plus
+their cross-slope cost in the move's direction), with an octile heuristic scaled by the cheapest cell (admissible,
+so the path is optimal on the grid; tests check it against Dijkstra, with and without direction costs). Diagonal
+moves may not cut the corner of a no-go cell. The start snaps to the nearest free cell; the goal (a person, whose own
+cells are no-go) snaps to the nearest free cell *reachable from the start*, so the robot stops next to the person.
+The grid path is then shortcut by line of sight (never through a no-go cell, never more expensive than the stretch
+it replaces, by the same direction-dependent cost), its corners are rounded where that stays safe, and it is resampled
 every 0.1 m. Without `--goal` / `--goal_pin` the script tries the people 15-25 m from the start first, lying ones
 first, nearest to 20 m first, and takes the first one it can reach.
 
@@ -179,11 +203,12 @@ CUDA_VISIBLE_DEVICES= python tests/test_teaming_task.py              # env_isaac
 CUDA_VISIBLE_DEVICES= python tests/run_cpu_tests.py                  # env_isaaclab: the whole project, these included
 ```
 
-Traversability on synthetic grids (planes, ledges, noise, holes, footprints, inflation), A* optimality against
-Dijkstra and obstacle avoidance, snapping and smoothing, failure reasons (a start off the map or boxed in is
-reported once, not once per person), follower limits / steering / goal / progress and a closed-loop run on an
-S-curve, input formats and figures, the apron (added around a survey map, filled in on a site-sized map; drone
+Traversability on synthetic grids (planes, ledges, noise, holes, footprints, inflation), the cross-slope cost (zero
+along the fall line, exact across a plane; A* with direction costs against Dijkstra; the path cost the shortcuts use),
+A* optimality against Dijkstra and obstacle avoidance, snapping and smoothing, failure reasons (a start off the map or
+boxed in is reported once, not once per person), follower limits / steering / goal / progress and a closed-loop run on
+an S-curve, input formats and figures, the apron (added around a survey map, filled in on a site-sized map; drone
 cells unchanged, equal to the terrain mesh), both rescue tasks' parity with the velocity task their checkpoint was
-trained on (observations, actions, robot, sensors, command ranges, physics settings), the textured site terrain
-moved to a render-only mesh (in-memory USD stage), the robot profiles, and the CLI on the ground truth, a survey map
-and a drone_gcs mission report (start on the landing pad, drone pins only, the goal pin checked against the truth).
+trained on (observations, actions, robot, sensors, command ranges, physics settings), the textured site terrain moved
+to a render-only mesh (in-memory USD stage), the robot profiles, and the CLI on the ground truth, a survey map and a
+drone_gcs mission report (start on the landing pad, drone pins only, the goal pin checked against the truth).

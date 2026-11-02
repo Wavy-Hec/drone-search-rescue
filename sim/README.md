@@ -212,28 +212,36 @@ mission's backend, over the same seeded terrain and dressed site. Commands, meth
 
 ![The route planned on the drone's elevation map and pins, and the traversability cost](docs/images/rescue_finale_plan.png)
 
-*Planned on the report of the full mission (`drone_gcs/runs/sar_demo_seed0`: 9 of 9 people found): from the landing
-pad along the border and down the crater wall to person #34, whom the drone saw lying in the crater (the pin is
-0.24 m from person_08's true centre). Top: the arrival in the follow-cam video, with the minimap of the drone's map
-and the walked track. Bottom: the elevation the robot planned on (the drone's map plus the known flat border around
-the surveyed area) and the traversability cost with the no-go cells.*
+*Planned on the report of the recorded live mission (`drone_gcs/runs/sar_mission_final`: 9 of 9 people found): from
+the landing pad north along the border, then straight down the crater's west wall to person #25, whom the drone saw
+lying in the crater (the pin is 0.24 m from person_08's true centre). Top: the arrival in the follow-cam video, with
+the minimap of the drone's map and the walked track. Bottom: the elevation the robot planned on (the drone's map plus
+the known flat border around the surveyed area) and the traversability cost with the no-go cells.*
 
-| Map and pins | Person | 8 robots at once, no second tries | Planned route | Falls |
+The recorded finale on the live mission's report (one robot, `--video`): the robot reached the person in 24.3 s,
+walked 16.5 m of the 16.5 m route without a fall and stopped 1.62 m from the drone's pin (1.65 m from the person's
+real centre).
+
+| Map and pins | Person | 32 robots at once, no second tries | Planned route | Falls |
 |---|---|---|---|---|
-| the full mission's report (`--report <drone_gcs run>`) | pin #34, lying in the crater (person_08) | 8/8 reached, 23.1-23.7 s | 16.1 m | 0 |
-| the first 90 s of a mission (5 people found) | pin #30, lying next to the crates (person_02) | 8/8, 20.0-20.9 s | 12.8 m | 0 |
-| the drone's survey map `runs/lawnmower_v1` + the site's pins | person_08 in the crater | 8/8, 23.2-23.7 s | 16.0 m | 0 |
-| terrain + site ground truth (default without a report) | person_08 in the crater | 8/8, 22.5-23.1 s | 15.6 m | 0 |
-| ground truth, `--goal_pin person_04` | person_04, lying by the collapsed buildings | 8/8, 29.7-30.1 s | 18.6 m | 0 |
-| ground truth, `--max_slope 22` | person_08, from the crater rim | 8/8, 35.0-35.8 s | 23.7 m | 0 |
+| the recorded live mission's report (`--report <drone_gcs run>`) | pin #25, lying in the crater (person_08) | 32/32 reached, 23.9-24.7 s | 16.5 m | 0 |
+| an earlier full mission's report (`sar_demo_seed0`) | pin #34, the same person | 32/32, 24.9-25.4 s | 17.1 m | 0 |
+| the first 90 s of a mission (5 people found) | pin #30, lying next to the crates (person_02) | 32/32, 19.8-21.5 s | 12.8 m | 0 |
+| the drone's survey map `runs/lawnmower_v1` + the site's pins | person_08 in the crater | 32/32, 24.6-25.1 s | 16.9 m | 0 |
+| terrain + site ground truth (default without a report) | person_08 in the crater | 32/32, 22.5-23.4 s | 15.6 m | 0 |
+| ground truth, `--goal_pin person_04` | person_04, lying by the collapsed buildings | 32/32, 29.7-30.2 s | 18.6 m | 0 |
+| ground truth, `--max_slope 22` | person_08, from the crater rim | 32/32, 34.7-36.8 s | 23.7 m | 0 |
 
-The pins do not say whether a person is lying or standing; the height of a pin above the mapped ground does (a
-lying person's back is at most 0.4 m up, a standing person's head 1.3-1.8 m), so the planner picks a lying person
-15-25 m away first and gives them a larger footprint. The site's textured terrain needed one change for walking
-robots: on PhysX a collision mesh with material face subsets stops colliding (the robot fell through the ground), so
-the rescue tasks move the textures to a render-only copy of the terrain mesh. The Unitree Go2 with Isaac Lab's
-rough-terrain policy remains as a fallback (`--robot go2`, on Newton: that checkpoint flips within about 2 s on
-PhysX); it reached the crater person 4/4.
+The pins do not say whether a person is lying or standing; the height of a pin above the mapped ground does (a lying
+person's back is at most 0.4 m up, a standing person's head 1.3-1.8 m), so the planner picks a lying person 15-25 m
+away first and gives them a larger footprint. Steep ground is walked along the fall line: turning on a steep descent
+is what makes this policy run away downhill (in the first recording on the live mission's map the route turned on the
+crater wall in its last metre, and the robot tumbled into the person half a second after arriving), so the custom
+quadruped's planner also pays for the slope across its direction of travel, and the route now turns on the flat
+border. The site's textured terrain needed one change for walking robots: on PhysX a collision mesh with material face
+subsets stops colliding (the robot fell through the ground), so the rescue tasks move the textures to a render-only
+copy of the terrain mesh. The Unitree Go2 with Isaac Lab's rough-terrain policy remains as a fallback (`--robot go2`,
+on Newton: that checkpoint flips within about 2 s on PhysX); it reached the crater person 4/4.
 
 ```bash
 CUDA_VISIBLE_DEVICES= python scripts/rescue_finale.py --plan_only --out rescue_plan    # CPU, seconds: plan only
