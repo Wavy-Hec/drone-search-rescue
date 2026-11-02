@@ -580,6 +580,8 @@ def load_policy(checkpoint: str, env, device: str, task: str):
     """Return ``(policy, kind)``; ``policy(obs) -> actions`` for the policy observation group."""
     import torch
 
+    if not checkpoint:
+        raise SystemExit(f"{task} has no default policy: pass --checkpoint (an RSL-RL model_*.pt or a policy.pt)")
     path = Path(checkpoint).expanduser().resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Checkpoint not found: {path}")

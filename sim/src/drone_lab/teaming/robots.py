@@ -21,11 +21,16 @@ __all__ = ["ROBOTS", "RobotProfile", "quadruped_lab_dir"]
 
 
 def quadruped_lab_dir() -> Path:
-    """Project folder of the installed ``quadruped_lab`` (``~/isaac_ws/projects/quadruped_lab`` if not installed)."""
+    """Project folder of the custom quadruped: the installed ``quadruped_lab``, else the ``quadruped`` (or
+    ``quadruped_lab``) folder next to this project."""
     spec = importlib.util.find_spec("quadruped_lab")
     if spec is not None and spec.origin:
         return Path(spec.origin).resolve().parents[2]
-    return Path("~/isaac_ws/projects/quadruped_lab").expanduser()
+    parent = Path(__file__).resolve().parents[4]
+    for name in ("quadruped", "quadruped_lab"):
+        if (parent / name / "pyproject.toml").is_file():
+            return parent / name
+    return parent / "quadruped"
 
 
 @dataclass(frozen=True)
@@ -41,7 +46,7 @@ class RobotProfile:
     physics: str
     """Physics preset the policy walks on."""
     checkpoint: str
-    """Default locomotion policy (RSL-RL checkpoint or TorchScript file)."""
+    """Default locomotion policy (RSL-RL checkpoint or TorchScript file); empty: ``--checkpoint`` is required."""
     traversability: TraversabilityCfg = field(default_factory=TraversabilityCfg)
     """Planner limits and weights."""
     cruise_speed: float = 0.7
@@ -83,7 +88,7 @@ GO2 = RobotProfile(
     name="Go2",
     task="DroneLab-Rescue-Go2-v0",
     physics="newton_mjwarp",
-    checkpoint="~/isaac_ws/IsaacLab/logs/rsl_rl/unitree_go2_rough/2026-11-01_15-38-28_demo_quadruped_cont/model_1498.pt",
+    checkpoint="",  # no published policy: pass --checkpoint (a model_*.pt of Isaac-Velocity-Rough-UnitreeGo2)
     traversability=TraversabilityCfg(),
 )
 """Unitree Go2: Isaac Lab's ``Isaac-Velocity-Rough-UnitreeGo2`` policy (600 + 900 iterations on Newton)."""
