@@ -1,9 +1,10 @@
 # models/
 
-`detector.pt` (Git LFS) and `detector_metrics.json` are written here by `scripts/train_detector.py` (fine-tuned
-YOLO on simulator images). Use it with `python scripts/gcs.py --weights models/detector.pt`.
+`scripts/train_detector.py` writes its weights here by default (`detector.pt`, with `detector_metrics.json` and the
+training curves next to it); `--out` picks another file. Use them with
+`python scripts/gcs.py --weights models/detector.pt`.
 
-Without `--weights` the GCS takes `$DRONE_GCS_WEIGHTS`, else the fine-tuned
-`~/isaac_ws/assets/models/drone_sar_yolo26n.pt` when it exists, else the COCO nano weights `yolo26n.pt` next to
-it (neither is copied here). Ultralytics weights and models fine-tuned from them are AGPL-3.0 (see the project
-README).
+Without `--weights` the GCS takes `$DRONE_GCS_WEIGHTS`, else the default of `drone_gcs/detector.py`: the
+fine-tuned `drone_sar_yolo26n.pt` in its models folder when it exists, else the COCO nano weights `yolo26n.pt`
+there. The fine-tuned detector of the demo is a release asset (`../scripts/download_assets.sh` puts it in
+`../downloads/`). Ultralytics weights and models fine-tuned from them are AGPL-3.0 (see the project README).

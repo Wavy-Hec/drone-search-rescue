@@ -8,9 +8,20 @@ merges repeated sightings into an object list, shows everything in a ground-cont
 (recorded to mp4) and writes a mission report with a scorecard: people found, false alarms, pin error, map
 height error, coverage, flight time and closest approach to obstacles.
 
-The drone is either the search-and-rescue mission of the sibling project `drone_lab` (Isaac Sim 6.2 / Isaac Lab
-3.0: an RL-flown quadrotor over a disaster site with people, a forklift, crates, barrels, pallets and cones) or a
-CPU stand-in (`scripts/fake_drone.py`) for development and tests.
+The drone is either the search-and-rescue mission of the simulator project ([`../sim`](../sim/README.md),
+`drone_lab`: Isaac Sim 6.2 / Isaac Lab 3.0, an RL-flown quadrotor over a disaster site with people, a forklift,
+crates, barrels, pallets and cones) or a CPU stand-in (`scripts/fake_drone.py`) for development and tests.
+
+<p align="center">
+  <img src="../docs/media/hero.gif" width="900"
+       alt="The ground station's map filling in during the mission: the elevation map, the flown path and a pin on every person and object the drone finds, until it lands back on its pad">
+</p>
+
+*The recorded mission from take-off to landing (time-lapse): the elevation map fills in as the drone uncovers the
+site, with the flown trail and a pin on every find; the HUD counts the people found (10), the coverage and the
+link.*
+
+## Live demo: the search-and-rescue mission in Isaac Sim
 
 ![The ground station 75 s into the search-and-rescue mission in Isaac Sim](docs/images/dashboard_isaac.png)
 
@@ -19,24 +30,18 @@ pointing and lying, and the forklift; "edge" boxes touch the image border and ar
 uncovered so far (grey = not scanned yet) with the flown trail, the planned path, the camera footprint and the
 pins, and the HUD with five people found.*
 
-## Live demo: the search-and-rescue mission in Isaac Sim
-
-Two terminals. Start the ground station first (it waits for the drone; either side may start first):
+Two terminals; start the ground station first (it waits for the drone; either side may start first). The trained
+models are release assets: `../scripts/download_assets.sh` puts them in `../downloads/`.
 
 ```bash
-# terminal 1: ground station (window + recording), conda env 'vision'
-source ~/anaconda3/etc/profile.d/conda.sh && conda activate vision
-cd ~/isaac_ws/projects/drone_gcs
-python scripts/gcs.py --name sar_live
+# terminal 1, in gcs/ (conda env vision): the ground station, window + recording
+python scripts/gcs.py --name sar_live --weights ../downloads/drone_sar_yolo26n.pt --exit-on-end
 
-# terminal 2: the mission in Isaac Sim, with a window that follows the drone, conda env 'env_isaaclab'
-source ~/anaconda3/etc/profile.d/conda.sh && conda activate env_isaaclab
-cd ~/isaac_ws/projects/drone_lab
-python scripts/sar_mission.py --viz kit --video --out sar_live --checkpoint \
-    ~/isaac_ws/IsaacLab/logs/rsl_rl/arl_robot_1_track_position_state_based/2026-11-01_14-45-20_demo_drone_track/exported/policy.pt
+# terminal 2, in sim/ (conda env env_isaaclab): the mission in Isaac Sim, with a window that follows the drone
+python scripts/sar_mission.py --checkpoint ../downloads/arl-robot-1_policy.pt --viz kit --video --out sar_live
 
-# afterwards, terminal 1: the demo video, both recordings side by side and in step
-python scripts/compose_video.py --gcs runs/sar_live --sim ~/isaac_ws/projects/drone_lab/runs/sar_live
+# afterwards, in gcs/: the demo video, both recordings side by side and in step
+python scripts/compose_video.py --gcs runs/sar_live --sim ../sim/runs/sar_live
 ```
 
 ![The demo video: the Isaac Sim chase view next to the ground station](docs/images/sar_mission_demo.jpg)
@@ -47,12 +52,13 @@ forklift and pinned five people so far.*
 
 The drone takes off from its landing pad, flies a lawnmower over the 40 × 40 m site (8 lines, 5 m apart, 7.5 m
 up), comes back and lands on the pad: about 6 minutes of flight. The flight plan and its camera-overlap math are
-in drone_lab (`src/drone_lab/sar/mission.py`). The ground station uses the YOLO26n fine-tuned on simulator images
-(`~/isaac_ws/assets/models/drone_sar_yolo26n.pt`) when it exists, otherwise the stock COCO model; `--weights`
-picks another one. From the touchdown on, the camera panel shows a LANDED card instead of the camera (a hand's
-width above the pad it sees only noise): how far from the centre of the pad the drone landed, when, and how far it
-flew. After the landing the window shows MISSION END and stays open; `q` (or closing it) writes the report to
-`runs/sar_live/` (`report.md` first); `--exit-on-end` does that by itself a few seconds after the landing.
+in the simulator project (`src/drone_lab/sar/mission.py`). `--weights` names the detector, here the YOLO26n
+fine-tuned on simulator images (below); without it the station takes `$DRONE_GCS_WEIGHTS`, else the default of
+`drone_gcs/detector.py`. From the touchdown on, the camera panel shows a LANDED card instead of the camera (a
+hand's width above the pad it sees only noise): how far from the centre of the pad the drone landed, when, and how
+far it flew. After the landing the window shows MISSION END. With `--exit-on-end` the station then writes the
+report to `runs/sar_live/` (`report.md` first) and quits a few seconds later; without it the window stays open
+until `q` (or closing it) writes the report.
 
 **The demo video.** The two sides record on their own clocks: the simulator one frame per 0.1 s step
 (`mission.mp4`), the ground station its dashboard in wall-clock time (`dashboard.mp4`); each writes the sim time
@@ -64,14 +70,13 @@ other, `--crf` trades size for quality (the default 28 gives about 660 MB for th
 3200 × 900; text stays sharp).
 
 * Two monitors: `gcs.py --window-pos X Y` and `sar_mission.py --window_pos X Y` place the two windows. The
-  Isaac Sim window shows only its viewport (`--kit_ui` brings back the menus and panels); on this GNOME desktop
-  it takes the size of the monitor it opens on, whatever size it asks for.
-
+  Isaac Sim window shows only its viewport (`--kit_ui` brings back the menus and panels); on GNOME it takes the
+  size of the monitor it opens on, whatever size it asks for.
 * Without windows (record only; both sides exit at the end and the report is written right away):
   `python scripts/gcs.py --headless` and `python scripts/sar_mission.py --checkpoint ...` (headless is the
   default there).
 * `sar_mission.py --max_time 90` flies the first 90 s only; `--seed 3` another site; `--video` records the
-  Isaac Sim view to `drone_lab/runs/<out>/mission.mp4`; `--gt_boxes` adds the simulator's own object boxes to
+  Isaac Sim view to `sim/runs/<out>/mission.mp4`; `--gt_boxes` adds the simulator's own object boxes to
   every frame, and `gcs.py --detector gt` maps those instead of running YOLO (a check of the geometry with
   perfect detections).
 * The link carries 2.15 MB per camera frame (640 × 480 RGB + depth, raw), about 22 MB per second of flight;
@@ -110,8 +115,8 @@ other, `--crf` trades size for quality (the default 28 gives about 660 MB for th
     and cones 0.8 m, pallets 1 m), with confidence, hits, first/last seen
   * evaluation against ground truth: precision / recall / pin error, map height error
 * **Detector** (`drone_gcs/detector.py`):
-  * Ultralytics YOLO on the CPU; default weights: `$DRONE_GCS_WEIGHTS`, else the fine-tuned
-    `~/isaac_ws/assets/models/drone_sar_yolo26n.pt` when it exists, else the stock COCO `yolo26n.pt` next to it
+  * Ultralytics YOLO on the CPU; `--weights`, else `$DRONE_GCS_WEIGHTS`, else the fine-tuned
+    `drone_sar_yolo26n.pt` in the detector's models folder when it exists, else the stock COCO `yolo26n.pt` there
   * `--detector gt`: the boxes the simulator sends with each frame (instance segmentation), no model
   * a colour-blob stand-in for the fake world
   * a worker thread that always runs the newest frame, so the UI never waits on the detector
@@ -126,7 +131,7 @@ other, `--crf` trades size for quality (the default 28 gives about 660 MB for th
 
 *Mid-mission with the fake drone: coloured stand-in objects, the colour-blob detector, the same map and HUD.*
 
-Two terminals, both `conda activate vision`, in `~/isaac_ws/projects/drone_gcs`:
+Two terminals, both in this folder with `conda activate vision`:
 
 ```bash
 python scripts/gcs.py --detector blob --name my_demo   # 1) the GCS window (waits for the sim)
@@ -182,13 +187,13 @@ HUD (bottom bar):
 numpy, so it imports inside Isaac Sim's Python:
 
 ```python
-import os, sys
+import sys
 
-sys.path.insert(0, os.path.expanduser("~/isaac_ws/projects/drone_gcs"))  # or: pip install --no-deps -e <this repo>
+sys.path.insert(0, "path/to/gcs")  # this folder; or: pip install --no-deps -e <this folder>
 from drone_gcs.link import Sender
 from drone_gcs.isaac_bridge import IsaacLabStreamer  # duck-typed Isaac Lab 3.0 adapter
 
-stream = IsaacLabStreamer(Sender(name="isaac-survey"), env_id=0)  # default unix:/run/user/1000/drone_gcs.sock
+stream = IsaacLabStreamer(Sender(name="isaac-survey"), env_id=0)  # default unix:$XDG_RUNTIME_DIR/drone_gcs.sock
 stream.mission(
     area=(-20, 20, -20, 20), resolution=0.25, planned_path=path_xyz, survey_altitude=8.0, name="survey_lawnmower"
 )  # local frame; world=True subtracts origin
@@ -225,10 +230,9 @@ Or call the `Sender` methods directly with numpy arrays, CPU or GPU torch tensor
 * Ray-caster misses (`inf`) can be sent as they are.
 * TCP instead of the UNIX socket (for example from a container): `Sender("tcp://127.0.0.1:47800")` with
   `python scripts/gcs.py --addr tcp://0.0.0.0:47800`, or set `DRONE_GCS_ADDR` on both sides.
-* Import check (it passes, see the tests):
-  `conda activate env_isaaclab && python -c "import os, sys; sys.path.insert(0, os.path.expanduser('~/isaac_ws/projects/drone_gcs')); from drone_gcs.link import Sender"`.
-  `pip install --no-deps -e .` also works (base dependency: numpy only); the path import keeps env_isaaclab
-  untouched.
+* Import check, from this folder (a test runs the same import in env_isaaclab):
+  `conda activate env_isaaclab && python -c "from drone_gcs.link import Sender"`. `pip install --no-deps -e .`
+  also works (base dependency: numpy only); importing from the path keeps env_isaaclab untouched.
 
 ## Outputs: `runs/<name>/`
 
@@ -254,9 +258,9 @@ Or call the `Sender` methods directly with numpy arrays, CPU or GPU torch tensor
 
 ## Detection and fine-tuning on simulator images
 
-* Weights: `--weights <file.pt>`; by default `$DRONE_GCS_WEIGHTS`, else the YOLO26n fine-tuned on simulator
-  images (`~/isaac_ws/assets/models/drone_sar_yolo26n.pt`: person, vehicle, crate, barrel, pallet, cone,
-  landing_pad) when it exists, else the stock COCO model (`yolo26n.pt`, same folder). Defaults
+* Weights: `--weights <file.pt>`; by default `$DRONE_GCS_WEIGHTS`, else `drone_sar_yolo26n.pt` (the YOLO26n
+  fine-tuned on simulator images: person, vehicle, crate, barrel, pallet, cone, landing_pad) in the models folder
+  of `drone_gcs/detector.py` when it exists, else the stock COCO `yolo26n.pt` there. Defaults
   `--conf 0.25 --iou 0.45 --imgsz 640 --device cpu`. YOLO runs on the **CPU** by default (about 19 ms per
   640×480 frame, plenty for a 5–10 Hz camera): the GPU belongs to Isaac Sim and the RL jobs. `--device cuda:0`
   opts in; `--device auto` uses the GPU only when `nvidia-smi` shows at least 2 GiB free on it.
@@ -285,9 +289,17 @@ Or call the `Sender` methods directly with numpy arrays, CPU or GPU torch tensor
 
 ### Fine-tuned detector for the search-and-rescue site
 
-`~/isaac_ws/assets/models/drone_sar_yolo26n.pt` is YOLO26n fine-tuned on the downward camera of the dressed
-drone_lab site. It knows the site's seven classes, in this id order: person, vehicle, crate, barrel, pallet,
-cone, landing_pad. `scripts/gcs.py` uses it by default once the file exists (17 ms per frame on the CPU).
+`drone_sar_yolo26n.pt` (a release asset) is YOLO26n fine-tuned on the downward camera of the dressed simulator
+site. It knows the site's seven classes, in this id order: person, vehicle, crate, barrel, pallet, cone,
+landing_pad, and takes about 17 ms per frame on the CPU.
+
+<p align="center">
+  <img src="../docs/media/detection.gif" width="642"
+       alt="The drone camera in the ground station: the fine-tuned detector boxes people, the forklift and barrels, each with its map coordinates">
+</p>
+
+*The drone camera in the ground station during the recorded mission: the fine-tuned detector's boxes, each with
+the map coordinates of its pin; boxes that touch the image border are marked "edge" and are not mapped.*
 
 The images are Isaac Sim renders of the mission camera (640 × 480, f = 480 px). The labels come from the
 camera's instance segmentation, so nothing was labelled by hand:
@@ -322,18 +334,18 @@ when a box of its class overlaps it with an IoU above 0.45):
 | landing_pad | 0.995 / 0.995 | 0.995 / 0.995 | 33 / 0 / 0 | 2 / 0 / 0 |
 | **all** | **0.995 / 0.939** | **0.995 / 0.967** | **961 / 7 / 18** | **173 / 0 / 1** |
 
-The people, with the same counts at confidence 0.25, next to the stock COCO model (person class) and the first
-version of this model, trained the same way when the site's people stood or lay in Isaac Sim's rest T-pose
-(`drone_sar_yolo26n_tpose_v1.pt`, kept next to it):
+The people, with the same counts at confidence 0.25, next to the stock COCO model (person class) and a model
+trained the same way on frames of the site with Isaac Sim's characters in their rest T-pose
+(`gen_yolo_dataset.py --people_style tpose`):
 
-| People | fine-tuned | first model (T-pose people) | stock COCO |
+| People | fine-tuned | trained on T-pose people | stock COCO |
 |---|---|---|---|
 | val: found of 256 / false alarms | **255** / 1 | 243 / 2 | 107 / 33 |
 | test: found of 54 / false alarms | **54** / 0 | 53 / 1 | 31 / 8 |
 | val: mAP50 / mAP50-95 | **0.995 / 0.884** | 0.986 / 0.821 | 0.621 / 0.431 |
 | test: mAP50 / mAP50-95 | **0.995 / 0.928** | 0.995 / 0.898 | 0.783 / 0.520 |
 
-So the station finds 99.6 % of the people on held-out sites and all of them on the mission site. The first model
+So the station finds 99.6 % of the people on held-out sites and all of them on the mission site. The T-pose model
 still finds most of them, but 8 of its 13 misses on val are responders on their feet: it learned standing people
 with their arms out, and from straight above a person with the arms down is a head and two shoulders, which it
 calls a barrel or a crate, or nothing; the other 5 sit (3), wave or lie in the recovery position. The COCO model
@@ -350,34 +362,33 @@ frame, which is also its only missed person. The GCS does not put boxes that tou
 *Mission frames of the demo site (test split), confidence 0.25. Left: the fine-tuned model. Right: the stock
 COCO model, person class only.*
 
-![Frames where the first model, trained on T-pose people, misses people](docs/images/detector_vs_tpose.jpg)
+![Frames where the model trained on T-pose people misses people](docs/images/detector_vs_tpose.jpg)
 
-*Frames where the first model (right, T-pose people) misses people that the fine-tuned model (left) finds,
+*Frames where the model trained on T-pose people (right) misses people that the fine-tuned model (left) finds,
 confidence 0.25: a victim lying at the edge of the frame, called a pallet; a victim sitting in the shadow of a
 block; a responder standing by the helipad.*
 
-To build it again (about 15 minutes on the RTX 5080):
+To build it again (about 15 minutes on an RTX 5080; `datasets/` at the repository root is git-ignored):
 
 ```bash
-# 1. Render the frames: drone_lab, conda env env_isaaclab (about 7 min)
-cd ~/isaac_ws/projects/drone_lab && python scripts/gen_yolo_dataset.py
-# 2. Labels, 3. training (about 6 min), 4. scores: this repo, conda env vision
-cd ~/isaac_ws/projects/drone_gcs
-python scripts/seg_to_yolo.py --src ~/isaac_ws/datasets/drone_sar_yolo_v2/capture \
-    --out ~/isaac_ws/datasets/drone_sar_yolo_v2/yolo --classes person,vehicle,crate,barrel,pallet,cone,landing_pad \
+# 1. Render the frames, in sim/ (conda env env_isaaclab, about 7 min)
+python scripts/gen_yolo_dataset.py --out ../datasets/drone_sar_yolo_v2/capture
+# 2. Labels, 3. training (about 6 min), 4. scores, in gcs/ (conda env vision);
+#    YOLO26N = Ultralytics' stock yolo26n.pt: the starting weights and the COCO baseline
+python scripts/seg_to_yolo.py --src ../datasets/drone_sar_yolo_v2/capture \
+    --out ../datasets/drone_sar_yolo_v2/yolo --classes person,vehicle,crate,barrel,pallet,cone,landing_pad \
     --min-area 100 --min-side 6 --max-truncation 0.6
-python scripts/train_detector.py --data ~/isaac_ws/datasets/drone_sar_yolo_v2/yolo/data.yaml --epochs 100 \
-    --name drone_sar_yolo26n_v2 --out ~/isaac_ws/assets/models/drone_sar_yolo26n.pt --offline
-python scripts/eval_detector.py --data ~/isaac_ws/datasets/drone_sar_yolo_v2/yolo/data.yaml \
-    --weights ~/isaac_ws/assets/models/drone_sar_yolo26n.pt \
-    --previous ~/isaac_ws/assets/models/drone_sar_yolo26n_tpose_v1.pt
+python scripts/train_detector.py --data ../datasets/drone_sar_yolo_v2/yolo/data.yaml --model "$YOLO26N" \
+    --epochs 100 --name drone_sar_yolo26n_v2 --out models/drone_sar_yolo26n.pt --offline
+python scripts/eval_detector.py --data ../datasets/drone_sar_yolo_v2/yolo/data.yaml \
+    --weights models/drone_sar_yolo26n.pt --coco "$YOLO26N"
 ```
 
-Next to the weights: `drone_sar_yolo26n_metrics.json` and the training curves `drone_sar_yolo26n_training.png`
-and `.csv` (best epoch 73 of 100), `drone_sar_yolo26n_eval.json` (every score above), the confusion matrices of
-the station's detector and the precision-recall curves of val and test, and the figures above. The first model
-keeps its files under the name `drone_sar_yolo26n_tpose_v1`; its frames are in `~/isaac_ws/datasets/drone_sar_yolo`
-(`gen_yolo_dataset.py --people_style tpose --out ~/isaac_ws/datasets/drone_sar_yolo/capture`).
+Next to the weights: `drone_sar_yolo26n_metrics.json` and the training curves `drone_sar_yolo26n_training.png` and
+`.csv` (best epoch 73 of 100), `drone_sar_yolo26n_eval.json` (every score above), the confusion matrices of the
+station's detector and the precision-recall curves of val and test, and the figures above; `--previous <model.pt>`
+adds another model's scores on the same frames, as for the T-pose model in the table (the same recipe on frames
+rendered with `gen_yolo_dataset.py --people_style tpose`).
 
 ## Tests
 
@@ -406,12 +417,12 @@ DRONE_GCS_SKIP_E2E=1 ./run_tests.sh # without the end-to-end run
 ### Isaac Sim mission (site seed 0)
 
 The same policy flies the same plan every time: 428 m in 6 min 16 s from take-off to touchdown, 7 mm from the
-centre of the pad. Only the detector changes. The first column is the recorded live mission of the demo video
-(both windows open, the Isaac Sim view recorded; report in `runs/sar_mission_hero`); the other two ran headless
-on both sides. The third maps the boxes from the simulator's instance segmentation instead of a detector
-(`sar_mission.py --gt_boxes` with `gcs.py --detector gt`): perfect detections, so what is left of the pin error is
-the geometry (pose, intrinsics, depth, geolocation, tracker). The site has 41 objects: 35 in the survey area, 10 of
-them people, and 6 around the landing pad, outside it (the pad, four cones and a responder walking by).
+centre of the pad. Only the detector changes. The first column is the recorded live mission of the demo video (both
+windows open, the Isaac Sim view recorded); the other two ran headless on both sides. The third maps the boxes from
+the simulator's instance segmentation instead of a detector (`sar_mission.py --gt_boxes` with `gcs.py --detector
+gt`): perfect detections, so what is left of the pin error is the geometry (pose, intrinsics, depth, geolocation,
+tracker). The site has 41 objects: 35 in the survey area, 10 of them people, and 6 around the landing pad, outside
+it (the pad, four cones and a responder walking by).
 
 | | fine-tuned YOLO26n (the recorded mission) | stock COCO YOLO26n | simulator boxes (geometry check) |
 |---|---|---|---|
@@ -439,8 +450,8 @@ missed, the responder walking outside the survey area.*
   by less than 10 cm from cell to cell (31 % of the area) the map is within 4 mm RMSE.
 * The tracker keeps a separate pin per object: same class within 1.5 m for people, 0.8 m for crates, barrels and
   cones (they stand in piles), 1 m for pallets, 3 m for the forklift.
-* A headless run with the same fine-tuned detector (`runs/sar_final_natural`) found the same 40 objects, again
-  without a false alarm, and pins 0.04 m from the truth (people 0.06 m).
+* A headless run with the same fine-tuned detector found the same 40 objects, again without a false alarm, and
+  pins 0.04 m from the truth (people 0.06 m).
 
 Loop rates (RTX 5080, Ryzen 7 9800X3D, nothing else on the GPU unless noted):
 
@@ -448,7 +459,7 @@ Loop rates (RTX 5080, Ryzen 7 9800X3D, nothing else on the GPU unless noted):
 |---|---|
 | Simulation | 17-22 env steps/s headless (1.7-2.2x real time; one step = 0.1 s of flight: 10 physics steps and the RTX render of the drone camera, 45 ms mean); 14.5 steps/s (1.45x real time) with the Isaac Sim window, its chase view (2.4 ms per step) and the video recording (3.9 ms per frame); 6-10 steps/s while a YOLO training job shares the GPU |
 | Link, simulator side | 0.9 ms per step (p95 1.1 ms) to copy and queue telemetry, scan and the camera frame; a background thread writes them. 0 messages dropped in every run, 8.1 GB per mission |
-| Ground station | dashboard 18-26 ms per frame, drawn at 12 fps; YOLO on the CPU 16-24 ms per frame (21 ms in the recorded mission, next to the Isaac Sim window; 74 ms in an earlier windowed run, when the worker skipped 6 % of the frames) |
+| Ground station | dashboard 18-26 ms per frame, drawn at 12 fps; YOLO on the CPU 16-24 ms per frame (21 ms in the recorded mission, next to the Isaac Sim window); on a busy CPU up to 74 ms, and the worker then skips frames (6 % in one windowed run) |
 | GPU memory | Isaac Sim with the drone camera: 5.2 GiB after the start, 6.0 GiB peak over a full headless mission, 6.3 GiB with window and video. The ground station uses none |
 
 ### Fake drone
@@ -507,6 +518,6 @@ drone_gcs/        protocol.py link.py geometry.py isaac_bridge.py   <- sender si
 scripts/          gcs.py  fake_drone.py  compose_video.py  seg_to_yolo.py  train_detector.py  eval_detector.py
 tests/            unittest suite (./run_tests.sh)
 PROTOCOL.md       message types, fields, units, frames, Isaac Lab conversions
-models/           fine-tuned detector goes here (Git LFS)
+models/           weights written by train_detector.py (not in git; the demo's detector is a release asset)
 docs/images/      README images (Git LFS)
 ```
