@@ -1,0 +1,14 @@
+# Robot models (USD) are stored with Git LFS, as in the subprojects (sim/, quadruped/ and gcs/ keep their own
+# .gitattributes as well). Trained weights and videos are not stored in git at all: they are release assets.
+*.usd  filter=lfs diff=lfs merge=lfs -text
+*.usda filter=lfs diff=lfs merge=lfs -text
+*.usdc filter=lfs diff=lfs merge=lfs -text
+*.usdz filter=lfs diff=lfs merge=lfs -text
+
+# Images and GIFs at the top level stay plain git files, so GitHub renders them in the README.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+
+*.sh text eol=lf
