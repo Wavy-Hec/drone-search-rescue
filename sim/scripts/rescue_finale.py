@@ -630,6 +630,9 @@ class FollowCam:
 
     arrival_m = 3.5
     """Distance to the goal at which the arrival view starts [m]."""
+    arrival_aim = 0.4
+    """Where the arrival view aims on the line from the robot (0) to the person (1). Nearer the robot, which the
+    camera is still close to while it swings round, so the robot stays clear of the frame's edge."""
 
     def __init__(self, viz, scale: float = 1.0):
         self.viz = viz
@@ -639,6 +642,13 @@ class FollowCam:
         self.yaw = 0.0
         self.blend = 0.0
         self.arrival_side = 0.0
+        # the video renders VIEWER_CAMERA: set it directly as well (the visualizer moves its viewport's active camera)
+        try:
+            from isaaclab_physx.renderers.kit_viewport_utils import set_kit_renderer_camera_view
+        except ImportError as exc:
+            log(f"WARNING: no direct control of the video camera ({exc}); it follows the visualizer's view")
+            set_kit_renderer_camera_view = None
+        self.set_renderer_view = set_kit_renderer_camera_view
 
     def update(self, pos: np.ndarray, yaw: float, person=None, to_go: float | None = None) -> None:
         """Chase the robot; near the goal blend into the arrival view of the robot and the person."""
@@ -656,7 +666,7 @@ class FollowCam:
             b = float(np.clip((self.arrival_m - to_go) / (0.6 * self.arrival_m), 0.0, 1.0))
             self.blend = max(self.blend, b * b * (3 - 2 * b))  # smoothstep; never swing back once arriving
             person = np.asarray(person, dtype=float)
-            mid = 0.5 * (self.pos + person) + np.array([0.0, 0.0, 0.35])
+            mid = self.pos + self.arrival_aim * (person - self.pos) + np.array([0.0, 0.0, 0.35])
             d = person[:2] - self.pos[:2]
             d = d / max(float(np.linalg.norm(d)), 1e-6)
             across = np.array([-d[1], d[0], 0.0])
@@ -673,18 +683,18 @@ class FollowCam:
         eye = tuple(float(v) for v in eye)
         target = tuple(float(v) for v in target)
         self.viz.set_camera_view(eye, target)
-        try:
-            from isaaclab_physx.renderers.kit_viewport_utils import set_kit_renderer_camera_view
-
-            set_kit_renderer_camera_view(eye=np.array(eye), target=np.array(target), camera_prim_path=VIEWER_CAMERA)
-        except Exception:
-            pass
+        if self.set_renderer_view is not None:  # logs a warning itself when the viewport cannot be moved
+            self.set_renderer_view(eye=np.array(eye), target=np.array(target), camera_prim_path=VIEWER_CAMERA)
 
 
 class Overlay:
-    """HUD text and a minimap with the robot's trail, drawn onto the video frames (PIL)."""
+    """HUD text (top left) and a minimap with the robot's trail (top right), drawn onto the video frames (PIL).
 
-    def __init__(self, ctx: dict, robot_name: str, size_px: int = 280, theme: str = "light"):
+    Both sit along the top edge, over the far part of the view: the follow camera keeps the robot, the ground ahead
+    of it and, on arrival, the person in the lower and middle parts of the frame.
+    """
+
+    def __init__(self, ctx: dict, robot_name: str, size_px: int = 240, theme: str = "light"):
         from matplotlib import font_manager
         from PIL import ImageFont
 
@@ -695,7 +705,7 @@ class Overlay:
         )
         drone_map = ctx["mode"] == "drone_map"
         goal = "walks the drone's route" if drone_map else "walks to the person"
-        self.title = f"Rescue finale: the {robot_name} {goal}"
+        self.title = f"Rescue finale: {robot_name} {goal}"
         self.caption = "drone map + route" if drone_map else "terrain ground truth + route"
         font_path = font_manager.findfont("DejaVu Sans")
         bold_path = font_manager.findfont(font_manager.FontProperties(family="DejaVu Sans", weight="bold"))
@@ -703,6 +713,7 @@ class Overlay:
         self.font_small = ImageFont.truetype(font_path, 17)
         self.font_bold = ImageFont.truetype(bold_path, 21)
         self.trail: list[tuple[float, float]] = []
+        self.mini_xy: tuple[int, int] | None = None
 
     def draw(
         self, frame: np.ndarray, *, t: float, to_go: float, speed: float, falls: int, status: str, robot_xy
@@ -712,10 +723,11 @@ class Overlay:
         img = Image.fromarray(frame).convert("RGBA")
         layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
         d = ImageDraw.Draw(layer)
-        # HUD (top-left)
+        # HUD (top left)
         line = f"t {t:5.1f} s    to go {to_go:4.1f} m    speed {speed:4.2f} m/s    falls {falls}"
         w = 28 + max(d.textlength(self.title, font=self.font_bold), d.textlength(line, font=self.font))
-        d.rounded_rectangle((14, 12, 14 + w, 12 + 74), radius=10, fill=(16, 16, 15, 160))
+        hud_right = 14 + w
+        d.rounded_rectangle((14, 12, hud_right, 12 + 74), radius=10, fill=(16, 16, 15, 160))
         d.text((28, 18), self.title, font=self.font_bold, fill=(240, 239, 236, 255))
         d.text((28, 50), line, font=self.font, fill=(225, 224, 217, 255))
         if status:
@@ -726,7 +738,7 @@ class Overlay:
             d.rounded_rectangle((14, 94, 14 + wb, 94 + 40), radius=10, fill=color)
             d.text((28, 100), text, font=self.font_bold, fill=(255, 255, 255, 255))
         img = Image.alpha_composite(img, layer)
-        # minimap (bottom-right) with the trail and the robot
+        # minimap (top right) with the trail and the robot, its caption right-aligned underneath
         mini = Image.fromarray(self.mini.copy())
         md = ImageDraw.Draw(mini)
         if robot_xy is not None:
@@ -738,13 +750,17 @@ class Overlay:
             c, r = self.to_px(np.array([robot_xy[0]]), np.array([robot_xy[1]]))
             c, r = float(c[0]), float(r[0])
             md.ellipse((c - 7, r - 7, c + 7, r + 7), fill=(42, 120, 214), outline=(252, 252, 251), width=2)
-        width, height = img.size
         m = mini.size[0]
+        if self.mini_xy is None:  # beside the HUD, or below it and the status badge in a narrow video
+            x0 = img.size[0] - m - 20
+            self.mini_xy = (x0, 12 if x0 >= hud_right + 16 else 144)
+        x0, y0 = self.mini_xy
         border = Image.new("RGBA", (m + 6, m + 6), (252, 252, 251, 255))
-        img.paste(border, (width - m - 22, height - m - 22))
-        img.paste(mini.convert("RGBA"), (width - m - 19, height - m - 19))
-        ImageDraw.Draw(img).text(
-            (width - m - 19, height - m - 46),
+        img.paste(border, (x0, y0))
+        img.paste(mini.convert("RGBA"), (x0 + 3, y0 + 3))
+        draw = ImageDraw.Draw(img)
+        draw.text(
+            (x0 + 3 + m - draw.textlength(self.caption, font=self.font_small), y0 + m + 12),
             self.caption,
             font=self.font_small,
             fill=(240, 239, 236, 255),

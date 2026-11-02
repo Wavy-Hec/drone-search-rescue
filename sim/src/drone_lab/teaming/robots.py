@@ -54,7 +54,7 @@ class RobotProfile:
 
 CUSTOM_QUAD = RobotProfile(
     key="custom",
-    name="custom quadruped",
+    name="Hector's quadruped",
     task="DroneLab-Rescue-CustomQuad-v0",
     physics="isaacsim_physx",
     checkpoint=str(quadruped_lab_dir() / "checkpoints_2x" / "height_scanner_model_rslrl5.pt"),
