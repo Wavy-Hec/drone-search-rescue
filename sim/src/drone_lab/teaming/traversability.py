@@ -22,7 +22,10 @@ the route away from edges when there is room. The traversal cost of a free cell 
       + w_inflation (1 - (clearance - robot_radius) / inflation_buffer)^2      (inside the buffer only)
 
 so flat open ground costs 1 per metre and the planner pays extra for every degree of slope and every centimetre
-of step it takes. Lethal cells cost ``inf``.
+of step it takes. Lethal cells cost ``inf``. With ``w_cross_slope`` the cost also depends on the direction of
+travel: a move pays ``w_cross_slope (cross_slope/max_slope)^2`` per metre for the slope *across* its direction
+(:meth:`TraversabilityMap.cross_slope_cost`), so the planner prefers to go straight up or down steep ground and
+to turn where it is flat.
 
 Arrays are ``(ny, nx)`` with row ``iy`` = y index (the :class:`drone_lab.mapping.GridSpec` convention).
 """
@@ -45,6 +48,7 @@ __all__ = [
     "fill_small_holes",
     "minmod",
     "plane_fit_features",
+    "plane_fit_gradient",
     "points_in_polygon",
     "rasterize_footprints",
     "step_height",
@@ -79,6 +83,11 @@ class TraversabilityCfg:
 
     w_slope: float = 6.0
     """Cost weight of the slope term (at 15 deg a metre costs about 3.8 instead of 1)."""
+
+    w_cross_slope: float = 0.0
+    """Cost weight of the cross-slope term: the slope across the direction of travel, normalised like the slope
+    term (0: the cost does not depend on the direction). With it, routes run straight up or down steep ground and
+    turn where it is flat."""
 
     w_step: float = 4.0
     """Cost weight of the step term."""
@@ -148,6 +157,34 @@ class TraversabilityMap:
     cost: np.ndarray
     """Traversal cost per metre (>= 1), ``inf`` where lethal."""
     footprints: list[Footprint] = field(default_factory=list)
+    gradient: np.ndarray | None = None
+    """Plane-fit gradient ``(dz/dx, dz/dy)``, shape ``(2, ny, nx)`` (NaN = unknown)."""
+
+    # ------------------------------------------------------------------------------------------- direction
+    def _cross_term(self, gx, gy, ux, uy) -> np.ndarray:
+        """Cross-slope cost for gradients ``(gx, gy)`` and unit directions ``(ux, uy)`` (broadcast)."""
+        c = self.cfg
+        across = np.abs(np.nan_to_num(gy, nan=0.0) * ux - np.nan_to_num(gx, nan=0.0) * uy)
+        deg = np.degrees(np.arctan(across))
+        return c.w_cross_slope * np.square(np.clip(deg / max(c.max_slope_deg, 1e-9), 0.0, 1.0))
+
+    def cross_slope_cost(self, ux: float, uy: float) -> np.ndarray:
+        """Extra cost per metre of moving in the direction ``(ux, uy)`` (unit vector) through each cell:
+        ``w_cross_slope (cross_slope / max_slope)^2``, zero along the fall line; 0 where unknown or without
+        :attr:`TraversabilityCfg.w_cross_slope`."""
+        if self.cfg.w_cross_slope <= 0.0 or self.gradient is None:
+            return np.zeros(self.grid.shape)
+        return self._cross_term(self.gradient[0], self.gradient[1], float(ux), float(uy))
+
+    def cross_slope_cost_at(self, xy: np.ndarray, directions: np.ndarray) -> np.ndarray:
+        """:meth:`cross_slope_cost` at world points ``xy`` (N, 2) (nearest cell) for unit ``directions`` (N, 2)."""
+        xy = np.asarray(xy, dtype=float).reshape(-1, 2)
+        if self.cfg.w_cross_slope <= 0.0 or self.gradient is None:
+            return np.zeros(len(xy))
+        u = np.asarray(directions, dtype=float).reshape(-1, 2)
+        gx = self.sample(self.gradient[0], xy)
+        gy = self.sample(self.gradient[1], xy)
+        return self._cross_term(gx, gy, u[:, 0], u[:, 1])
 
     # ---------------------------------------------------------------------------------------------- queries
     def world_to_cell(self, x, y) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -269,6 +306,19 @@ def plane_fit_features(
         ``(slope (rise/run), roughness = RMS residual [m], valid)``; slope and roughness are NaN where fewer than
         ``min_valid_fraction`` of the window cells are known.
     """
+    gradient, rough, valid = plane_fit_gradient(z, resolution, radius_m, min_valid_fraction)
+    return np.hypot(gradient[0], gradient[1]), rough, valid
+
+
+def plane_fit_gradient(
+    z: np.ndarray, resolution: float, radius_m: float, min_valid_fraction: float = 0.6
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """:func:`plane_fit_features` with the plane's gradient instead of its slope.
+
+    Returns:
+        ``(gradient (2, ny, nx) = (dz/dx, dz/dy), roughness = RMS residual [m], valid)``; NaN where fewer than
+        ``min_valid_fraction`` of the window cells are known.
+    """
     r = max(1, int(round(radius_m / resolution)))
     w, ox, oy = _disk_offsets(r)
     ox = ox * resolution
@@ -295,7 +345,7 @@ def plane_fit_features(
 
     valid = known & (s0 >= max(3.0, min_valid_fraction * w.sum()))
     shape = z.shape
-    slope = np.full(shape, np.nan)
+    gradient = np.full((2, *shape), np.nan)
     rough = np.full(shape, np.nan)
     if valid.any():
         idx = np.nonzero(valid)
@@ -312,9 +362,10 @@ def plane_fit_features(
         # residual sum of squares of that plane, sum w (z - theta . phi)^2 = Szz - 2 theta.b + theta' A theta (exact
         # for any theta, so the ridge only enters at second order)
         rss = szz[idx] - 2.0 * np.einsum("ij,ij->i", theta, b) + np.einsum("ni,nij,nj->n", theta, a, theta)
-        slope[idx] = np.hypot(theta[:, 1], theta[:, 2])
+        gradient[0][idx] = theta[:, 1]
+        gradient[1][idx] = theta[:, 2]
         rough[idx] = np.sqrt(np.maximum(rss, 0.0) / s0[idx])
-    return slope, rough, valid
+    return gradient, rough, valid
 
 
 def step_height(z: np.ndarray, resolution: float, radius_m: float) -> np.ndarray:
@@ -434,9 +485,9 @@ def compute_traversability(
         raise ValueError(f"elevation shape {z.shape} does not match the grid {grid.shape}")
     res = grid.resolution
     z, _ = fill_small_holes(z, cfg.fill_holes_iterations, cfg.fill_holes_min_neighbors)
-    slope, rough, fit_valid = plane_fit_features(z, res, cfg.footprint_radius_m, cfg.min_valid_fraction)
+    gradient, rough, fit_valid = plane_fit_gradient(z, res, cfg.footprint_radius_m, cfg.min_valid_fraction)
     step = step_height(z, res, cfg.step_radius_m)
-    slope_deg = np.degrees(np.arctan(slope))
+    slope_deg = np.degrees(np.arctan(np.hypot(gradient[0], gradient[1])))
 
     unknown = ~np.isfinite(z) | ~fit_valid
     with np.errstate(invalid="ignore"):
@@ -478,4 +529,5 @@ def compute_traversability(
         clearance=clearance,
         cost=cost,
         footprints=footprints,
+        gradient=gradient,
     )

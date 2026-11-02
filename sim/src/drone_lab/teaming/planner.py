@@ -1,8 +1,10 @@
 """Cost-weighted 8-connected A* on a traversability cost grid, with start/goal snapping and path smoothing.
 
 * **Graph:** every free cell (finite cost) connects to its 8 neighbours. A move costs its length times the mean
-  cost of the two cells; diagonal moves may not cut the corner of a lethal cell. Without corner cutting, two
-  free cells are connected exactly when they are 4-connected, which is what :func:`reachable_mask` uses.
+  cost of the two cells, plus the mean cross-slope cost of the two cells in the move's direction when the map has
+  one (``TraversabilityCfg.w_cross_slope``); diagonal moves may not cut the corner of a lethal cell. Without
+  corner cutting, two free cells are connected exactly when they are 4-connected, which is what
+  :func:`reachable_mask` uses.
 * **A*:** octile-distance heuristic scaled by the cheapest cell cost, which is admissible and consistent, so the
   returned path is optimal on the graph (the tests check it against Dijkstra).
 * **Snapping:** a start or goal on a lethal cell (inside an inflated obstacle, e.g. the person the robot is sent
@@ -126,6 +128,7 @@ def astar(
     *,
     resolution: float = 1.0,
     heuristic_weight: float = 1.0,
+    direction_cost: np.ndarray | None = None,
 ) -> tuple[np.ndarray, float, int]:
     """Cost-weighted 8-connected A* from ``start`` to ``goal`` (cells ``(iy, ix)``).
 
@@ -133,6 +136,12 @@ def astar(
     (axis) or ``sqrt(2) * resolution`` (diagonal). Cells with a non-finite cost are obstacles; a diagonal move is
     only allowed when both cells it squeezes past are free. ``heuristic_weight`` > 1 gives weighted A* (faster,
     no longer optimal).
+
+    Args:
+        direction_cost: Optional ``(4, ny, nx)`` extra cost per metre (>= 0) of moving through a cell along the x
+            axis, the y axis, the (1, 1) diagonal and the (1, -1) diagonal, either way (e.g.
+            :meth:`~drone_lab.teaming.traversability.TraversabilityMap.cross_slope_cost`); a move adds
+            ``length * (extra[u] + extra[v]) / 2`` for its direction. The heuristic stays admissible.
 
     Returns:
         ``(path (K, 2) int cells from start to goal, path cost, nodes expanded)``; an empty path and ``inf`` when
@@ -164,11 +173,24 @@ def astar(
     if s == g:
         return np.array([[sy, sx]], dtype=int), 0.0, 1
 
+    zeros = [0.0] * n
+    extra = [zeros, zeros, zeros, zeros]  # read only
+    if direction_cost is not None:
+        direction_cost = np.asarray(direction_cost, dtype=float)
+        if direction_cost.shape != (4, ny, nx):
+            raise ValueError(f"direction_cost must have shape (4, {ny}, {nx}), not {direction_cost.shape}")
+        extra = []
+        for layer in direction_cost:
+            pad = np.zeros((ny + 2, w))
+            pad[1:-1, 1:-1] = np.nan_to_num(layer, nan=0.0, posinf=0.0)
+            extra.append(pad.ravel().tolist())
+
     half_axis = 0.5 * resolution
     half_diag = 0.5 * SQRT2 * resolution
-    axis_moves = (1, -1, w, -w)
-    # diagonal move and the two axis neighbours it squeezes past
-    diag_moves = ((w + 1, w, 1), (w - 1, w, -1), (-w + 1, -w, 1), (-w - 1, -w, -1))
+    # (offset, axis of direction_cost)
+    axis_moves = ((1, 0), (-1, 0), (w, 1), (-w, 1))
+    # diagonal move, the two axis neighbours it squeezes past, axis of direction_cost
+    diag_moves = ((w + 1, w, 1, 2), (w - 1, w, -1, 3), (-w + 1, -w, 1, 3), (-w - 1, -w, -1, 2))
     gr, gc = divmod(g, w)
     k_diag = SQRT2 - 2.0
 
@@ -196,20 +218,22 @@ def astar(
         if u == g:
             break
         cu = c[u]
-        for d in axis_moves:
+        for d, k in axis_moves:
             v = u + d
             if not free[v] or closed[v]:
                 continue
-            ng = gs + half_axis * (cu + c[v])
+            e = extra[k]
+            ng = gs + half_axis * (cu + c[v] + e[u] + e[v])
             if ng < g_score[v]:
                 g_score[v] = ng
                 parent[v] = u
                 push(heap, (ng + h(v), ng, v))
-        for d, a1, a2 in diag_moves:
+        for d, a1, a2, k in diag_moves:
             v = u + d
             if not free[v] or closed[v] or not free[u + a1] or not free[u + a2]:
                 continue
-            ng = gs + half_diag * (cu + c[v])
+            e = extra[k]
+            ng = gs + half_diag * (cu + c[v] + e[u] + e[v])
             if ng < g_score[v]:
                 g_score[v] = ng
                 parent[v] = u
@@ -291,15 +315,23 @@ def _densify(xy: np.ndarray, step: float) -> tuple[np.ndarray, np.ndarray]:
 
 
 def path_cost(tmap: TraversabilityMap, xy: np.ndarray) -> float:
-    """Cost integrated along a polyline (nearest-cell cost x length); ``inf`` if it touches a lethal cell or
-    leaves the grid."""
+    """Cost integrated along a polyline (nearest-cell cost x length, plus the cross-slope cost in the direction of
+    each step); ``inf`` if it touches a lethal cell or leaves the grid."""
     p, wts = _densify(xy, 0.25 * tmap.grid.resolution)
     if len(p) == 0:
         return math.inf
     c = tmap.sample(tmap.cost, p, outside=np.inf)
     if not np.all(np.isfinite(c)):
         return math.inf
-    return float(np.sum(c * wts))
+    total = float(np.sum(c * wts))
+    if tmap.cfg.w_cross_slope > 0.0 and len(p) > 1:
+        d = np.diff(p, axis=0)
+        length = np.linalg.norm(d, axis=1)
+        ok = length > 1e-12
+        u = d[ok] / length[ok, None]
+        ends = tmap.cross_slope_cost_at(p[:-1][ok], u) + tmap.cross_slope_cost_at(p[1:][ok], u)
+        total += float(np.sum(0.5 * length[ok] * ends))
+    return total
 
 
 def segment_cost(tmap: TraversabilityMap, a: np.ndarray, b: np.ndarray) -> float:
@@ -455,8 +487,18 @@ def plan_path(
         )
         res.failure = "unreachable"
         return res
+    direction_cost = None
+    if tmap.cfg.w_cross_slope > 0.0:
+        s = math.sqrt(0.5)
+        axes = ((1.0, 0.0), (0.0, 1.0), (s, s), (s, -s))  # the axes of astar's direction_cost
+        direction_cost = np.stack([tmap.cross_slope_cost(ux, uy) for ux, uy in axes])
     cells, gcost, expanded = astar(
-        tmap.cost, start_cell, goal_cell, resolution=grid.resolution, heuristic_weight=heuristic_weight
+        tmap.cost,
+        start_cell,
+        goal_cell,
+        resolution=grid.resolution,
+        heuristic_weight=heuristic_weight,
+        direction_cost=direction_cost,
     )
     res.expanded = expanded
     if len(cells) == 0:  # cannot happen when the goal is in the start's component; kept as a guard

@@ -143,6 +143,12 @@ plan_g.add_argument("--max_slope", type=float, default=None, help="Steepest walk
 plan_g.add_argument("--max_step", type=float, default=None, help="Highest walkable step [m] (robot default).")
 plan_g.add_argument("--max_roughness", type=float, default=None, help="Roughest ground [m RMS] (robot default).")
 plan_g.add_argument("--robot_radius", type=float, default=None, help="Clearance of the robot centre [m].")
+plan_g.add_argument(
+    "--cross_slope_weight",
+    type=float,
+    default=None,
+    help="Cost weight of walking across a slope (robot default; 0 = the cost does not depend on the direction).",
+)
 plan_g.add_argument("--plan_only", action="store_true", help="Plan, write plan.png / plan.json and stop (CPU only).")
 walk_g = parser.add_argument_group("walk")
 walk_g.add_argument("--task", type=str, default=None, help="Rescue task id (default: the robot's).")
@@ -287,6 +293,7 @@ def traversability_cfg(profile: RobotProfile) -> TraversabilityCfg:
         "max_step_m": a.max_step,
         "max_roughness_m": a.max_roughness,
         "robot_radius_m": a.robot_radius,
+        "w_cross_slope": a.cross_slope_weight,
     }
     return replace(profile.traversability, **{k: v for k, v in overrides.items() if v is not None})
 

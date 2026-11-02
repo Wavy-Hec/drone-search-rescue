@@ -6,6 +6,7 @@ numpy + scipy only (runs in env_isaaclab with ``python tests/test_teaming_planne
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 import numpy as np
 from _runner import main_for
@@ -13,7 +14,15 @@ from _runner import main_for
 SQ2 = math.sqrt(2.0)
 
 
-def _dijkstra_cost(cost: np.ndarray, start, goal, res: float = 1.0) -> float:
+AXES = {(0, 1): 0, (1, 0): 1, (1, 1): 2, (1, -1): 3}
+"""Move (dy, dx), either way, -> axis of the A*'s ``direction_cost``."""
+
+
+def _axis(dy: int, dx: int) -> int:
+    return AXES[(dy, dx)] if (dy, dx) in AXES else AXES[(-dy, -dx)]
+
+
+def _dijkstra_cost(cost: np.ndarray, start, goal, res: float = 1.0, direction_cost=None) -> float:
     """Reference: scipy's Dijkstra on exactly the same graph as the A* (8-connected, no corner cutting)."""
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import dijkstra
@@ -21,8 +30,10 @@ def _dijkstra_cost(cost: np.ndarray, start, goal, res: float = 1.0) -> float:
     ny, nx = cost.shape
     free = np.isfinite(cost)
     idx = np.arange(ny * nx).reshape(ny, nx)
+    extra = np.zeros((4, ny, nx)) if direction_cost is None else direction_cost
     rows, cols, w = [], [], []
     for dy, dx in ((0, 1), (1, 0), (1, 1), (1, -1)):
+        e = extra[_axis(dy, dx)]
         for y in range(ny):
             for x in range(nx):
                 y2, x2 = y + dy, x + dx
@@ -31,7 +42,7 @@ def _dijkstra_cost(cost: np.ndarray, start, goal, res: float = 1.0) -> float:
                 if dy and dx and not (free[y, x2] and free[y2, x]):
                     continue  # no corner cutting
                 length = res * (SQ2 if (dy and dx) else 1.0)
-                c = 0.5 * length * (cost[y, x] + cost[y2, x2])
+                c = 0.5 * length * (cost[y, x] + cost[y2, x2] + e[y, x] + e[y2, x2])
                 rows += [idx[y, x], idx[y2, x2]]
                 cols += [idx[y2, x2], idx[y, x]]
                 w += [c, c]
@@ -40,12 +51,15 @@ def _dijkstra_cost(cost: np.ndarray, start, goal, res: float = 1.0) -> float:
     return float(d[idx[goal]])
 
 
-def _path_cost(cost, path, res=1.0):
+def _path_cost(cost, path, res=1.0, direction_cost=None):
     total = 0.0
     for (y1, x1), (y2, x2) in zip(path[:-1], path[1:], strict=False):
         assert max(abs(y2 - y1), abs(x2 - x1)) == 1, "path must move between 8-neighbours"
         length = res * (SQ2 if (y1 != y2 and x1 != x2) else 1.0)
         total += 0.5 * length * (cost[y1, x1] + cost[y2, x2])
+        if direction_cost is not None:
+            e = direction_cost[_axis(int(y2 - y1), int(x2 - x1))]
+            total += 0.5 * length * (e[y1, x1] + e[y2, x2])
     return total
 
 
@@ -77,6 +91,57 @@ def test_astar_is_optimal_against_dijkstra():
         assert abs(_path_cost(cost, path, res) - c) < 1e-9
         assert expanded <= np.isfinite(cost).sum()
     assert checked >= 8  # most random maps are solvable
+
+
+def test_astar_with_direction_costs_is_optimal_against_dijkstra():
+    from drone_lab.teaming.planner import astar
+
+    rng = np.random.default_rng(7)
+    checked = 0
+    for _ in range(10):
+        cost = _random_cost(rng, n=18, obstacle_fraction=0.15)
+        extra = 3.0 * rng.random((4, 18, 18))
+        ref = _dijkstra_cost(cost, (0, 0), (17, 17), 0.25, extra)
+        path, c, _ = astar(cost, (0, 0), (17, 17), resolution=0.25, direction_cost=extra)
+        if math.isinf(ref):
+            assert len(path) == 0 and math.isinf(c)
+            continue
+        checked += 1
+        assert abs(c - ref) < 1e-9, (c, ref)
+        assert abs(_path_cost(cost, path, 0.25, extra) - c) < 1e-9
+    assert checked >= 5
+    # an extra cost on y moves only: the route gains its y on diagonals and never moves along y alone
+    cost = np.ones((12, 12))
+    extra = np.zeros((4, 12, 12))
+    extra[1] = 5.0
+    path, c, _ = astar(cost, (0, 0), (5, 11), resolution=1.0, direction_cost=extra)
+    steps = np.abs(np.diff(path, axis=0))
+    assert not np.any((steps[:, 0] == 1) & (steps[:, 1] == 0)) and abs(c - (6.0 + 5.0 * SQ2)) < 1e-9
+    try:
+        astar(cost, (0, 0), (0, 11), direction_cost=np.zeros((4, 3, 3)))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("direction costs of the wrong shape must be rejected")
+
+
+def test_path_cost_adds_the_cross_slope_of_each_step():
+    from drone_lab.mapping import GridSpec
+    from drone_lab.teaming.planner import path_cost
+    from drone_lab.teaming.traversability import TraversabilityCfg, compute_traversability
+
+    g = GridSpec(0.0, 0.0, 0.1, 80, 80)
+    xs, _ = g.cell_centers()
+    z = np.tile(math.tan(math.radians(15.0)) * xs, (g.ny, 1))  # the fall line along x
+    cfg = TraversabilityCfg(max_slope_deg=22.0, inflation_buffer_m=0.0)
+    plain = compute_traversability(z, g, cfg)
+    directional = compute_traversability(z, g, replace(cfg, w_cross_slope=6.0))
+    along = np.array([[2.0, 4.0], [6.0, 4.0]])
+    across = np.array([[4.0, 2.0], [4.0, 6.0]])
+    base = path_cost(plain, along)
+    assert abs(path_cost(plain, across) - base) < 1e-9  # the same 4 m of 15 deg slope
+    assert abs(path_cost(directional, along) - base) < 1e-9
+    assert abs(path_cost(directional, across) - base - 4.0 * 6.0 * (15.0 / 22.0) ** 2) < 1e-6
 
 
 def test_astar_uniform_grid_gives_octile_distance():

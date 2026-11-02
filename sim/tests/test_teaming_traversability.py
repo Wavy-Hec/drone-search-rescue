@@ -66,6 +66,30 @@ def test_slope_of_an_inclined_plane_is_exact_and_resolution_independent():
             assert not _interior(t.lethal, 4).any()
 
 
+def test_cross_slope_cost_is_zero_along_the_fall_line():
+    from drone_lab.teaming.traversability import compute_traversability
+
+    g = _grid(n=80, res=0.1)
+    xs, _ = g.cell_centers()
+    k = math.tan(math.radians(15.0))
+    z = np.tile(k * xs, (g.ny, 1))  # 15 deg, the fall line along -x
+    t = compute_traversability(z, g, _cfg(max_slope_deg=22.0, w_cross_slope=6.0))
+    assert np.allclose(_interior(t.gradient[0]), k, atol=1e-6) and np.allclose(_interior(t.gradient[1]), 0.0, atol=1e-6)
+    s = math.sqrt(0.5)
+    along, across, diagonal = (_interior(t.cross_slope_cost(ux, uy)) for ux, uy in ((-1.0, 0.0), (0.0, 1.0), (s, s)))
+    assert np.allclose(along, 0.0, atol=1e-9)
+    assert np.allclose(across, 6.0 * (15.0 / 22.0) ** 2)
+    assert np.allclose(diagonal, 6.0 * (math.degrees(math.atan(k * s)) / 22.0) ** 2)
+    # at points, one direction per point
+    pts = np.array([[3.0, 4.0], [5.0, 2.0]])
+    dirs = np.array([[0.0, -1.0], [1.0, 0.0]])
+    assert np.allclose(t.cross_slope_cost_at(pts, dirs), [6.0 * (15.0 / 22.0) ** 2, 0.0])
+    # the weight leaves the per-cell cost alone; without it nothing depends on the direction
+    plain = compute_traversability(z, g, _cfg(max_slope_deg=22.0))
+    assert np.array_equal(plain.cost, t.cost)
+    assert not plain.cross_slope_cost(0.0, 1.0).any() and not plain.cross_slope_cost_at(pts, dirs).any()
+
+
 def test_steep_slope_is_lethal_and_cost_grows_with_slope():
     from drone_lab.teaming.traversability import compute_traversability
 

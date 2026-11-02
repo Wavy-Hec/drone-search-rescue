@@ -61,13 +61,16 @@ CUSTOM_QUAD = RobotProfile(
     # trained on slopes up to 0.4 rise/run (21.8 deg), stairs up to 0.23 m, boxes up to 0.1 m and random rough
     # ground up to 0.06 m; 0.89 m long and 0.47 m wide (feet included), walking with the trunk about 0.7 m up.
     # 23 deg: the crater walls of the demo site fitted over half the body length; steeper walls are left out, since
-    # the policy drifts downhill when it walks across them slowly
+    # the policy drifts downhill when it walks across them slowly. Turning on a steep descent makes it run away
+    # downhill (yaw-rate commands of 0.4 rad/s or more on 17 deg and steeper: speed above 1.2 m/s in 5-74 % of the
+    # cases, under 0.4 rad/s almost never), so the cross-slope term keeps routes on the fall line there
     traversability=TraversabilityCfg(
         max_slope_deg=23.0,
         max_step_m=0.15,
         max_roughness_m=0.05,
         footprint_radius_m=0.45,
         robot_radius_m=0.45,
+        w_cross_slope=6.0,
     ),
     cruise_speed=0.7,
     lookahead_m=0.8,
