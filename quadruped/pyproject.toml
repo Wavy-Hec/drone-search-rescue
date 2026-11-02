@@ -132,6 +132,7 @@ isaaclab = ["isaaclab", "isaaclab_newton", "isaaclab_ov", "isaaclab_physx"]
 "**/__init__.py" = ["F401", "F403"]
 "**/__init__.pyi" = ["F401", "F403"]
 "scripts/**/*.py" = ["E402"]
+"tests/**/*.py" = ["E402"]
 
 [tool.ruff.format]
 docstring-code-format = true
@@ -143,7 +144,8 @@ typeCheckingMode = "basic"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+pythonpath = ["src"]
+addopts = "-ra --import-mode=importlib"
 markers = [
     "unit: test exercises isolated logic and does not launch the simulator",
     "integration: test drives the simulator/scene/environment end-to-end",

@@ -47,10 +47,10 @@ import os
 import sys
 import time
 
-from isaaclab.app import add_launcher_args, launch_simulation
-
 
 def _parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
+    from isaaclab.app import add_launcher_args
+
     from isaaclab_tasks.utils import setup_preset_cli
 
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
@@ -84,6 +84,8 @@ def main(argv: list[str] | None = None) -> int:
 
     import gymnasium as gym
     import torch
+
+    from isaaclab.app import launch_simulation
 
     from isaaclab_rl.entrypoints.common import apply_env_overrides, close_env
     from isaaclab_rl.rsl_rl import (

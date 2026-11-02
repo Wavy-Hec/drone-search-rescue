@@ -5,15 +5,20 @@
 
 """Tests for the project's task registrations."""
 
-import gymnasium as gym
+import pytest
 
-import quadruped_lab.tasks  # noqa: F401
+pytest.importorskip("isaaclab_tasks", reason="needs Isaac Lab 3.0")
+gym = pytest.importorskip("gymnasium")
+
+import quadruped_lab.tasks  # noqa: F401  (runs the gym.register calls)
+
+pytestmark = [pytest.mark.unit, pytest.mark.kitless]
 
 _CFG = "quadruped_lab.tasks.locomotion.config.custom_quad"
 _AGENTS = f"{_CFG}.agents"
 
 
-def test_task_registrations():
+def test_task_registrations() -> None:
     """The project tasks must expose valid environment and agent entry points."""
     expected = {
         "Isaac-Velocity-Flat-Custom-Quad-v0": {
