@@ -14,8 +14,12 @@ Conventions (see PROTOCOL.md):
 from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from numpy.typing import ArrayLike
 
 # Rotation from Isaac Lab's "world" camera convention (x forward, y left, z up) to the ROS optical convention:
 # R_world_ros = R_world_worldconv @ C_WORLDCONV_TO_ROS. Columns = ROS optical axes expressed in the "world"
@@ -31,23 +35,26 @@ C_BODY_TO_NADIR_CAM = np.array([[0.0, -1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, -
 
 
 # ---------------------------------------------------------------------------------------------------- quaternions
-def quat_xyzw_to_wxyz(q) -> np.ndarray:
+def quat_xyzw_to_wxyz(q: ArrayLike) -> np.ndarray:
+    """Reorder (x, y, z, w) -> (w, x, y, z): Isaac Lab -> wire."""
     q = np.asarray(q, dtype=np.float64)
     return q[..., [3, 0, 1, 2]]
 
 
-def quat_wxyz_to_xyzw(q) -> np.ndarray:
+def quat_wxyz_to_xyzw(q: ArrayLike) -> np.ndarray:
+    """Reorder (w, x, y, z) -> (x, y, z, w)."""
     q = np.asarray(q, dtype=np.float64)
     return q[..., [1, 2, 3, 0]]
 
 
-def quat_normalize(q) -> np.ndarray:
+def quat_normalize(q: ArrayLike) -> np.ndarray:
+    """Unit quaternion(s) along the last axis (a zero quaternion stays zero)."""
     q = np.asarray(q, dtype=np.float64)
     n = np.linalg.norm(q, axis=-1, keepdims=True)
     return q / np.where(n > 0, n, 1.0)
 
 
-def quat_to_matrix(q) -> np.ndarray:
+def quat_to_matrix(q: ArrayLike) -> np.ndarray:
     """(w, x, y, z) -> rotation matrix (..., 3, 3)."""
     w, x, y, z = np.moveaxis(quat_normalize(q), -1, 0)
     return np.stack(
@@ -60,7 +67,7 @@ def quat_to_matrix(q) -> np.ndarray:
     )
 
 
-def matrix_to_quat(R) -> np.ndarray:
+def matrix_to_quat(R: ArrayLike) -> np.ndarray:
     """Rotation matrix (3, 3) -> (w, x, y, z) with w >= 0."""
     R = np.asarray(R, dtype=np.float64)
     tr = R[0, 0] + R[1, 1] + R[2, 2]
@@ -80,7 +87,7 @@ def matrix_to_quat(R) -> np.ndarray:
     return -q if q[0] < 0 else q
 
 
-def quat_multiply(a, b) -> np.ndarray:
+def quat_multiply(a: ArrayLike, b: ArrayLike) -> np.ndarray:
     """Hamilton product a * b, both (w, x, y, z)."""
     aw, ax, ay, az = np.moveaxis(np.asarray(a, dtype=np.float64), -1, 0)
     bw, bx, by, bz = np.moveaxis(np.asarray(b, dtype=np.float64), -1, 0)
@@ -110,7 +117,7 @@ def quat_from_euler(roll: float, pitch: float, yaw: float) -> np.ndarray:
     )
 
 
-def euler_from_quat(q) -> tuple[float, float, float]:
+def euler_from_quat(q: ArrayLike) -> tuple[float, float, float]:
     """(w, x, y, z) -> ZYX ``(roll, pitch, yaw)`` [rad]."""
     w, x, y, z = quat_normalize(q)
     roll = math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
@@ -119,7 +126,7 @@ def euler_from_quat(q) -> tuple[float, float, float]:
     return roll, pitch, yaw
 
 
-def yaw_from_quat(q) -> float:
+def yaw_from_quat(q: ArrayLike) -> float:
     """Yaw [rad] of a body->world quaternion: angle of the body x axis from world +X, counter-clockwise."""
     return euler_from_quat(q)[2]
 
@@ -129,7 +136,7 @@ def compass_heading_deg(yaw: float) -> float:
     return (90.0 - math.degrees(yaw)) % 360.0
 
 
-def camera_quat_to_ros(q_wxyz, convention: str = "ros") -> np.ndarray:
+def camera_quat_to_ros(q_wxyz: ArrayLike, convention: str = "ros") -> np.ndarray:
     """Convert a camera orientation (w, x, y, z) given in Isaac Lab's ``"world"`` / ``"opengl"`` / ``"ros"``
     camera convention into the ROS optical convention used on the wire."""
     q = quat_normalize(q_wxyz)
@@ -152,7 +159,9 @@ def intrinsics_from_fov(width: int, height: int, hfov_deg: float) -> np.ndarray:
 class PinholeCamera:
     """Pinhole camera with pose ``R_wc`` (ROS optical -> world) and optical centre ``t_wc`` [m, world]."""
 
-    def __init__(self, K, width: int, height: int, R_wc, t_wc, pixel_center: float = 0.5):
+    def __init__(
+        self, K: ArrayLike, width: int, height: int, R_wc: ArrayLike, t_wc: ArrayLike, pixel_center: float = 0.5
+    ):
         self.K = np.asarray(K, dtype=np.float64).reshape(3, 3)
         self.K_inv = np.linalg.inv(self.K)
         self.width, self.height = int(width), int(height)
@@ -161,15 +170,26 @@ class PinholeCamera:
         self.pixel_center = float(pixel_center)
 
     @classmethod
-    def from_pose(cls, K, width, height, pos, quat_wxyz, pixel_center: float = 0.5) -> PinholeCamera:
+    def from_pose(
+        cls,
+        K: ArrayLike,
+        width: int,
+        height: int,
+        pos: ArrayLike,
+        quat_wxyz: ArrayLike,
+        pixel_center: float = 0.5,
+    ) -> PinholeCamera:
+        """Camera at ``pos`` [m] with orientation ``quat_wxyz`` (ROS optical -> world)."""
         return cls(K, width, height, quat_to_matrix(quat_wxyz), pos, pixel_center)
 
     @property
     def fx(self) -> float:
+        """Focal length [px]."""
         return float(self.K[0, 0])
 
     @property
     def quat(self) -> np.ndarray:
+        """Orientation (w, x, y, z), ROS optical -> world."""
         return matrix_to_quat(self.R)
 
     @property
@@ -181,7 +201,7 @@ class PinholeCamera:
         """Angle between the optical axis and straight down."""
         return math.degrees(math.acos(max(-1.0, min(1.0, -float(self.R[2, 2])))))
 
-    def rays(self, u, v) -> np.ndarray:
+    def rays(self, u: ArrayLike, v: ArrayLike) -> np.ndarray:
         """World directions (N, 3) through pixel indices (u, v), scaled so that camera-frame z = 1.
 
         ``origin + d * ray`` is the point at depth (distance to the image plane) ``d``.
@@ -191,12 +211,12 @@ class PinholeCamera:
         pix = np.stack([u, v, np.ones_like(u)], 0)
         return (self.R @ (self.K_inv @ pix)).T
 
-    def backproject(self, u, v, depth) -> np.ndarray:
+    def backproject(self, u: ArrayLike, v: ArrayLike, depth: ArrayLike) -> np.ndarray:
         """World points (N, 3) of pixels (u, v) with distance-to-image-plane ``depth`` [m]."""
         d = np.asarray(depth, dtype=np.float64).reshape(-1, 1)
         return self.t + d * self.rays(u, v)
 
-    def project(self, points) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def project(self, points: ArrayLike) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """World points (N, 3) -> pixel-index coordinates ``(u, v)`` and depth z.
 
         Pixel centres sit at integer values (``round(u)`` is the pixel index), the inverse of :meth:`rays`.

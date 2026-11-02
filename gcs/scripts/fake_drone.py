@@ -33,7 +33,9 @@ from drone_gcs.sim.fake_world import FakeWorld  # noqa: E402
 from drone_gcs.sim.flight import CarrotFlight, lawnmower  # noqa: E402
 
 
-def camera_pose(flight: CarrotFlight, mount: str, offset=(0.05, 0.0, -0.08)) -> tuple[np.ndarray, np.ndarray]:
+def camera_pose(
+    flight: CarrotFlight, mount: str, offset: tuple[float, float, float] = (0.05, 0.0, -0.08)
+) -> tuple[np.ndarray, np.ndarray]:
     """(R_wc ROS optical -> world, camera position) for a nadir camera on a gimbal or fixed to the body."""
     R_wb = quat_to_matrix(flight.quat)
     pos = flight.p + R_wb @ np.asarray(offset)
@@ -44,7 +46,10 @@ def camera_pose(flight: CarrotFlight, mount: str, offset=(0.05, 0.0, -0.08)) -> 
     return R_wb @ C_BODY_TO_NADIR_CAM, pos
 
 
-def build(args):
+def build(
+    args: argparse.Namespace,
+) -> tuple[tuple[float, float, float, float], FakeWorld, float, np.ndarray, CarrotFlight]:
+    """Survey area, world, flight height, lawnmower path and flight of the command-line settings."""
     if len(args.area) == 2:
         w, h = args.area
         area = (-w / 2, w / 2, -h / 2, h / 2)
@@ -57,7 +62,7 @@ def build(args):
     return area, world, z, path, flight
 
 
-def main(argv=None) -> int:
+def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--addr", default=None, help=f"GCS link address (default {default_address()})")
     p.add_argument("--name", default="fake_survey", help="mission name")

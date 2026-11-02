@@ -168,7 +168,7 @@ class TestLink(unittest.TestCase):
         tx.close(0.2)
 
     def test_mission_change_while_gcs_absent_keeps_call_order(self):
-        # MISSION B used to overwrite A in the latched slot and jump ahead of A's queued data
+        # MISSION B must neither overwrite A in the latched slot nor jump ahead of A's queued data
         tx = Sender(self.addr, reconnect_max=0.3)
         tx.send_mission((-10, 10, -10, 10), 0.25, mission_id="A", name="A")
         for k in range(3):
@@ -214,7 +214,7 @@ class TestLink(unittest.TestCase):
         )  # fmt: skip
 
     def test_extra_fields_are_copied_at_call_time(self):
-        # the simulator reuses its buffers; extras used to be serialized later on the sender thread
+        # the simulator reuses its buffers, so extras must be copied before the sender thread serializes them
         tx = Sender(self.addr)
         action = np.array([0.1, 0.2, 0.3, 0.4])
         size = np.array([4.5, 1.8, 1.5])

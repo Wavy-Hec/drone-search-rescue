@@ -41,6 +41,7 @@ class TextRenderer:
 
     @property
     def truetype(self) -> bool:
+        """TrueType fonts are in use (else OpenCV's Hershey fonts)."""
         return self._pil is not None and self._font("sans", 14) is not None
 
     def _font(self, kind: str, size: int):
@@ -89,6 +90,7 @@ class TextRenderer:
         return a
 
     def size(self, text: str, size: int = 14, kind: str = "sans") -> tuple[int, int]:
+        """Size ``(w, h)`` [px] that :meth:`put` would draw ``text`` at."""
         a = self._sprite(text, size, kind)
         return a.shape[1], a.shape[0]
 
@@ -99,10 +101,10 @@ class TextRenderer:
         x: float,
         y: float,
         size: int = 14,
-        color=(255, 255, 255),
+        color: tuple[int, int, int] = (255, 255, 255),
         kind: str = "sans",
         anchor: str = "lt",
-        bg=None,
+        bg: tuple[int, int, int] | None = None,
         pad: int = 3,
         bg_alpha: float = 1.0,
     ) -> tuple[int, int, int, int]:

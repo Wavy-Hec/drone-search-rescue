@@ -19,7 +19,7 @@ import numpy as np
 from .dashboard import LAYERS, STATS, Dashboard
 from .detector import DetectorWorker, detections_from_boxes, make_detector
 from .link import Receiver
-from .protocol import MISSION
+from .protocol import MISSION, Message
 from .report import format_summary, write_report
 from .state import GCSConfig, GCSState
 
@@ -29,6 +29,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 @dataclass
 class AppConfig:
+    """Settings of :class:`GCSApp` (``scripts/gcs.py`` fills them from its command line)."""
+
     addr: str | None = None
     name: str | None = None
     out_dir: Path = PROJECT_ROOT / "runs"
@@ -85,6 +87,7 @@ class VideoRecorder:
 
     @property
     def seconds(self) -> float:
+        """Length of the video so far [s]."""
         return self.frames / self.fps
 
     def write(self, img: np.ndarray, now: float, sim_t: float | None = None) -> None:
@@ -106,6 +109,7 @@ class VideoRecorder:
         self.frames += n
 
     def close(self) -> Path | None:
+        """Finish the video and its frame log; returns the video, or None when no frame was written."""
         self.writer.release()
         if self.frames == 0:
             self.tmp.unlink(missing_ok=True)
@@ -151,6 +155,7 @@ def link_label(address: str) -> str:
 
 
 def resolve_run_dir(out_dir: Path, name: str | None) -> Path:
+    """A new, empty run folder ``out_dir/name`` (``name_2``, ... if taken; a time-stamped name if ``name`` is None)."""
     base = Path(out_dir).expanduser()
     name = name or f"{datetime.now():%Y%m%d_%H%M%S}_gcs"
     d = base / name
@@ -163,6 +168,8 @@ def resolve_run_dir(out_dir: Path, name: str | None) -> Path:
 
 
 class GCSApp:
+    """The ground station: link, mission state, detector worker, dashboard window and recording, report."""
+
     def __init__(self, cfg: AppConfig):
         self.cfg = cfg
         if cfg.exit_on_end is None:
@@ -246,6 +253,7 @@ class GCSApp:
 
     # ------------------------------------------------------------------ helpers
     def ui_dict(self) -> dict:
+        """UI state for the dashboard: layer, statistic, link, detector and recording status."""
         rate, brate = self.receiver.rates()
         d = dict(self.ui)
         d["link"] = {
@@ -271,6 +279,7 @@ class GCSApp:
         return d
 
     def screenshot(self, canvas: np.ndarray, tag: str = "shot") -> Path:
+        """Save ``canvas`` to ``<run>/screenshots/``; returns the file."""
         d = self.run_dir / "screenshots"
         d.mkdir(exist_ok=True)
         self.shots += 1
@@ -281,6 +290,7 @@ class GCSApp:
         return p
 
     def handle_key(self, key: int, canvas: np.ndarray) -> None:
+        """Act on one ``cv2.waitKeyEx`` code (keys: see :func:`decode_key` and the README)."""
         k = decode_key(key)
         if k is None:
             return
@@ -308,7 +318,7 @@ class GCSApp:
             if gen == self.gen and frame.drone_id in self.state.drones:
                 self.state.apply_detections(frame, dets, ms)
 
-    def handle_message(self, msg) -> None:
+    def handle_message(self, msg: Message) -> None:
         """Apply one link message (archiving the current mission when a new one starts) and send camera frames
         to the detector."""
         st = self.state
@@ -351,6 +361,7 @@ class GCSApp:
 
     # ------------------------------------------------------------------ main loop
     def run(self) -> int:
+        """Run until a key, the window, a signal, the mission end or ``max_time`` stops it; returns the exit code."""
         self._install_signals()
         try:
             self.receiver.start()
@@ -420,6 +431,7 @@ class GCSApp:
         return 0
 
     def finish(self) -> dict | None:
+        """Stop the detector, link and window, close the video and write the report; returns the summary."""
         log.info("stopping: %s", self.quit_reason)
         if self.worker is not None:
             self._apply_detector_results()  # results that finished in the meantime still count
@@ -464,5 +476,6 @@ class GCSApp:
 
 
 def parse_size(s: str) -> tuple[int, int]:
+    """``"1600x900"`` -> ``(1600, 900)``."""
     w, h = s.lower().split("x")
     return int(w), int(h)

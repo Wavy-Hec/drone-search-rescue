@@ -274,7 +274,7 @@ def encode_frame(
     return [PREFIX.pack(MAGIC, len(hb), offset), hb, *chunks]
 
 
-def encode_bytes(msg_type: str, fields: dict | None = None, arrays: dict | None = None, **kw) -> bytes:
+def encode_bytes(msg_type: str, fields: dict | None = None, arrays: dict | None = None, **kw: Any) -> bytes:
     """``encode_frame`` joined into one bytes object (handy for tests and files)."""
     return b"".join(bytes(c) for c in encode_frame(msg_type, fields, arrays, **kw))
 
@@ -291,7 +291,9 @@ def parse_prefix(prefix: bytes) -> tuple[int, int]:
     return hlen, plen
 
 
-def decode_message(header_bytes: bytes, payload, *, decode_jpeg: bool = True) -> Message:
+def decode_message(
+    header_bytes: bytes, payload: bytes | bytearray | memoryview, *, decode_jpeg: bool = True
+) -> Message:
     """Decode a header (JSON bytes) and its payload (bytes / bytearray / memoryview) into a :class:`Message`.
 
     Raw buffers become zero-copy numpy views of ``payload`` (writable if ``payload`` is a bytearray).
@@ -350,7 +352,7 @@ def decode_message(header_bytes: bytes, payload, *, decode_jpeg: bool = True) ->
     )
 
 
-def decode_bytes(frame: bytes, **kw) -> Message:
+def decode_bytes(frame: bytes, **kw: Any) -> Message:
     """Decode one complete frame held in memory (inverse of :func:`encode_bytes`)."""
     hlen, plen = parse_prefix(frame[:PREFIX_SIZE])
     if len(frame) != PREFIX_SIZE + hlen + plen:

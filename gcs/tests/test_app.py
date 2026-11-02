@@ -50,7 +50,7 @@ class TestKeys(unittest.TestCase):
         try:
             app = GCSApp(AppConfig(addr=f"unix:{tmp}/k.sock", out_dir=Path(tmp), name="keys", headless=True))
             canvas = np.zeros((10, 10, 3), np.uint8)
-            for code in (0xFF51, 0xFF53, 0xFF52, 0xFF54):  # Left used to quit, Right to take a screenshot
+            for code in (0xFF51, 0xFF53, 0xFF52, 0xFF54):  # arrows; the low bytes of Left / Right are 'Q' / 'S'
                 app.handle_key(code, canvas)
             self.assertIsNone(app.quit_reason)
             self.assertEqual(app.shots, 0)

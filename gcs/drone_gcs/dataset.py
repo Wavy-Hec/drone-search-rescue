@@ -52,6 +52,8 @@ UNCLIPPED_KEY = "bboxUnclipped"
 
 @dataclass
 class Box:
+    """One labelled instance: class, instance id and the tight box of its visible mask."""
+
     cls: str
     inst: int
     x0: int  # inclusive pixel indices of the visible mask
@@ -62,15 +64,19 @@ class Box:
 
     @property
     def w(self) -> int:
+        """Box width [px]."""
         return self.x1 - self.x0 + 1
 
     @property
     def h(self) -> int:
+        """Box height [px]."""
         return self.y1 - self.y0 + 1
 
 
 @dataclass
 class ConvertConfig:
+    """Settings of :func:`convert_dataset` (see the module docstring)."""
+
     classes: list[str] | None = None  # order = YOLO class ids; None = all classes found, sorted
     min_area: int = 20  # visible pixels
     min_side: int = 4  # px
@@ -255,6 +261,8 @@ def paint_over(img: np.ndarray, seg: np.ndarray, ids: list[int]) -> tuple[np.nda
 # ---------------------------------------------------------------------------------------------------- files
 @dataclass
 class Frame:
+    """One captured frame: its key, RGB, segmentation and JSON files."""
+
     key: str
     rgb: Path
     seg: Path
@@ -306,6 +314,7 @@ def unclipped_boxes(info: dict) -> dict[int, tuple[int, int, int, int]]:
 
 
 def load_image(p: Path) -> np.ndarray:
+    """An image file as stored: a ``.npy`` array, or a PNG / JPG read by OpenCV unchanged (BGR, any depth)."""
     if p.suffix.lower() == ".npy":
         return np.load(p)
     import cv2
@@ -317,6 +326,7 @@ def load_image(p: Path) -> np.ndarray:
 
 
 def load_seg(p: Path) -> np.ndarray:
+    """Instance ids (H, W) int64 of a segmentation file (the first channel of a multi-channel image)."""
     a = load_image(p)
     if a.ndim == 3:
         a = a[..., 0]

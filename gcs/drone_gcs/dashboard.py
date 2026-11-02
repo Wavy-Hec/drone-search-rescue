@@ -20,6 +20,7 @@ from collections.abc import Sequence
 
 import cv2
 import numpy as np
+from numpy.typing import ArrayLike
 
 from .mapping import GridSpec
 from .state import CameraFrame, DroneState, GCSState
@@ -78,6 +79,7 @@ _HASH_COLORS = [PAL["orange"], PAL["cyan"], PAL["green"], PAL["magenta"], PAL["y
 
 
 def class_color(name: str) -> tuple[int, int, int]:
+    """BGR colour of a class: fixed for the known classes, else picked from the palette by name."""
     if name in CLASS_RGB:
         r, g, b = CLASS_RGB[name]
         return (b, g, r)
@@ -108,6 +110,7 @@ HITS_LUT = cv2.applyColorMap(np.arange(256, dtype=np.uint8).reshape(-1, 1), cv2.
 
 
 def fmt_time(s: float) -> str:
+    """``mm:ss.s`` of a duration [s]."""
     s = max(0.0, float(s))
     m, sec = divmod(s, 60)
     return f"{int(m):02d}:{sec:04.1f}"
@@ -124,7 +127,15 @@ def nice_length(max_m: float) -> float:
     return k
 
 
-def dashed_polyline(img, pts, color, thickness=1, dash=9.0, gap=6.0) -> None:
+def dashed_polyline(
+    img: np.ndarray,
+    pts: ArrayLike,
+    color: tuple[int, int, int],
+    thickness: int = 1,
+    dash: float = 9.0,
+    gap: float = 6.0,
+) -> None:
+    """Draw a dashed polyline through pixel points ``pts`` (N, 2) in place; the pattern runs on across vertices."""
     pts = np.asarray(pts, dtype=np.float64)
     on, remaining = True, dash
     for a, b in zip(pts[:-1], pts[1:], strict=True):
@@ -154,7 +165,8 @@ def dashed_polyline(img, pts, color, thickness=1, dash=9.0, gap=6.0) -> None:
                 remaining = dash if on else gap
 
 
-def blend_poly(img, pts, color, alpha: float) -> None:
+def blend_poly(img: np.ndarray, pts: np.ndarray, color: tuple[int, int, int], alpha: float) -> None:
+    """Fill the polygon ``pts`` (N, 2, pixels) with opacity ``alpha``, in place."""
     x0, y0 = np.floor(pts.min(axis=0)).astype(int) - 2
     x1, y1 = np.ceil(pts.max(axis=0)).astype(int) + 2
     H, W = img.shape[:2]
@@ -255,15 +267,18 @@ class MapView:
         v.grid, v.ppm, v.w, v.h, v.x0, v.y0 = self.grid, self.ppm, self.w, self.h, 0, 0
         return v
 
-    def to_px(self, x, y):
+    def to_px(self, x: ArrayLike, y: ArrayLike) -> tuple[np.ndarray | float, np.ndarray | float]:
+        """World (x, y) [m] -> pixel (column, row), unrounded."""
         g = self.grid
         return self.x0 + (np.asarray(x) - g.x_min) * self.ppm, self.y0 + (g.y_max - np.asarray(y)) * self.ppm
 
-    def pt(self, x, y) -> tuple[int, int]:
+    def pt(self, x: float, y: float) -> tuple[int, int]:
+        """World (x, y) [m] -> nearest pixel (column, row)."""
         px, py = self.to_px(x, y)
         return int(round(float(px))), int(round(float(py)))
 
-    def pts(self, xy) -> np.ndarray:
+    def pts(self, xy: ArrayLike) -> np.ndarray:
+        """World points (N, 2) [m] -> pixels (N, 2), unrounded."""
         xy = np.asarray(xy, dtype=np.float64).reshape(-1, 2)
         px, py = self.to_px(xy[:, 0], xy[:, 1])
         return np.stack([px, py], -1)
@@ -283,6 +298,7 @@ class MapRenderer:
 
     # ------------------------------------------------------------------ base layers (grid resolution, BGR)
     def elevation_range(self, state: GCSState, z: np.ndarray) -> tuple[float, float]:
+        """Colour range of the elevation layer: the mission's ``z_range``, else a smoothed robust range of ``z``."""
         if state.z_range is not None:
             return state.z_range
         k = np.isfinite(z)
@@ -300,6 +316,7 @@ class MapRenderer:
         return self._range
 
     def elevation_bgr(self, state: GCSState, stat: str = "mean") -> tuple[np.ndarray, tuple[float, float]]:
+        """Hill-shaded elevation layer (BGR, one pixel per cell, fog where unknown) and its colour range."""
         elev = state.elevation
         z = elev.layer(stat)
         known = elev.known
@@ -325,12 +342,14 @@ class MapRenderer:
         return img, (lo, hi)
 
     def photo_bgr(self, state: GCSState) -> np.ndarray:
+        """Orthomosaic layer (BGR, fog where nothing was photographed)."""
         m = state.mosaic
         img = np.ascontiguousarray(m.rgb[..., ::-1])
         img[~m.filled] = PAL["fog"]
         return img
 
     def coverage_bgr(self, state: GCSState) -> np.ndarray:
+        """Coverage layer: ray hits per cell (log colour scale), photo-only cells, fog."""
         elev, mos = state.elevation, state.mosaic
         cnt = elev.count.astype(np.float32)
         k = cnt > 0
@@ -678,7 +697,7 @@ class MapRenderer:
 class Dashboard:
     """Composes the full canvas. ``render(state, ui)`` returns a BGR image of ``size``."""
 
-    def __init__(self, size=(1600, 900)):
+    def __init__(self, size: tuple[int, int] = (1600, 900)):
         self.W, self.H = int(size[0]), int(size[1])
         self.text = TextRenderer()
         self.maps = MapRenderer(self.text)
@@ -714,6 +733,7 @@ class Dashboard:
         return bg
 
     def render(self, state: GCSState, ui: dict) -> np.ndarray:
+        """The whole canvas (BGR) for ``state`` and the UI state of :meth:`drone_gcs.app.GCSApp.ui_dict`."""
         img = self._bg.copy()
         self._top_bar(img, state, ui)
         self._camera(img, state, ui)

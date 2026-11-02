@@ -7,8 +7,10 @@ planned polyline at the cruise speed but never gets more than ``max_lead`` metre
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import numpy as np
+from numpy.typing import ArrayLike
 
 from ..geometry import quat_from_euler
 from ..mapping import area_tuple
@@ -17,8 +19,8 @@ G = 9.81
 
 
 def lawnmower(
-    area, spacing: float, z: float, direction: str = "x", margin: float | None = None, overshoot: float = 2.0
-):
+    area: Any, spacing: float, z: float, direction: str = "x", margin: float | None = None, overshoot: float = 2.0
+) -> np.ndarray:
     """Boustrophedon waypoints (N, 3): lines along ``direction`` spaced ``spacing`` apart, ``margin`` from the
     area edges (default ``spacing / 2``), extended ``overshoot`` metres past the area on both ends."""
     x0, x1, y0, y1 = area_tuple(area)
@@ -42,14 +44,14 @@ class CarrotFlight:
 
     def __init__(
         self,
-        path,
+        path: ArrayLike,
         speed: float = 3.0,
         max_lead: float = 2.5,
         accel: float = 2.5,
         tau: float = 0.5,
         kp: float = 0.8,
         yaw_rate_deg: float = 90.0,
-        start=None,
+        start: ArrayLike | None = None,
     ):
         self.path = np.asarray(path, dtype=np.float64)
         if len(self.path) < 2:
@@ -78,6 +80,7 @@ class CarrotFlight:
         return self.path[k] + np.clip(f, 0, 1) * (self.path[k + 1] - self.path[k]), k
 
     def step(self, dt: float) -> None:
+        """Advance the carrot and the drone by ``dt`` seconds."""
         c, k = self.carrot()
         if np.linalg.norm(c - self.p) < self.max_lead:
             self.s = min(self.length, self.s + self.speed * dt)

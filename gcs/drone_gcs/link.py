@@ -28,6 +28,7 @@ import stat
 import sys
 import threading
 import time
+from collections.abc import Iterable
 from typing import Any
 
 import numpy as np
@@ -136,7 +137,7 @@ class BoundedMessageQueue:
         limits: dict[str, int] | None = None,
         default_limit: int = 1024,
         max_bytes: int | None = None,
-        never_drop=CONTROL_TYPES,
+        never_drop: Iterable[str] = CONTROL_TYPES,
     ):
         self.limits = dict(limits or {})
         self.default_limit = int(default_limit)
@@ -156,6 +157,7 @@ class BoundedMessageQueue:
 
     @property
     def nbytes(self) -> int:
+        """Bytes queued (the sum of the items' ``nbytes``)."""
         return self._bytes
 
     def _drop_oldest(self, q: collections.deque, mtype: str) -> None:
@@ -164,7 +166,7 @@ class BoundedMessageQueue:
         self._bytes -= int(getattr(old, "nbytes", 0) or 0)
         self.dropped[mtype] += 1
 
-    def put(self, item) -> int:
+    def put(self, item: Any) -> int:
         """Append ``item``; returns how many older items were dropped to make room."""
         mtype = item.type
         dropped = 0
@@ -192,7 +194,7 @@ class BoundedMessageQueue:
             self._cond.notify_all()
         return dropped
 
-    def push_front(self, item) -> None:
+    def push_front(self, item: Any) -> None:
         """Put ``item`` back at the head (used to retry a control message after a failed send)."""
         with self._cond:
             q = self._qs.setdefault(item.type, collections.deque())
@@ -217,20 +219,20 @@ class BoundedMessageQueue:
         self._bytes -= int(getattr(item, "nbytes", 0) or 0)
         return item
 
-    def peek(self):
+    def peek(self) -> Any:
         """The item ``pop`` would return next (not removed), or ``None``."""
         with self._cond:
             t = self._head_type_locked()
             return None if t is None else self._qs[t][0][1]
 
-    def pop(self, timeout: float | None = None):
+    def pop(self, timeout: float | None = None) -> Any:
         """Oldest item, waiting up to ``timeout`` seconds; ``None`` if still empty."""
         with self._cond:
             if self._n == 0 and timeout != 0:
                 self._cond.wait(timeout)
             return self._pop_locked() if self._n else None
 
-    def take(self, timeout: float | None = None):
+    def take(self, timeout: float | None = None) -> Any:
         """Like :meth:`pop`, but the item counts in :meth:`pending` until :meth:`task_done` is called."""
         with self._cond:
             if self._n == 0 and timeout != 0:
@@ -241,6 +243,7 @@ class BoundedMessageQueue:
             return self._pop_locked()
 
     def task_done(self) -> None:
+        """Mark an item from :meth:`take` as finished."""
         with self._cond:
             self._unfinished = max(0, self._unfinished - 1)
             self._cond.notify_all()
@@ -259,10 +262,12 @@ class BoundedMessageQueue:
         return out
 
     def wake(self) -> None:
+        """Wake every thread waiting in :meth:`pop` or :meth:`take`."""
         with self._cond:
             self._cond.notify_all()
 
     def clear(self) -> None:
+        """Remove every queued item (not counted as dropped)."""
         with self._cond:
             self._qs.clear()
             self._n = 0
@@ -378,6 +383,7 @@ class Sender:
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> None:
+        """Start the background I/O thread (the constructor does unless ``autostart=False``)."""
         if self._thread is None or not self._thread.is_alive():
             self._stop.clear()
             self._thread = threading.Thread(target=self._run, name="drone_gcs-sender", daemon=True)
@@ -385,6 +391,7 @@ class Sender:
 
     @property
     def connected(self) -> bool:
+        """A GCS is connected."""
         return self._sock is not None
 
     def wait_connected(self, timeout: float = 5.0) -> bool:
@@ -489,7 +496,7 @@ class Sender:
         photo_resolution: float | None = None,
         geo_origin: dict | None = None,
         drone_id: int | None = None,
-        **extra,
+        **extra: Any,
     ) -> bool:
         """Announce the survey: area ``(x_min, x_max, y_min, y_max)`` [m], map cell size [m], planned path
         (N,2|3) [m, world], survey altitude (world z [m]). Latched: re-sent on every reconnect."""
@@ -539,7 +546,7 @@ class Sender:
         carrot: Any = None,
         ang_vel: Any = None,
         drone_id: int | None = None,
-        **extra,
+        **extra: Any,
     ) -> bool:
         """Vehicle state: sim time [s], position [m, world], orientation quaternion **(w, x, y, z)** body->world,
         linear velocity [m/s, world], index of the current target waypoint, carrot target [m, world]."""
@@ -566,7 +573,7 @@ class Sender:
         origin: Any = None,
         *,
         drone_id: int | None = None,
-        **extra,
+        **extra: Any,
     ) -> bool:
         """Mapping ray hits: (N, 3) points [m, world] (inf/NaN = miss), optional (N,) valid mask, sensor origin."""
         try:
@@ -600,7 +607,7 @@ class Sender:
         camera: str = "cam0",
         pixel_center: float = 0.5,
         drone_id: int | None = None,
-        **extra,
+        **extra: Any,
     ) -> bool:
         """Camera frame: RGB uint8 (H, W, 3), intrinsics K (3x3), optical-centre position [m, world] and
         orientation **(w, x, y, z)** of the ROS optical frame (x right, y down, z forward) -> world,
@@ -683,7 +690,7 @@ class Sender:
             return self._fail("send_gt_terrain", e)
 
     def send_end(
-        self, reason: str = "complete", t: float | None = None, *, flush_timeout: float = 2.0, **extra
+        self, reason: str = "complete", t: float | None = None, *, flush_timeout: float = 2.0, **extra: Any
     ) -> bool:
         """End of mission. Waits up to ``flush_timeout`` s for the queue to drain (0 = don't wait)."""
         try:
@@ -890,6 +897,7 @@ class Receiver:
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> Receiver:
+        """Listen on the address (replacing a stale socket file; a live GCS there is an error); returns self."""
         if self._family == socket.AF_UNIX:
             path = self._sockaddr
             if os.path.exists(path):
@@ -921,6 +929,7 @@ class Receiver:
         return self
 
     def close(self) -> None:
+        """Stop listening, close every connection and remove the socket file."""
         self._stop.set()
         if self._listener is not None:
             with contextlib.suppress(OSError):
@@ -940,30 +949,35 @@ class Receiver:
                 pass
         self._queue.wake()
 
-    def __enter__(self):
+    def __enter__(self) -> Receiver:
         return self.start()
 
-    def __exit__(self, *exc):
+    def __exit__(self, *exc: object) -> None:
         self.close()
 
     # ------------------------------------------------------------------ consumer API
     def get(self, timeout: float | None = None) -> Message | None:
+        """Next message, waiting up to ``timeout`` seconds; None if there is none."""
         return self._queue.pop(timeout)
 
     def drain(self, max_items: int | None = None) -> list[Message]:
+        """The queued messages (all, or up to ``max_items``) without waiting."""
         return self._queue.drain(max_items)
 
     @property
     def num_connections(self) -> int:
+        """Number of connected senders."""
         with self._lock:
             return len(self._conns)
 
     @property
     def connected(self) -> bool:
+        """At least one sender is connected."""
         return self.num_connections > 0
 
     @property
     def dropped(self) -> dict:
+        """Inbound messages dropped per type because the consumer fell behind."""
         return dict(self._queue.dropped)
 
     def rates(self, window: float = 2.0) -> tuple[float, float]:
