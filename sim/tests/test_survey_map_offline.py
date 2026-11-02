@@ -319,7 +319,7 @@ def test_settle_holds_the_carrot_at_the_start():
 
 
 def test_waypoints_flag_conflicts_with_generated_pattern():
-    """--waypoints with --pattern lawnmower exits instead of silently flying the lawnmower."""
+    """Passing --waypoints with --pattern lawnmower exits instead of silently flying the lawnmower."""
     _requirements()
     with tempfile.TemporaryDirectory() as d:
         wp = Path(d) / "wp.csv"

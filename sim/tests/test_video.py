@@ -66,7 +66,7 @@ def test_find_kit_visualizer_and_playback_speed():
     assert find_kit_visualizer(_Sim(False, [_Viz("newton"), kit])) is kit
     assert find_kit_visualizer(_Sim(False, [_Viz("newton")])) is None
     assert find_kit_visualizer(object()) is None
-    # One frame per 0.1 s policy step written at 30 fps is a 3x time-lapse; 10 fps is real time
+    # one frame per 0.1 s policy step written at 30 fps is a 3x time-lapse; 10 fps is real time
     assert np.isclose(playback_speedup(30, 0.1), 3.0) and np.isclose(playback_speedup(10, 0.1), 1.0)
     assert np.isclose(playback_speedup(30, 0.1, stride=2), 6.0)
     assert np.isclose(realtime_fps(0.1), 10.0) and np.isclose(realtime_fps(0.1, stride=2), 5.0)
