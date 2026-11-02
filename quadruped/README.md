@@ -61,6 +61,10 @@ isaaclab list_envs                      # the three Custom-Quad tasks
 
 If the checkpoints are distributed as release assets instead, place them in `checkpoints_2x/`.
 
+The pip install uses the Isaac Lab that is already installed. The template's uv setup works differently:
+`[tool.uv.sources]` in `pyproject.toml` expects an Isaac Lab checkout two folders up (`../../IsaacLab`), and without
+one `uv sync` stops with "Distribution not found".
+
 ```bash
 # watch the converted policy walk (Kit window, real time; close the window or Ctrl+C to stop)
 isaaclab play --rl_library rsl_rl --task Isaac-Velocity-Rough-Custom-Quad-v0 --num_envs 32 \
@@ -121,9 +125,11 @@ scripts/
   check_joint_order.py                     joint order of a run log vs the order the 2.x policy expects
   make_newton_asset.py                     writes and checks robot_newton.usd
   depth_camera_study.py                    depth-camera self-occlusion and ground coverage (CPU ray cast)
+  list_envs.py                             the template's wrapper for isaaclab list_envs
 checkpoints_2x/                            the 2.x checkpoints and the converted one
 docs/media/                                README media
 tests/                                     CPU tests (no Isaac Sim launch)
+  data/                                    excerpt of an --info run log for the joint-order check test
 PORT_NOTES.md                              engineering notes: port, measurements, findings, validation
 ```
 
