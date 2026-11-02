@@ -238,11 +238,11 @@ def infer_person_poses(
 ) -> list[Pin]:
     """Give person pins without a pose one from the map: lying or standing, by the pin's height above the ground.
 
-    The drone's camera looks straight down, so a pin geolocated on a standing person sits on their head and
-    shoulders (1.3-1.8 m above the ground on the demo site), and one on a person lying down on their back (at most
-    0.4 m). The ground is the lower quartile of the known map cells ``ring_m`` away from the pin (the person's own
-    cells and objects right next to them stay out of it). Pins with a pose, without a height or without known
-    ground around them are returned unchanged.
+    The drone's camera looks straight down, so a pin geolocated on a standing person sits on their upper body
+    (0.8-1.9 m above the ground on the demo site), and one on a person lying or sitting stays low (at most 0.5 m):
+    sitting people count as lying. The ground is the lower quartile of the known map cells ``ring_m`` away from the
+    pin (the person's own cells and objects right next to them stay out of it). Pins with a pose, without a height
+    or without known ground around them are returned unchanged.
     """
     xs, ys = grid.cell_centers()
     out = []
