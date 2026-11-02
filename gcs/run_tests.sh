@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run the whole test suite in the conda env 'vision' (one command).
-#   ./run_tests.sh                      # everything: 77 tests, ~25 s, CPU only (the YOLO test does 2 CPU inferences)
+#   ./run_tests.sh                      # everything, ~25 s, CPU only (the YOLO test does 2 CPU inferences)
 #   DRONE_GCS_SKIP_E2E=1 ./run_tests.sh # skip the fake-drone -> GCS end-to-end test
 #   ./run_tests.sh tests.test_mapping   # one module
 set -euo pipefail
