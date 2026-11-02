@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import math
 import time
+from collections.abc import Sequence
 
 import cv2
 import numpy as np
@@ -164,6 +165,76 @@ def blend_poly(img, pts, color, alpha: float) -> None:
     over = roi.copy()
     cv2.fillPoly(over, [np.round(pts - [x0, y0]).astype(np.int32)], color, cv2.LINE_AA)
     cv2.addWeighted(over, alpha, roi, 1 - alpha, 0, dst=roi)
+
+
+# ---------------------------------------------------------------------------------------------------- label placement
+Box = tuple[int, int, int, int]
+"""Pixel box (x0, y0, x1, y1); x1 and y1 are exclusive."""
+
+MAP_LABEL_SPOTS = (
+    (12, 0, "lm"),
+    (-12, 0, "rm"),
+    (12, -16, "lm"),
+    (12, 16, "lm"),
+    (-12, -16, "rm"),
+    (-12, 16, "rm"),
+    (12, -32, "lm"),
+    (12, 32, "lm"),
+    (-12, -32, "rm"),
+    (-12, 32, "rm"),
+    (12, -48, "lm"),
+    (12, 48, "lm"),
+    (-12, -48, "rm"),
+    (-12, 48, "rm"),
+)
+"""Where the label of a map pin may go, nearest first: offset (px) of the text anchor from the pin, and the anchor."""
+
+
+def overlap_area(a: Box, b: Box) -> int:
+    """Number of pixels two boxes share."""
+    return max(0, min(a[2], b[2]) - max(a[0], b[0])) * max(0, min(a[3], b[3]) - max(a[1], b[1]))
+
+
+def pick_spot(options: Sequence[Sequence[Box]], taken: Sequence[Box], size: tuple[int, int]) -> int:
+    """Index of the first option (the boxes of one way to place a label) whose boxes lie inside an image of
+    ``size`` (w, h) and clear of ``taken``; when every option is blocked, the one that hides the fewest pixels."""
+    w, h = size
+    for i, boxes in enumerate(options):
+        if all(
+            b[0] >= 0
+            and b[1] >= 0
+            and b[2] <= w
+            and b[3] <= h
+            and not any(b[0] < t[2] and t[0] < b[2] and b[1] < t[3] and t[1] < b[3] for t in taken)
+            for b in boxes
+        ):
+            return i
+
+    def hidden(b: Box) -> int:
+        outside = (b[2] - b[0]) * (b[3] - b[1]) - overlap_area(b, (0, 0, w, h))
+        return outside + sum(overlap_area(b, t) for t in taken)
+
+    return min(range(len(options)), key=lambda i: sum(hidden(b) for b in options[i]))
+
+
+def layout_map_labels(
+    pins: Sequence[tuple[int, int]], sizes: Sequence[tuple[int, int]], taken: Sequence[Box], size: tuple[int, int]
+) -> list[tuple[int, int, str, Box]]:
+    """Spots for the labels of map pins, placed in order, each at the nearest of :data:`MAP_LABEL_SPOTS` that lies
+    inside the map image of ``size`` (w, h) and clear of ``taken`` (markers, drones) and of the labels placed before
+    it. ``sizes`` are the text sizes. Returns, per pin, the text position, its anchor and the label's box."""
+    taken = list(taken)
+    spots = []
+    for (cx, cy), (lw, lh) in zip(pins, sizes, strict=True):
+        options = []
+        for dx, dy, anchor in MAP_LABEL_SPOTS:
+            x0 = cx + dx - (lw if anchor == "rm" else 0) - 2  # the text background box (pad 2)
+            y0 = cy + dy - lh // 2 - 1
+            options.append((cx + dx, cy + dy, anchor, (x0, y0, x0 + lw + 4, y0 + lh + 2)))
+        spot = options[pick_spot([(o[3],) for o in options], taken, size)]
+        taken.append(spot[3])
+        spots.append(spot)
+    return spots
 
 
 class MapView:
@@ -427,53 +498,34 @@ class MapRenderer:
                     continue
                 c = view.pt(p[0], p[1])
                 cv2.rectangle(img, (c[0] - 6, c[1] - 6), (c[0] + 6, c[1] + 6), PAL["white"], 1, aa)
-        # objects: markers first, then labels placed greedily so they overlap neither markers nor other labels
-        objs = sorted(state.tracker.objects, key=lambda o: o.id)
-        placed: list[tuple[int, int, int, int]] = []
-        centers = []
-        for ob in objs:
+        # objects: markers first, then the labels where they hide no marker, no other label and neither the scale bar
+        # nor the north arrow. Once the mission has ended the drones stay put, so the labels keep clear of them too
+        # (a landed drone sits on the landing pad's pin).
+        taken = self._furniture_boxes(view)
+        if report or state.ended:
+            r = 22  # the drone icon's ring: 17 px, 20 px in the report
+            for d in state.drones.values():
+                if d.pos is not None:
+                    x, y = view.pt(d.pos[0], d.pos[1])
+                    taken.append((x - r, y - r, x + r, y + r))
+        labels: list[tuple[str, tuple[int, int]]] = []
+        for ob in sorted(state.tracker.objects, key=lambda o: o.id):
             c = view.pt(ob.pos[0], ob.pos[1])
-            centers.append(c)
             col = class_color(ob.cls)
             if ob.hits >= state.tracker.min_hits:
                 cv2.circle(img, c, 8, (0, 0, 0), -1, aa)
                 cv2.circle(img, c, 6, col, -1, aa)
                 cv2.circle(img, c, 8, PAL["white"], 1, aa)
-                placed.append((c[0] - 9, c[1] - 9, c[0] + 9, c[1] + 9))
+                taken.append((c[0] - 9, c[1] - 9, c[0] + 9, c[1] + 9))
+                labels.append((f"{ob.cls} {ob.conf:.2f}", c))
             else:
                 cv2.circle(img, c, 6, col, 2, aa)
-        for ob, c in zip(objs, centers, strict=True):
-            if ob.hits < state.tracker.min_hits:
-                continue
-            label = f"{ob.cls} {ob.conf:.2f}"
-            lw, lh = txt.size(label, 12, "medium")
-            spot = None
-            for dx, dy, anchor in ((12, 0, "lm"), (-12, 0, "rm"), (12, -16, "lm"), (12, 16, "lm"), (-12, -16, "rm"),
-                                   (-12, 16, "rm"), (12, -32, "lm"), (12, 32, "lm")):  # fmt: skip
-                x0 = c[0] + dx - (lw if anchor == "rm" else 0) - 2  # the text background box (pad 2)
-                y0 = c[1] + dy - lh // 2 - 1
-                box = (x0, y0, x0 + lw + 4, y0 + lh + 2)
-                if not any(box[0] < b[2] and b[0] < box[2] and box[1] < b[3] and b[1] < box[3] for b in placed):
-                    spot = (c[0] + dx, c[1] + dy, anchor, box)
-                    break
-            if spot is None:
-                spot = (c[0] + 12, c[1], "lm", (c[0] + 10, c[1] - lh // 2 - 1, c[0] + lw + 14, c[1] + lh // 2 + 1))
-            if spot[1] != c[1]:
-                cv2.line(img, c, (spot[0], spot[1]), PAL["white"], 1, aa)
-            txt.put(
-                img,
-                label,
-                spot[0],
-                spot[1],
-                12,
-                PAL["white"],
-                "medium",
-                anchor=spot[2],
-                bg=(20, 20, 20),
-                pad=2,
-                bg_alpha=0.6,
-            )
-            placed.append(spot[3])
+        sizes = [txt.size(label, 12, "medium") for label, _ in labels]
+        spots = layout_map_labels([c for _, c in labels], sizes, taken, (img.shape[1], img.shape[0]))
+        for (label, c), (x, y, anchor, _) in zip(labels, spots, strict=True):
+            if y != c[1]:
+                cv2.line(img, c, (x, y), PAL["white"], 1, aa)
+            txt.put(img, label, x, y, 12, PAL["white"], "medium", anchor=anchor, bg=(20, 20, 20), pad=2, bg_alpha=0.6)
         # drones
         for d in state.drones.values():
             if d.pos is None:
@@ -490,18 +542,28 @@ class MapRenderer:
             if len(state.drones) > 1:
                 txt.put(img, f"d{d.drone_id}", c[0] + 14, c[1] - 14, 12, col, "medium")
 
+    @staticmethod
+    def _furniture(view: MapView) -> tuple[float, int, tuple[int, int], tuple[int, int]]:
+        """Placement of the scale bar (bottom left: its length in m and px, the left end of the bar) and of the north
+        arrow (top right: its top centre)."""
+        length = nice_length(150 / view.ppm)
+        bar = (view.x0 + 14, view.y0 + view.h - 18)
+        return length, int(round(length * view.ppm)), bar, (view.x0 + view.w - 24, view.y0 + 18)
+
+    def _furniture_boxes(self, view: MapView) -> list[Box]:
+        """Pixels the scale bar and the north arrow cover; they are drawn last, so the labels keep clear of them."""
+        _, px, (x0, y0), (nx, ny) = self._furniture(view)
+        return [(x0 - 8, y0 - 22, x0 + px + 11, y0 + 10), (nx - 18, ny - 15, nx + 18, ny + 32)]
+
     def _scale_and_north(self, img, view: MapView) -> None:
         txt = self.text
-        L = nice_length(150 / view.ppm)
-        px = int(round(L * view.ppm))
-        x0, y0 = view.x0 + 14, view.y0 + view.h - 18
+        L, px, (x0, y0), (nx, ny) = self._furniture(view)
         cv2.rectangle(img, (x0 - 8, y0 - 22), (x0 + px + 10, y0 + 9), (20, 20, 20), -1)
         cv2.line(img, (x0, y0), (x0 + px, y0), PAL["white"], 2)
         for xx in (x0, x0 + px // 2, x0 + px):
             cv2.line(img, (xx, y0 - 5), (xx, y0 + 4), PAL["white"], 1)
         label = f"{L:g} m"
         txt.put(img, label, x0 + px // 2, y0 - 6, 12, PAL["white"], "medium", anchor="mb")
-        nx, ny = view.x0 + view.w - 24, view.y0 + 18
         cv2.circle(img, (nx, ny + 14), 17, (20, 20, 20), -1, cv2.LINE_AA)
         pts = np.array([[nx, ny + 2], [nx - 7, ny + 24], [nx, ny + 18], [nx + 7, ny + 24]], np.int32)
         cv2.fillPoly(img, [pts], PAL["white"], cv2.LINE_AA)
@@ -741,31 +803,35 @@ class Dashboard:
         ):
             cv2.line(roi, a, b, PAL["white"], 1, cv2.LINE_AA)
         if frame.detections:
-            for det, geo in frame.detections:
-                col = class_color(det.cls)
-                x1, y1, x2, y2 = (int(round(v * s)) for v in det.box)
+            # the boxes first, then each label with the map position of its find, where they hide no other label
+            boxes = [tuple(int(round(v * s)) for v in det.box) for det, _ in frame.detections]
+            for (det, geo), (x1, y1, x2, y2) in zip(frame.detections, boxes, strict=True):
                 cv2.rectangle(roi, (x1, y1), (x2, y2), (0, 0, 0), 4, cv2.LINE_AA)
-                cv2.rectangle(roi, (x1, y1), (x2, y2), col, 1 if geo.get("truncated") else 2, cv2.LINE_AA)
+                width = 1 if geo.get("truncated") else 2
+                cv2.rectangle(roi, (x1, y1), (x2, y2), class_color(det.cls), width, cv2.LINE_AA)
+            taken: list[Box] = []
+            for (det, geo), (x1, y1, _, y2) in zip(frame.detections, boxes, strict=True):
+                col = class_color(det.cls)
                 label = f"{det.cls} {det.conf:.2f}" + (" (edge)" if geo.get("truncated") else "")
                 lw, lh = t.size(label, 13, "bold")
-                ly = y1 - lh - 2 if y1 - lh - 2 >= 0 else min(y2 + 2, dh - lh - 2)
-                x1 = int(np.clip(x1, 1, max(1, dw - lw - 8)))
-                cv2.rectangle(roi, (x1 - 1, ly), (x1 + lw + 6, ly + lh + 1), col, -1)
-                t.put(roi, label, x1 + 3, ly, 13, PAL["black"] if sum(col) > 380 else PAL["white"], "bold")
+                pos = ""
                 if geo.get("ok") and not geo.get("truncated"):
-                    p = geo["xyz"]
-                    t.put(
-                        roi,
-                        f"({p[0]:.1f}, {p[1]:.1f})",
-                        x1 + 2,
-                        (y2 + 3) if ly < y1 else (ly + lh + 4),
-                        11,
-                        PAL["white"],
-                        "mono",
-                        bg=(20, 20, 20),
-                        pad=2,
-                        bg_alpha=0.6,
-                    )
+                    pos = f"({geo['xyz'][0]:.1f}, {geo['xyz'][1]:.1f})"
+                pw, ph = t.size(pos, 11, "mono") if pos else (0, 0)
+                lx = int(np.clip(x1, 1, max(1, dw - lw - 8)))
+                # the label above the box, below it or inside its top; the position under the box or the label
+                rows = ((y1 - lh - 2, y2 + 3), (y2 + 2, y2 + lh + 6), (y1 + 3, y2 + 3))
+                options = [
+                    [(lx - 1, ly, lx + lw + 7, ly + lh + 2)] + ([(lx, py - 1, lx + pw + 4, py + ph + 1)] if pos else [])
+                    for ly, py in rows
+                ]
+                i = pick_spot(options, taken, (dw, dh))
+                ly, py = rows[i]
+                taken += options[i]
+                cv2.rectangle(roi, (lx - 1, ly), (lx + lw + 6, ly + lh + 1), col, -1)
+                t.put(roi, label, lx + 3, ly, 13, PAL["black"] if sum(col) > 380 else PAL["white"], "bold")
+                if pos:
+                    t.put(roi, pos, lx + 2, py, 11, PAL["white"], "mono", bg=(20, 20, 20), pad=2, bg_alpha=0.6)
         info = f"t {frame.t:7.2f} s   frame {frame.frame_id}   cam z {frame.cam.t[2]:5.1f} m"
         if frame.depth is None:
             info += "   (no depth)"

@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from drone_gcs import protocol as P
-from drone_gcs.dashboard import LAYERS, PAL, Dashboard, render_report_map
+from drone_gcs.dashboard import LAYERS, PAL, Dashboard, layout_map_labels, overlap_area, pick_spot, render_report_map
 from drone_gcs.detector import ColorBlobDetector
 from drone_gcs.geometry import C_BODY_TO_NADIR_CAM, PinholeCamera, intrinsics_from_fov
 from drone_gcs.mapping import GridSpec
@@ -156,6 +156,43 @@ class TestDashboardAndReport(unittest.TestCase):
             self.assertGreater(len(rows), 50)
         finally:
             rmtree(tmp)
+
+
+class TestLabelPlacement(unittest.TestCase):
+    def test_first_option_inside_the_image_and_clear(self):
+        taken = [(0, 0, 20, 20)]
+        options = [[(10, 10, 30, 30)], [(-5, 30, 15, 40)], [(30, 30, 50, 40)], [(60, 0, 80, 10)]]
+        self.assertEqual(pick_spot(options, taken, (100, 100)), 2)  # 0 overlaps, 1 leaves the image
+
+    def test_every_box_of_an_option_must_be_clear(self):
+        taken = [(0, 20, 40, 30)]
+        options = [[(0, 0, 40, 10), (0, 20, 40, 30)], [(0, 40, 40, 50), (0, 60, 40, 70)]]
+        self.assertEqual(pick_spot(options, taken, (100, 100)), 1)
+
+    def test_when_all_are_blocked_the_least_hidden_wins(self):
+        taken = [(0, 0, 100, 10)]
+        options = [[(0, 0, 20, 10)], [(30, 5, 50, 15)], [(-15, 50, 5, 60)]]
+        # hidden: 200 px under the taken box, 100 px under it, 150 px outside the image
+        self.assertEqual(pick_spot(options, taken, (100, 100)), 1)
+
+    def test_map_labels_keep_clear_of_a_landed_drone_and_of_each_other(self):
+        drone = (78, 78, 122, 122)  # the drone's ring, landed on the pad's pin at (100, 100)
+        pins = [(100, 100), (104, 96), (96, 104), (108, 100)]  # a pile of finds around it
+        markers = [(x - 9, y - 9, x + 9, y + 9) for x, y in pins]
+        spots = layout_map_labels(pins, [(60, 12)] * len(pins), [drone, *markers], (300, 300))
+        boxes = [s[3] for s in spots]
+        for i, b in enumerate(boxes):
+            self.assertEqual(overlap_area(b, drone), 0)
+            self.assertTrue(b[0] >= 0 and b[1] >= 0 and b[2] <= 300 and b[3] <= 300, b)
+            for other in boxes[i + 1 :]:
+                self.assertEqual(overlap_area(b, other), 0, (b, other))
+
+    def test_map_labels_stay_inside_the_map(self):
+        right, left = layout_map_labels([(290, 50), (5, 50)], [(60, 12)] * 2, [], (300, 100))
+        self.assertEqual(right[2], "rm")  # next to the right edge the label goes to the left of its pin
+        self.assertLessEqual(right[3][2], 300)
+        self.assertEqual(left[2], "lm")
+        self.assertGreaterEqual(left[3][0], 0)
 
 
 if __name__ == "__main__":
