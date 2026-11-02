@@ -14,7 +14,7 @@ description = "Drone survey mapping and trajectory tracking with Isaac Lab 3.0 (
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [
-    { name = "Hector" },
+    { name = "Hector Lugo" },
 ]
 requires-python = ">=3.12,<3.13"
 dependencies = [
