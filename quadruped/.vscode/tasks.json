@@ -2,11 +2,11 @@
     "version": "2.0.0",
     "tasks": [
         {
-            // This project lives in the conda env `env_isaaclab` (pip --no-deps -e install), not a uv venv:
-            // `uv run` here would try to build a separate .venv. Writes .vscode/settings.json + pyrightconfig.json.
+            // Runs in the Python environment that has Isaac Lab 3.0 and this project installed (activate it before
+            // starting VS Code). Writes .vscode/settings.json, .vscode/launch.json and pyrightconfig.json.
             "label": "setup_python_env",
             "type": "shell",
-            "command": "bash -c 'source ~/anaconda3/etc/profile.d/conda.sh && conda activate env_isaaclab && isaaclab --editor'",
+            "command": "isaaclab --editor",
             "problemMatcher": []
         }
     ]
