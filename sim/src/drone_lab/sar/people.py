@@ -38,7 +38,7 @@ import json
 import math
 import os
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
@@ -123,6 +123,7 @@ class Turn:
     degrees: float
 
     def mirrored(self) -> Turn:
+        """The same turn on the other side of the body."""
         return Turn(_mirror_name(self.joint), _mirror_axis(self.axis), self.degrees)
 
 
@@ -141,6 +142,7 @@ class Ground:
     offset: float = 0.0
 
     def mirrored(self) -> Ground:
+        """The same ground search on the other side of the body."""
         return Ground(
             _mirror_name(self.joint),
             _mirror_axis(self.axis),
@@ -347,6 +349,7 @@ class PoseGeometry:
 
     @property
     def size(self) -> tuple[float, float, float]:
+        """Size (dx, dy, dz) of the posed box [m]."""
         return tuple(float(b - a) for a, b in zip(self.bbox_min, self.bbox_max, strict=True))  # type: ignore[return-value]
 
 
@@ -571,6 +574,7 @@ class CharacterRig:
         return h.hexdigest()
 
     def subtree(self, joint: int) -> list[int]:
+        """Indices of ``joint`` and every joint below it."""
         out, stack = [], [joint]
         while stack:
             j = stack.pop()
@@ -797,6 +801,7 @@ class PoseBaker:
 
     @property
     def rig(self) -> SourceRig:
+        """The Biped rig with every clip of :data:`POSES` (loaded on first use)."""
         if self._rig is None:
             clips = sorted({p.clip for p in POSES.values()} | {la.clip for p in POSES.values() for la in p.layers})
             paths = {c: self.fetch(self._url(f"{ANIMATIONS_DIR}/{c}.skelanim.usd")) for c in clips}
@@ -804,11 +809,13 @@ class PoseBaker:
         return self._rig
 
     def character(self, character_path: str) -> CharacterRig:
+        """Rig of the character at ``character_path`` (relative to the asset root; loaded once)."""
         if character_path not in self._characters:
             self._characters[character_path] = CharacterRig(self.fetch(self._url(character_path)))
         return self._characters[character_path]
 
     def pose(self, character_path: str, pose: str) -> PosedCharacter:
+        """The character in pose ``pose`` (a key of :data:`POSES`), skinned on the CPU."""
         return self.character(character_path).pose(self.rig, POSES[pose])
 
     def usd(self, asset_key: str, character_path: str, pose: str) -> str:
@@ -862,7 +869,7 @@ def write_data(records: dict[str, dict[str, dict]], path: Path = DATA_FILE) -> P
     return path
 
 
-def preview_sheet(baker: PoseBaker, character_path: str, out_png: str, poses=None) -> str:
+def preview_sheet(baker: PoseBaker, character_path: str, out_png: str, poses: Iterable[str] | None = None) -> str:
     """Contact sheet of one character in every pose (matplotlib, front and side views)."""
     import matplotlib
 
@@ -917,6 +924,7 @@ def preview_sheet(baker: PoseBaker, character_path: str, out_png: str, poses=Non
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Command line: bake every person in every pose, print the sizes, optionally write the data file."""
     from isaaclab.utils.assets import retrieve_file_path
 
     from .assets import asset_root, assets_of

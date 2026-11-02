@@ -50,7 +50,7 @@ def reset_root_to_path_start(
     position_offset: tuple[float, float, float] = (0.0, 0.0, 0.0),
     yaw: float = 0.0,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-):
+) -> None:
     """Deterministic reset: place the drone (at rest, level, given yaw) at the start of its survey path."""
     asset: Articulation = env.scene[asset_cfg.name]
     term = env.command_manager.get_term(command_name)

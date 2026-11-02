@@ -1,4 +1,4 @@
-"""Task registration hook for running without ``pip install`` (``--external_callback drone_lab.register.register_tasks``).
+"""Task registration hook for the ``isaaclab`` CLI without ``pip install``.
 
 ``isaaclab train/play`` discover installed projects through the ``isaaclab.tasks`` entry point. Without an
 install, put ``src`` on ``PYTHONPATH`` and pass ``--rl_library rsl_rl --external_callback

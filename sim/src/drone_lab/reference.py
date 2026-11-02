@@ -87,8 +87,8 @@ class ReferenceBank:
         total_speed = speed
         speed = total_speed * torch.cos(alpha)
         phi = torch.zeros(n, device=dev) if deterministic else 2 * math.pi * torch.rand(n, device=dev)
-        direction = torch.ones(n, device=dev) if deterministic else torch.where(
-            torch.rand(n, device=dev) < 0.5, -1.0, 1.0
+        direction = (
+            torch.ones(n, device=dev) if deterministic else torch.where(torch.rand(n, device=dev) < 0.5, -1.0, 1.0)
         )
         amp = torch.zeros(n, 3, self.num_terms, device=dev)
         freq = torch.zeros(n, 3, self.num_terms, device=dev)
@@ -111,9 +111,11 @@ class ReferenceBank:
         if m.any():
             k = int(m.sum())
             ratios = torch.tensor([1.5, 2.0, 3.0], device=dev)
-            r = ratios[torch.zeros(k, dtype=torch.long, device=dev)] if deterministic else ratios[
-                torch.randint(0, 3, (k,), device=dev)
-            ]
+            r = (
+                ratios[torch.zeros(k, dtype=torch.long, device=dev)]
+                if deterministic
+                else ratios[torch.randint(0, 3, (k,), device=dev)]
+            )
             b = size[m] * (0.7 if deterministic else (0.5 + 0.5 * torch.rand(k, device=dev)))
             w = speed[m] / torch.sqrt(size[m] ** 2 + (b * r) ** 2)
             phi2 = torch.zeros(k, device=dev) if deterministic else 2 * math.pi * torch.rand(k, device=dev)

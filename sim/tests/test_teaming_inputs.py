@@ -263,7 +263,7 @@ def test_plan_walk_and_minimap_figures():
     from drone_lab.mapping import GridSpec
     from drone_lab.teaming.inputs import Pin
     from drone_lab.teaming.planner import plan_path
-    from drone_lab.teaming.plots import draw_disc, plot_plan, plot_walk, render_minimap
+    from drone_lab.teaming.plots import plot_plan, plot_walk, render_minimap
     from drone_lab.teaming.traversability import Footprint, compute_traversability
 
     g = GridSpec(0.0, 0.0, 0.2, 60, 60)
@@ -320,8 +320,6 @@ def test_plan_walk_and_minimap_figures():
     assert img.shape == (200, 200, 3) and img.dtype == np.uint8
     c, r = to_px(np.array([plan.path_xy[0, 0]]), np.array([plan.path_xy[0, 1]]))
     assert 0 <= c[0] < 200 and 0 <= r[0] < 200
-    draw_disc(img, float(c[0]), float(r[0]), 4, (255, 0, 0), ring=(255, 255, 255))
-    assert tuple(img[int(r[0]), int(c[0])]) == (255, 0, 0)
 
 
 if __name__ == "__main__":

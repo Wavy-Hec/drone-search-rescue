@@ -24,14 +24,19 @@ import importlib
 import math
 import os
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+from numpy.typing import ArrayLike
 
 from ..paths import Area, cumulative_length, lawnmower
+
+if TYPE_CHECKING:
+    from .scenario import SceneObject
 
 PHASES: tuple[str, ...] = ("takeoff", "transit", "survey", "return", "descent", "touchdown")
 """Mission phases in flight order."""
@@ -55,12 +60,15 @@ class MissionPlan:
     area: tuple[float, float, float, float]
     """Survey rectangle (x_min, x_max, y_min, y_max) [m]."""
     flight_z: float
+    """Survey flight height [m, world]."""
     spacing: float
+    """Lawnmower line spacing [m]."""
     survey_waypoints: tuple[int, int]
     """Index range ``[first, last]`` of the lawnmower waypoints."""
 
     @property
     def length(self) -> float:
+        """Length of the whole path [m]."""
         return float(self.phase_ends[-1])
 
     @property
@@ -73,9 +81,11 @@ class MissionPlan:
         return min(int(np.searchsorted(self.phase_ends, s, side="right")), len(PHASES) - 1)
 
     def phase(self, s: float) -> str:
+        """Name of the phase at carrot arclength ``s``."""
         return PHASES[self.phase_index(s)]
 
     def speed(self, s: float) -> float:
+        """Carrot speed of the phase at arclength ``s`` [m/s]."""
         return self.speeds[self.phase_index(s)]
 
     def waypoint_index(self, s: float) -> int:
@@ -84,6 +94,7 @@ class MissionPlan:
         return min(int(np.searchsorted(cum, s + 1e-6, side="left")), len(self.waypoints) - 1)
 
     def to_dict(self) -> dict[str, Any]:
+        """Plan summary for ``mission.json``: home, area, length and the range and speed of every phase."""
         starts = (0.0, *self.phase_ends[:-1])
         return {
             "home": [round(v, 3) for v in self.home],
@@ -195,10 +206,12 @@ def survey_geometry(
     return out
 
 
-def gt_objects(objects) -> list[dict[str, Any]]:
-    """Labelled objects of a :class:`~drone_lab.sar.scenario.Scenario` in the ground station's ``GT_OBJECTS``
-    format: ``pos`` is the footprint centre on the ground, ``top_z`` the top of the object's box. Trees are
-    unlabelled occluders and left out."""
+def gt_objects(objects: Iterable[SceneObject]) -> list[dict[str, Any]]:
+    """Labelled objects of a :class:`~drone_lab.sar.scenario.Scenario` in the ground station's ``GT_OBJECTS`` format.
+
+    ``pos`` is the footprint centre on the ground, ``top_z`` the top of the object's box. Trees are unlabelled
+    occluders and left out.
+    """
     out = []
     for o in objects:
         if not o.labeled:
@@ -223,7 +236,12 @@ class ClearanceMonitor:
     Only steps in ``phases`` count: take-off and landing come close to the pad on purpose.
     """
 
-    def __init__(self, objects, phases: tuple[str, ...] = FLIGHT_PHASES, skip_categories=("landing_pad",)):
+    def __init__(
+        self,
+        objects: Iterable[SceneObject],
+        phases: tuple[str, ...] = FLIGHT_PHASES,
+        skip_categories: tuple[str, ...] = ("landing_pad",),
+    ):
         kept = [o for o in objects if o.category not in skip_categories]
         self.names = [o.name for o in kept]
         self.lo = np.array([o.aabb_min for o in kept], dtype=np.float64).reshape(-1, 3)
@@ -232,7 +250,7 @@ class ClearanceMonitor:
         self.terrain: dict[str, Any] = {"distance_m": math.inf}
         self.object: dict[str, Any] = {"distance_m": math.inf}
 
-    def update(self, t: float, pos, phase: str, hits=None) -> None:
+    def update(self, t: float, pos: ArrayLike, phase: str, hits: ArrayLike | None = None) -> None:
         """Record one step: drone position ``pos`` (3,), mission ``phase`` and the scanner's ray hits (N, 3)."""
         if phase not in self.phases:
             return
@@ -253,6 +271,8 @@ class ClearanceMonitor:
                 self.object = {"distance_m": float(d[i]), "t": float(t), "drone": p.tolist(), "name": self.names[i]}
 
     def summary(self) -> dict[str, Any]:
+        """Closest approaches for ``mission.json`` (rounded; None where nothing was measured)."""
+
         def clean(d: dict) -> dict:
             out = {k: (round(v, 3) if isinstance(v, float) else v) for k, v in d.items()}
             if "drone" in out:

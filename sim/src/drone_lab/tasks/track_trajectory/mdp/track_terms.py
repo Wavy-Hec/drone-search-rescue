@@ -24,7 +24,9 @@ Observations (world frame; the policy is rewarded for holding yaw at zero, as in
 
 
 def reference_position_error(
-    env: ManagerBasedRLEnv, command_name: str = "reference", clip: float = 2.0,
+    env: ManagerBasedRLEnv,
+    command_name: str = "reference",
+    clip: float = 2.0,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
     """Drone position minus reference position [m], clipped per axis. Shape (num_envs, 3)."""
@@ -33,7 +35,9 @@ def reference_position_error(
 
 
 def reference_velocity_error(
-    env: ManagerBasedRLEnv, command_name: str = "reference", clip: float = 3.0,
+    env: ManagerBasedRLEnv,
+    command_name: str = "reference",
+    clip: float = 3.0,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
     """Drone world linear velocity minus reference velocity [m/s], clipped per axis. Shape (num_envs, 3)."""
@@ -42,7 +46,9 @@ def reference_velocity_error(
 
 
 def reference_lookahead(
-    env: ManagerBasedRLEnv, command_name: str = "reference", clip: float = 3.0,
+    env: ManagerBasedRLEnv,
+    command_name: str = "reference",
+    clip: float = 3.0,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
     """Look-ahead reference points relative to the drone [m], clipped. Shape (num_envs, 3 * n_lookahead)."""
@@ -64,7 +70,7 @@ def reset_near_reference(
     attitude_noise: float = 0.26,
     velocity_noise: float = 0.2,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-):
+) -> None:
     """Draw a new reference and place the drone near its start (position, attitude and velocity noise)."""
     asset: Articulation = env.scene[asset_cfg.name]
     term = _term(env, command_name)
@@ -92,7 +98,9 @@ Rewards.
 
 
 def reference_tracking_exp(
-    env: ManagerBasedRLEnv, command_name: str = "reference", std: float = 0.5,
+    env: ManagerBasedRLEnv,
+    command_name: str = "reference",
+    std: float = 0.5,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
     """``exp(-|p - p_ref|^2 / std^2)``."""
@@ -102,7 +110,9 @@ def reference_tracking_exp(
 
 
 def reference_velocity_exp(
-    env: ManagerBasedRLEnv, command_name: str = "reference", std: float = 1.0,
+    env: ManagerBasedRLEnv,
+    command_name: str = "reference",
+    std: float = 1.0,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
     """``exp(-|v - v_ref|^2 / std^2)`` (world frame)."""
@@ -117,7 +127,9 @@ Terminations.
 
 
 def reference_too_far(
-    env: ManagerBasedRLEnv, command_name: str = "reference", max_distance: float = 2.5,
+    env: ManagerBasedRLEnv,
+    command_name: str = "reference",
+    max_distance: float = 2.5,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
     """True when the drone is more than ``max_distance`` from the reference."""

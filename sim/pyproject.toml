@@ -108,6 +108,10 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
+[tool.ruff.lint.flake8-bugbear]
+# Isaac Lab MDP terms take their scene entity as a default argument: SceneEntityCfg("robot"), read-only.
+extend-immutable-calls = ["isaaclab.managers.SceneEntityCfg"]
+
 [tool.ruff.lint.isort]
 known-first-party = ["drone_lab"]
 section-order = [
@@ -153,6 +157,7 @@ markers = [
 
 [tool.codespell]
 skip = "*.usd,*.usda,*.usdc,*.json,*.onnx,*.pt,*.mp4,*.data,uv.lock,logs"
+ignore-words-list = "fo,nd,shepperd,trun"
 
 [[tool.uv.index]]
 url = "https://pypi.nvidia.com"
@@ -167,4 +172,3 @@ explicit = true
 name = "pytorch-cu130"
 url = "https://download.pytorch.org/whl/cu130"
 explicit = true
-

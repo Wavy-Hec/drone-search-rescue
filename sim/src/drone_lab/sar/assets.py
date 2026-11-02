@@ -1,10 +1,9 @@
 """Verified assets of the search-and-rescue (SAR) scene: URLs, units, measured sizes and semantic classes.
 
 Every entry below was downloaded from the Isaac Sim 6.2 asset bucket on 2026-11-01 and measured with ``pxr``
-(stage ``metersPerUnit`` / ``upAxis`` and the extents of the mesh points in the rest pose). The measurement
-scripts and their raw output live in ``~/isaac_ws/runs/2026-11-01_drones/sar_scene/asset_measurements/``.
+(stage ``metersPerUnit`` / ``upAxis`` and the extents of the mesh points in the rest pose).
 
-Findings that shape the scene code:
+What the measurements mean for the scene code:
 
 * People (``Isaac/People/Characters/*``): metres, Z-up, origin between the feet, feet at z = 0, facing -Y, in a
   T-pose (arm span 1.56-1.87 m, height 1.61-1.80 m, front-to-back 0.35-0.43 m). No semantics, no colliders.
@@ -83,6 +82,7 @@ class AssetSpec:
 
     @property
     def url(self) -> str:
+        """Full URL under :func:`asset_root`."""
         return f"{asset_root()}/{self.path}"
 
     @property
@@ -285,6 +285,7 @@ class GroundMaterial:
 
     @property
     def url(self) -> str:
+        """Full URL under :func:`asset_root`."""
         return f"{asset_root()}/{self.path}"
 
 

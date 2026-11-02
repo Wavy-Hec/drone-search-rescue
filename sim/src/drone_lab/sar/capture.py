@@ -54,6 +54,7 @@ class View:
     target: str | None = None
 
     def to_dict(self) -> dict:
+        """Fields for the frame JSON (lengths rounded to mm, angles to 1e-5 rad)."""
         d = asdict(self)
         for key in ("x", "y", "z", "agl"):
             d[key] = round(d[key], 3)
@@ -75,9 +76,11 @@ class Lighting:
 
     @property
     def sky_rotation_deg(self) -> float:
+        """Sky-dome rotation that turns the HDRI's own sun to ``sun_azimuth_deg`` [deg]."""
         return self.sun_azimuth_deg - SUN_AZIMUTH_DEG
 
     def to_dict(self) -> dict:
+        """Fields for the frame JSON (floats rounded)."""
         d = asdict(self)
         return {k: (round(v, 3) if isinstance(v, float) else v) for k, v in d.items()}
 
@@ -93,13 +96,16 @@ class GroundLook:
     name: str = "default"
 
     def albedo_brightness(self, material: str) -> float:
+        """OmniPBR albedo multiplier of ``material`` in this look."""
         base = GROUND_MATERIALS[material].albedo_brightness
         return (1.0 if base is None else base) * self.brightness[material]
 
     def scaled_texture(self, material: str) -> float:
+        """OmniPBR texture scale of ``material`` in this look."""
         return GROUND_MATERIALS[material].texture_scale * self.texture_scale[material]
 
     def to_dict(self) -> dict:
+        """Fields for the site JSON (multipliers rounded)."""
         return {
             "name": self.name,
             "materials": dict(self.materials),
@@ -222,7 +228,9 @@ def mission_views(
 # ---------------------------------------------------------------------------------------------------------------
 
 
-def sample_lighting(rng: np.random.Generator, default_fraction: float = 0.3, overcast_fraction: float = 0.15):
+def sample_lighting(
+    rng: np.random.Generator, default_fraction: float = 0.3, overcast_fraction: float = 0.15
+) -> Lighting:
     """The mission's sun (``default_fraction``), an overcast sky, or a sun from another azimuth and strength."""
     u = float(rng.uniform())
     if u < default_fraction:

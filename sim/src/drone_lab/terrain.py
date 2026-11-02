@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import contextlib
 import zlib
+from collections.abc import Iterator
 from dataclasses import MISSING
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -30,13 +32,18 @@ from isaaclab.terrains.height_field import (
     HfRandomUniformTerrainCfg,
     HfTerrainBaseCfg,
     HfWaveTerrainCfg,
+    hf_terrains,
 )
-from isaaclab.terrains.height_field import hf_terrains
 from isaaclab.terrains.height_field.utils import height_field_to_mesh
 from isaaclab.terrains.trimesh import MeshPyramidStairsTerrainCfg
 from isaaclab.utils import configclass
 
 from .paths import Area
+
+if TYPE_CHECKING:
+    import trimesh
+
+    from isaaclab.terrains import SubTerrainBaseCfg
 
 __all__ = [
     "SURVEY_TERRAIN_CFG",
@@ -47,7 +54,7 @@ __all__ = [
 ]
 
 
-def tile_seed(cfg, difficulty: float) -> int:
+def tile_seed(cfg: SubTerrainBaseCfg, difficulty: float) -> int:
     """Deterministic 32-bit seed of one sub-terrain tile from its config seed, difficulty and type."""
     base = 0 if getattr(cfg, "seed", None) is None else int(cfg.seed)
     name = zlib.crc32(type(cfg).__name__.encode())
@@ -55,7 +62,7 @@ def tile_seed(cfg, difficulty: float) -> int:
 
 
 @contextlib.contextmanager
-def numpy_seed(seed: int):
+def numpy_seed(seed: int) -> Iterator[None]:
     """Temporarily seed numpy's global RNG and restore its previous state on exit."""
     state = np.random.get_state()
     np.random.seed(seed % (2**32))
@@ -65,7 +72,9 @@ def numpy_seed(seed: int):
         np.random.set_state(state)
 
 
-def seeded_random_uniform_terrain(difficulty: float, cfg: HfRandomUniformTerrainCfg):
+def seeded_random_uniform_terrain(
+    difficulty: float, cfg: HfRandomUniformTerrainCfg
+) -> tuple[list[trimesh.Trimesh], np.ndarray]:
     """:func:`isaaclab.terrains.height_field.hf_terrains.random_uniform_terrain` with a per-tile seed."""
     with numpy_seed(tile_seed(cfg, difficulty)):
         return hf_terrains.random_uniform_terrain(difficulty, cfg)
@@ -79,7 +88,7 @@ class SeededHfRandomUniformTerrainCfg(HfRandomUniformTerrainCfg):
 
 
 @height_field_to_mesh
-def stepped_blocks_terrain(difficulty: float, cfg: SteppedBlocksTerrainCfg):
+def stepped_blocks_terrain(difficulty: float, cfg: SteppedBlocksTerrainCfg) -> tuple[np.ndarray, np.ndarray]:
     """Rectangular blocks of quantised heights, stacked where they overlap ("small town" / stepped boxes).
 
     The tallest block height grows with ``difficulty`` from ``height_range[0]`` to ``height_range[1]``.

@@ -83,6 +83,7 @@ PLOT_FILES = ("map_with_trajectory.png", "map_error.png", "map_3d.png", "altitud
 
 
 def get_theme(name: str = "light") -> Theme:
+    """Figure colours by name: ``"light"`` or ``"dark"``."""
     if name not in THEMES:
         raise ValueError(f"theme must be one of {sorted(THEMES)}")
     return THEMES[name]
@@ -140,14 +141,23 @@ def _scale_bar(ax, theme: Theme, x0: float, y0: float, span: float):
     length = max([n for n in nice if n <= 0.3 * span] or [nice[0]])
     h = 0.010 * span
     ax.add_patch(Rectangle((x0, y0), length, h, color=theme.ink, lw=0, zorder=6, clip_on=False))
-    ax.text(x0 + length + 0.015 * span, y0 + 0.5 * h, f"{length:g} m", ha="left", va="center", fontsize=8,
-            color=theme.ink, zorder=6, clip_on=False)
+    ax.text(
+        x0 + length + 0.015 * span,
+        y0 + 0.5 * h,
+        f"{length:g} m",
+        ha="left",
+        va="center",
+        fontsize=8,
+        color=theme.ink,
+        zorder=6,
+        clip_on=False,
+    )
 
 
 def _plan_and_paths(ax, run: SurveyRun, theme: Theme, *, with_markers: bool = True):
     """Planned paths (dashed ink) and flown trajectories (solid, categorical) on a top-down map."""
     handles = []
-    for i, plan in enumerate(run.planned):
+    for plan in run.planned:
         ax.plot(plan[:, 0], plan[:, 1], color=theme.ink, lw=0.8, ls=(0, (4, 3)), alpha=0.9, zorder=3)
     if run.planned:
         handles.append(Line2D([], [], color=theme.ink, lw=0.8, ls=(0, (4, 3)), label="planned path"))
@@ -166,17 +176,20 @@ def _plan_and_paths(ax, run: SurveyRun, theme: Theme, *, with_markers: bool = Tr
         elif k == len(theme.series):
             handles.append(Line2D([], [], color=theme.ink_muted, lw=1.6, label="other drones"))
     if with_markers:
-        handles.append(Line2D([], [], ls="", marker="o", ms=6, mfc=theme.ink_secondary, mec=theme.surface,
-                              label="start"))
-        handles.append(Line2D([], [], ls="", marker="s", ms=5.5, mfc=theme.ink_secondary, mec=theme.surface,
-                              label="end"))
+        handles.append(
+            Line2D([], [], ls="", marker="o", ms=6, mfc=theme.ink_secondary, mec=theme.surface, label="start")
+        )
+        handles.append(
+            Line2D([], [], ls="", marker="s", ms=5.5, mfc=theme.ink_secondary, mec=theme.surface, label="end")
+        )
     return handles
 
 
 def _area_outline(ax, area: Area, theme: Theme):
     ax.add_patch(
-        Rectangle((area.x_min, area.y_min), area.width, area.height, fill=False, ec=theme.ink_secondary, lw=0.6,
-                  zorder=2)
+        Rectangle(
+            (area.x_min, area.y_min), area.width, area.height, fill=False, ec=theme.ink_secondary, lw=0.6, zorder=2
+        )
     )
 
 
@@ -200,8 +213,15 @@ def _outline_cells(ax, mask: np.ndarray, grid: GridSpec, theme: Theme, zorder: f
     r = grid.resolution
     xs = np.concatenate([[xs[0] - r], xs, [xs[-1] + r]])
     ys = np.concatenate([[ys[0] - r], ys, [ys[-1] + r]])
-    cs = ax.contour(xs, ys, np.pad(mask.astype(float), 1), levels=[0.5], colors=[theme.ink_secondary],
-                    linewidths=NO_HITS_LINEWIDTH, zorder=zorder)
+    cs = ax.contour(
+        xs,
+        ys,
+        np.pad(mask.astype(float), 1),
+        levels=[0.5],
+        colors=[theme.ink_secondary],
+        linewidths=NO_HITS_LINEWIDTH,
+        zorder=zorder,
+    )
     cs.set_path_effects(_halo(theme, 2.6))
     return True
 
@@ -211,8 +231,17 @@ def _no_hits_handle(theme: Theme) -> Patch:
 
 
 def _legend(ax, handles, theme: Theme, loc="upper right", ncol=1):
-    leg = ax.legend(handles=handles, loc=loc, ncol=ncol, fontsize=8, frameon=True, facecolor=theme.surface,
-                    edgecolor=theme.grid, framealpha=0.92, labelcolor=theme.ink_secondary)
+    leg = ax.legend(
+        handles=handles,
+        loc=loc,
+        ncol=ncol,
+        fontsize=8,
+        frameon=True,
+        facecolor=theme.surface,
+        edgecolor=theme.grid,
+        framealpha=0.92,
+        labelcolor=theme.ink_secondary,
+    )
     leg.get_frame().set_linewidth(0.6)
     return leg
 
@@ -220,8 +249,17 @@ def _legend(ax, handles, theme: Theme, loc="upper right", ncol=1):
 def _figure_legend(fig, handles, theme: Theme, y: float = 0.895):
     """One legend row under the subtitle, above the plot."""
     ncol = len(handles) if len(handles) <= 6 else -(-len(handles) // 2)
-    leg = fig.legend(handles=handles, loc="center left", bbox_to_anchor=(0.085, y), ncol=ncol,
-                     fontsize=8, frameon=False, labelcolor=theme.ink_secondary, handlelength=2.2, columnspacing=1.4)
+    leg = fig.legend(
+        handles=handles,
+        loc="center left",
+        bbox_to_anchor=(0.085, y),
+        ncol=ncol,
+        fontsize=8,
+        frameon=False,
+        labelcolor=theme.ink_secondary,
+        handlelength=2.2,
+        columnspacing=1.4,
+    )
     return leg
 
 
@@ -256,8 +294,16 @@ def plot_map_with_trajectory(run: SurveyRun, out_path: str | Path, theme: Theme 
     ax = fig.add_axes([0.09, 0.07, 0.74, 0.76])
     _style_axes(ax, theme)
     vmin, vmax = _elevation_limits(run.elevation, run.ground_truth)
-    im = ax.imshow(run.elevation, origin="lower", extent=run.grid.extent, cmap=_elevation_cmap(theme), vmin=vmin,
-                   vmax=vmax, interpolation="nearest", zorder=1)
+    im = ax.imshow(
+        run.elevation,
+        origin="lower",
+        extent=run.grid.extent,
+        cmap=_elevation_cmap(theme),
+        vmin=vmin,
+        vmax=vmax,
+        interpolation="nearest",
+        zorder=1,
+    )
     _area_outline(ax, run.area, theme)
     has_holes = _outline_cells(ax, _no_hit_cells(run), run.grid, theme)
     handles = _plan_and_paths(ax, run, theme)
@@ -308,8 +354,15 @@ def plot_map_error(run: SurveyRun, out_path: str | Path, theme: Theme = LIGHT) -
     fig = _new_figure(theme, (11.0, 5.6))
     ax = fig.add_axes([0.06, 0.11, 0.48, 0.74])
     _style_axes(ax, theme)
-    im = ax.imshow(np.where(in_area, diff, np.nan), origin="lower", extent=run.grid.extent,
-                   cmap=_diverging_cmap(theme), vmin=-lim, vmax=lim, interpolation="nearest")
+    im = ax.imshow(
+        np.where(in_area, diff, np.nan),
+        origin="lower",
+        extent=run.grid.extent,
+        cmap=_diverging_cmap(theme),
+        vmin=-lim,
+        vmax=lim,
+        interpolation="nearest",
+    )
     _area_outline(ax, run.area, theme)
     ax.set_aspect("equal")
     ax.set_xlim(run.area.x_min - 1, run.area.x_max + 1)
@@ -340,12 +393,23 @@ def plot_map_error(run: SurveyRun, out_path: str | Path, theme: Theme = LIGHT) -
     at_hits = map_summary.get("error_area_at_hits") or {}
     if stats["n_cells"] and at_hits.get("rmse") is not None:
         txt += f"\n\nvs terrain under\nthe same rays:\nRMSE {at_hits['rmse']:.3f} m"
-    hx.text(0.97, 0.96, txt, transform=hx.transAxes, ha="right", va="top", fontsize=8.5, color=theme.ink,
-            bbox=dict(facecolor=theme.surface, edgecolor=theme.grid, lw=0.6, boxstyle="round,pad=0.4"))
+    hx.text(
+        0.97,
+        0.96,
+        txt,
+        transform=hx.transAxes,
+        ha="right",
+        va="top",
+        fontsize=8.5,
+        color=theme.ink,
+        bbox=dict(facecolor=theme.surface, edgecolor=theme.grid, lw=0.6, boxstyle="round,pad=0.4"),
+    )
     smooth = map_summary.get("error_area_smooth") or {}
     n_area = int(in_area.sum())
-    sub = (f"red = map too high, blue = too low · {n_area - int(holes.sum()):,} of {n_area:,} cells "
-           f"({run.grid.resolution:g} m) have ray hits")
+    sub = (
+        f"red = map too high, blue = too low · {n_area - int(holes.sum()):,} of {n_area:,} cells "
+        f"({run.grid.resolution:g} m) have ray hits"
+    )
     if smooth.get("rmse") is not None:
         sub += f" · RMSE away from steps/walls {smooth['rmse']:.3f} m"
     _title(fig, theme, "Elevation map error", sub)
@@ -374,8 +438,9 @@ def plot_map_3d(run: SurveyRun, out_path: str | Path, theme: Theme = LIGHT, max_
     ls = LightSource(azdeg=315, altdeg=40)
     norm = (np.clip(Z, vmin, vmax) - vmin) / max(vmax - vmin, 1e-6)
     rgb = ls.shade_rgb(_elevation_cmap(theme)(norm)[..., :3], Z, vert_exag=1.0, blend_mode="soft")
-    ax.plot_surface(X, Y, Z, facecolors=rgb, rstride=1, cstride=1, linewidth=0, antialiased=False, shade=False,
-                    zorder=1)
+    ax.plot_surface(
+        X, Y, Z, facecolors=rgb, rstride=1, cstride=1, linewidth=0, antialiased=False, shade=False, zorder=1
+    )
     handles = []
     for plan in run.planned:
         ax.plot(plan[:, 0], plan[:, 1], plan[:, 2], color=theme.ink, lw=0.7, ls=(0, (4, 3)), alpha=0.8, zorder=3)
@@ -387,10 +452,30 @@ def plot_map_3d(run: SurveyRun, out_path: str | Path, theme: Theme = LIGHT, max_
             continue
         color = _series_color(theme, k)
         ax.plot(tr["x"], tr["y"], tr["z"], color=color, lw=1.3, zorder=4)
-        ax.scatter([tr["x"][0]], [tr["y"][0]], [tr["z"][0]], color=color, s=28, marker="o",
-                   edgecolors=theme.surface, linewidths=1.0, depthshade=False, zorder=5)
-        ax.scatter([tr["x"][-1]], [tr["y"][-1]], [tr["z"][-1]], color=color, s=26, marker="s",
-                   edgecolors=theme.surface, linewidths=1.0, depthshade=False, zorder=5)
+        ax.scatter(
+            [tr["x"][0]],
+            [tr["y"][0]],
+            [tr["z"][0]],
+            color=color,
+            s=28,
+            marker="o",
+            edgecolors=theme.surface,
+            linewidths=1.0,
+            depthshade=False,
+            zorder=5,
+        )
+        ax.scatter(
+            [tr["x"][-1]],
+            [tr["y"][-1]],
+            [tr["z"][-1]],
+            color=color,
+            s=26,
+            marker="s",
+            edgecolors=theme.surface,
+            linewidths=1.0,
+            depthshade=False,
+            zorder=5,
+        )
         if k < len(theme.series):
             label = "flown trajectory" if len(run.env_ids()) == 1 else f"drone {env_id}"
             handles.append(Line2D([], [], color=color, lw=1.6, label=label))
@@ -456,14 +541,23 @@ def plot_altitude_profile(run: SurveyRun, out_path: str | Path, theme: Theme = L
             handles.append(Line2D([], [], color=color, lw=1.6, label=label))
         elif k == len(theme.series):
             handles.append(Line2D([], [], color=theme.ink_muted, lw=1.6, label="other drones"))
-    handles.append(Patch(facecolor=theme.ink_muted, alpha=0.35, edgecolor=theme.ink_muted, lw=0.6,
-                         label="terrain below the drone"))
+    handles.append(
+        Patch(facecolor=theme.ink_muted, alpha=0.35, edgecolor=theme.ink_muted, lw=0.6, label="terrain below the drone")
+    )
     _figure_legend(fig, handles, theme, y=0.893)
 
     def reference(ax, value, text, top_value):
         ax.axhline(value, color=theme.ink_secondary, lw=0.8, ls=(0, (4, 3)), zorder=3)
-        ax.text(0.995, value, f"{text} ", transform=ax.get_yaxis_transform(), ha="right", va="bottom",
-                fontsize=8, color=theme.ink_secondary)
+        ax.text(
+            0.995,
+            value,
+            f"{text} ",
+            transform=ax.get_yaxis_transform(),
+            ha="right",
+            va="bottom",
+            fontsize=8,
+            color=theme.ink_secondary,
+        )
         ax.set_ylim(0, max(top_value, value) * 1.25)
 
     v = s.get("commanded_speed_mps")
@@ -516,8 +610,15 @@ def plot_area_preview(
     ax = fig.add_axes([0.09, 0.07, 0.74, 0.76])
     _style_axes(ax, theme)
     vmin, vmax = _elevation_limits(ground_truth)
-    im = ax.imshow(ground_truth, origin="lower", extent=grid.extent, cmap=_elevation_cmap(theme), vmin=vmin,
-                   vmax=vmax, interpolation="nearest")
+    im = ax.imshow(
+        ground_truth,
+        origin="lower",
+        extent=grid.extent,
+        cmap=_elevation_cmap(theme),
+        vmin=vmin,
+        vmax=vmax,
+        interpolation="nearest",
+    )
     _area_outline(ax, area, theme)
     handles = []
     for k, plan in enumerate(planned):
@@ -525,12 +626,19 @@ def plot_area_preview(
         ax.plot(plan[:, 0], plan[:, 1], color=color, lw=1.0, ls=(0, (4, 3)), zorder=3, path_effects=_halo(theme))
         ax.plot(plan[0, 0], plan[0, 1], "o", ms=6.5, mfc=color, mec=theme.surface, mew=1.0, zorder=5)
         if k < len(theme.series):
-            handles.append(Line2D([], [], color=color, lw=1.2, ls=(0, (4, 3)),
-                                  label="planned path" if len(planned) == 1 else f"drone {k} plan"))
+            handles.append(
+                Line2D(
+                    [],
+                    [],
+                    color=color,
+                    lw=1.2,
+                    ls=(0, (4, 3)),
+                    label="planned path" if len(planned) == 1 else f"drone {k} plan",
+                )
+            )
         elif k == len(theme.series):
             handles.append(Line2D([], [], color=theme.ink_muted, lw=1.2, ls=(0, (4, 3)), label="other drones"))
-    handles.append(Line2D([], [], ls="", marker="o", ms=6, mfc=theme.ink_secondary, mec=theme.surface,
-                          label="start"))
+    handles.append(Line2D([], [], ls="", marker="o", ms=6, mfc=theme.ink_secondary, mec=theme.surface, label="start"))
     handles.append(Line2D([], [], color=theme.ink_secondary, lw=0.6, label="survey area"))
     _figure_legend(fig, handles, theme)
     y_lo, y_hi = grid.y_min, grid.y_max
@@ -538,8 +646,9 @@ def plot_area_preview(
     ax.set_aspect("equal")
     ax.set_xlim(grid.x_min, grid.x_max)
     ax.set_ylim(y_lo, y_hi)
-    _scale_bar(ax, theme, grid.x_min + 0.02 * (grid.x_max - grid.x_min), y_lo + 0.025 * (y_hi - y_lo),
-               grid.x_max - grid.x_min)
+    _scale_bar(
+        ax, theme, grid.x_min + 0.02 * (grid.x_max - grid.x_min), y_lo + 0.025 * (y_hi - y_lo), grid.x_max - grid.x_min
+    )
     ax.set_xlabel("x [m]")
     ax.set_ylabel("y [m]")
     cax = fig.add_axes([0.85, 0.07, 0.025, 0.76])
@@ -560,7 +669,8 @@ def make_all_plots(run_dir: str | Path, theme: str = "light") -> list[Path]:
     th = get_theme(theme)
     suffix = "" if theme == "light" else f"_{theme}"
     out = []
-    for name, fn in zip(PLOT_FILES, (plot_map_with_trajectory, plot_map_error, plot_map_3d, plot_altitude_profile)):
+    plotters = (plot_map_with_trajectory, plot_map_error, plot_map_3d, plot_altitude_profile)
+    for name, fn in zip(PLOT_FILES, plotters, strict=True):
         stem, ext = name.rsplit(".", 1)
         out.append(fn(run, run.run_dir / f"{stem}{suffix}.{ext}", th))
     return out
@@ -588,8 +698,18 @@ def plot_trajectory_tracking(
     ax3.computed_zorder = False
     ax3.plot(reference[:, 0], reference[:, 1], reference[:, 2], color=theme.ink, lw=0.8, ls=(0, (4, 3)), zorder=2)
     ax3.plot(flown[:, 0], flown[:, 1], flown[:, 2], color=color, lw=1.2, zorder=3)
-    ax3.scatter([flown[0, 0]], [flown[0, 1]], [flown[0, 2]], color=color, s=26, marker="o",
-                edgecolors=theme.surface, linewidths=1.0, depthshade=False, zorder=4)
+    ax3.scatter(
+        [flown[0, 0]],
+        [flown[0, 1]],
+        [flown[0, 2]],
+        color=color,
+        s=26,
+        marker="o",
+        edgecolors=theme.surface,
+        linewidths=1.0,
+        depthshade=False,
+        zorder=4,
+    )
     for axis in (ax3.xaxis, ax3.yaxis, ax3.zaxis):
         axis.set_pane_color(matplotlib.colors.to_rgba(theme.surface, 1.0))
         axis._axinfo["grid"]["color"] = matplotlib.colors.to_rgba(theme.grid, 1.0)
@@ -616,8 +736,16 @@ def plot_trajectory_tracking(
     _style_axes(axe, theme, grid=True)
     axe.plot(t, err, color=color, lw=1.0, zorder=3)
     axe.axhline(rmse, color=theme.ink_secondary, lw=0.8, ls=(0, (4, 3)), zorder=2)
-    axe.text(0.995, rmse, f"RMSE {rmse:.3f} m ", transform=axe.get_yaxis_transform(), ha="right", va="bottom",
-             fontsize=8, color=theme.ink_secondary)
+    axe.text(
+        0.995,
+        rmse,
+        f"RMSE {rmse:.3f} m ",
+        transform=axe.get_yaxis_transform(),
+        ha="right",
+        va="bottom",
+        fontsize=8,
+        color=theme.ink_secondary,
+    )
     axe.set_ylim(0, max(float(err.max()) if len(err) else 1.0, rmse) * 1.2)
     axe.set_xlim(t.min(), t.max())
     axe.set_xlabel("Time [s]")

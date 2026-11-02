@@ -12,8 +12,9 @@ Colour roles follow :mod:`drone_lab.plotting` (same validated palette and ink to
 
 from __future__ import annotations
 
-import math
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import matplotlib
 
@@ -30,6 +31,11 @@ from drone_lab.plotting import Theme, get_theme  # noqa: E402
 
 from .planner import PlanResult  # noqa: E402
 from .traversability import TraversabilityMap  # noqa: E402
+
+if TYPE_CHECKING:
+    from numpy.typing import ArrayLike
+
+    from .inputs import Pin
 
 __all__ = ["BLUE_SEQUENTIAL", "STATUS_CRITICAL", "STATUS_GOOD", "plot_plan", "plot_walk", "render_minimap"]
 
@@ -110,7 +116,7 @@ def _view_bounds(tmap: TraversabilityMap, pts: list[np.ndarray], margin: float, 
     return x0, x1, y0, y1
 
 
-def _draw_pins(ax, th: Theme, pins, goal_pin, *, footprints=True, labels=True):
+def _draw_pins(ax, th: Theme, pins, goal_pin, *, labels=True):
     goal_id = None if goal_pin is None else goal_pin.id
     for p in pins:
         is_goal = goal_id is not None and p.id == goal_id
@@ -212,8 +218,8 @@ def plot_plan(
     plan: PlanResult,
     out_path: str | Path,
     *,
-    pins=(),
-    goal_pin=None,
+    pins: Sequence[Pin] = (),
+    goal_pin: Pin | None = None,
     source: str = "",
     robot: str = "Go2",
     theme: str | Theme = "light",
@@ -341,8 +347,8 @@ def plot_walk(
     walk: dict,
     out_path: str | Path,
     *,
-    pins=(),
-    goal_pin=None,
+    pins: Sequence[Pin] = (),
+    goal_pin: Pin | None = None,
     summary: dict | None = None,
     theme: str | Theme = "light",
     robot: str = "Go2",
@@ -490,12 +496,12 @@ def render_minimap(
     tmap: TraversabilityMap,
     plan: PlanResult,
     *,
-    pins=(),
-    goal_pin=None,
+    pins: Sequence[Pin] = (),
+    goal_pin: Pin | None = None,
     size_px: int = 300,
     margin_m: float = 3.0,
     theme: str | Theme = "light",
-):
+) -> tuple[np.ndarray, Callable[[ArrayLike, ArrayLike], tuple[np.ndarray, np.ndarray]]]:
     """Square minimap image of the route for the video inset.
 
     Returns:
@@ -523,7 +529,7 @@ def render_minimap(
         interpolation="nearest",
     )
     _route(ax, th, plan.path_xy, th.series[1], lw=2.0)
-    _draw_pins(ax, th, pins, goal_pin, footprints=False, labels=False)
+    _draw_pins(ax, th, pins, goal_pin, labels=False)
     if goal_pin is None:
         ax.plot(*plan.goal_xy, marker="*", ms=12, color=th.ink, mec=th.surface, mew=1.0)
     ax.set_xlim(view[0], view[1])
@@ -539,25 +545,9 @@ def render_minimap(
     span = max(x1 - x0, y1 - y0)
     cx, cy = 0.5 * (x0 + x1), 0.5 * (y0 + y1)
 
-    def to_pixel(x, y):
+    def to_pixel(x: ArrayLike, y: ArrayLike) -> tuple[np.ndarray, np.ndarray]:
         col = (np.asarray(x) - (cx - 0.5 * span)) / span * w
         row = (1.0 - (np.asarray(y) - (cy - 0.5 * span)) / span) * h
         return col, row
 
     return rgb, to_pixel
-
-
-def draw_disc(img: np.ndarray, col: float, row: float, radius: float, color, ring=None, ring_px: float = 2.0):
-    """Draw a filled disc (optionally with a ring) into an RGB uint8 image in place."""
-    h, w = img.shape[:2]
-    r_out = radius + (ring_px if ring is not None else 0.0)
-    r0, r1 = int(max(0, math.floor(row - r_out))), int(min(h, math.ceil(row + r_out) + 1))
-    c0, c1 = int(max(0, math.floor(col - r_out))), int(min(w, math.ceil(col + r_out) + 1))
-    if r0 >= r1 or c0 >= c1:
-        return img
-    yy, xx = np.mgrid[r0:r1, c0:c1]
-    d = np.hypot(yy - row, xx - col)
-    if ring is not None:
-        img[r0:r1, c0:c1][d <= r_out] = np.asarray(ring, dtype=np.uint8)
-    img[r0:r1, c0:c1][d <= radius] = np.asarray(color, dtype=np.uint8)
-    return img

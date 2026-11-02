@@ -18,7 +18,9 @@ import numpy as np
 import torch
 
 
-def pad_paths(paths: list[np.ndarray], ds: float, device: str | torch.device = "cpu"):
+def pad_paths(
+    paths: list[np.ndarray], ds: float, device: str | torch.device = "cpu"
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Resample variable-length paths and pack them into padded tensors.
 
     Every path is resampled at <= ``ds`` spacing; shorter paths are padded with their last point (and a
@@ -44,7 +46,9 @@ def pad_paths(paths: list[np.ndarray], ds: float, device: str | torch.device = "
     return pts_t, arc_t, arc_t[:, -1].clone()
 
 
-def interpolate_path(points: torch.Tensor, arclength: torch.Tensor, s: torch.Tensor):
+def interpolate_path(
+    points: torch.Tensor, arclength: torch.Tensor, s: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Point at arclength ``s`` on every (padded) path.
 
     Args:
@@ -79,15 +83,15 @@ def advance_carrot(
     dt: float,
     max_lead: float,
     slow_lead: float | None = None,
-):
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Move the carrot along the path at ``speed`` without letting it run away from the drone.
 
     The nominal step ``speed * dt`` is scaled by a gate that is 1 while the drone-carrot distance is below
     ``slow_lead`` and falls linearly to 0 at ``max_lead``. A step that would put the carrot more than
     ``max_lead`` away from the drone is shortened to ``max_lead - distance``: the carrot moves at most that far
     along the path, and a chord is never longer than its arc, so it stays within ``max_lead``. (Rejecting the
-    whole step instead made the carrot stop-and-go once ``speed * dt > max_lead - slow_lead``, e.g. above 3 m/s
-    with the defaults, and stall for good at ``speed * dt >= max_lead``.)
+    whole step instead would make the carrot stop and go once ``speed * dt > max_lead - slow_lead``, e.g. above
+    3 m/s with the defaults, and stall for good at ``speed * dt >= max_lead``.)
 
     Args:
         s: (E,) current carrot arclength.

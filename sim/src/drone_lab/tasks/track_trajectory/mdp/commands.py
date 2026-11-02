@@ -54,9 +54,10 @@ class TrajectoryReferenceCommand(CommandTerm):
 
     @property
     def command(self) -> torch.Tensor:
+        """Reference position, velocity and look-ahead points (world frame), shape (num_envs, 6 + 3 * L)."""
         return torch.cat([self.ref_pos_w, self.ref_vel_w, self.lookahead_w.flatten(1)], dim=-1)
 
-    def sample_reference(self, env_ids: torch.Tensor):
+    def sample_reference(self, env_ids: torch.Tensor) -> None:
         """Draw new trajectories for ``env_ids`` (and mark them so the next reset does not redraw them)."""
         c = self.cfg
         self.bank.sample(

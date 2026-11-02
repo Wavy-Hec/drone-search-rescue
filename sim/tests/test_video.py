@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-
 from _runner import main_for
 
 from drone_lab.video import capture_frame, find_kit_visualizer, playback_speedup, realtime_fps

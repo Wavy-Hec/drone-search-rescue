@@ -21,8 +21,8 @@ def reset_root_on_route(
     command_name: str = "base_velocity",
     xy_jitter: float = 0.0,
     yaw_jitter: float = 0.0,
-    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),  # noqa: B008 (Isaac Lab term idiom)
-):
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> None:
     """Place the robot on its route, at rest, facing along it.
 
     At the first reset (and after a time-out) that is the start of the route; after a fall it is where the robot

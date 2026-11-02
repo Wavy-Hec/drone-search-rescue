@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-
 from _runner import main_for, require
 
 
@@ -35,7 +34,9 @@ def test_terrain_size_heights_and_no_gaps():
     area = t.terrain_area(t.SURVEY_TERRAIN_CFG)
     assert (area.width, area.height) == (40.0, 40.0)
     border = t.SURVEY_TERRAIN_CFG.border_width
-    assert np.allclose(v[:, :2].min(axis=0), [-20 - border] * 2) and np.allclose(v[:, :2].max(axis=0), [20 + border] * 2)
+    assert np.allclose(v[:, :2].min(axis=0), [-20 - border] * 2) and np.allclose(
+        v[:, :2].max(axis=0), [20 + border] * 2
+    )
     inside = area.contains(v[:, :2])
     z = v[inside, 2]
     assert 2.0 < z.max() < 4.5 and -3.0 < z.min() < 0.0, (z.min(), z.max())

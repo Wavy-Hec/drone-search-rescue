@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 import math
+from itertools import pairwise
 
 import numpy as np
-
 from _runner import main_for
 
 from drone_lab.paths import (
@@ -90,7 +90,7 @@ def test_build_env_paths_split_and_stagger():
     paths = build_env_paths("lawnmower", 3, AREA, 4.0, 7.0)
     assert len(paths) == 3
     y_ranges = sorted((p[:, 1].min(), p[:, 1].max()) for p in paths)
-    for (lo0, hi0), (lo1, hi1) in zip(y_ranges[:-1], y_ranges[1:]):
+    for (_, hi0), (lo1, _) in pairwise(y_ranges):
         assert hi0 < lo1  # disjoint strips
     copies = build_env_paths("lawnmower", 2, AREA, 4.0, 7.0, multi_env_mode="copy")
     assert np.allclose(copies[0], copies[1])

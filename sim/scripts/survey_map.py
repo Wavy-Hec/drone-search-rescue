@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT / "src") not in sys.path:
@@ -41,49 +42,99 @@ from drone_lab.mapping import REDUCERS  # noqa: E402
 from drone_lab.paths import PATTERNS  # noqa: E402
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-parser.add_argument("--checkpoint", type=str, required=True,
-                    help="TorchScript policy (exported/policy.pt) or RSL-RL checkpoint (model_*.pt).")
+parser.add_argument(
+    "--checkpoint",
+    type=str,
+    required=True,
+    help="TorchScript policy (exported/policy.pt) or RSL-RL checkpoint (model_*.pt).",
+)
 parser.add_argument("--task", type=str, default="DroneLab-Survey-ARL-Robot-1-v0", help="Survey task id.")
 # survey flags default to None: the task config (or a Hydra override such as
 # env.commands.survey_target.speed=1.5) supplies the value unless the flag is given
 parser.add_argument("--pattern", choices=PATTERNS, default=None, help="Survey path pattern (task default: lawnmower).")
-parser.add_argument("--altitude", type=float, default=None,
-                    help="Clearance above the highest terrain point [m] (task default: 4).")
+parser.add_argument(
+    "--altitude", type=float, default=None, help="Clearance above the highest terrain point [m] (task default: 4)."
+)
 parser.add_argument("--spacing", type=float, default=None, help="Lawnmower line / spiral ring spacing [m] (default 4).")
 parser.add_argument("--speed", type=float, default=None, help="Carrot speed along the path [m/s] (default 1).")
-parser.add_argument("--max_lead", type=float, default=None,
-                    help="Max drone-carrot distance [m] (default 1; the policy was trained on starts within +-1 m).")
-parser.add_argument("--waypoints", type=str, default=None,
-                    help="CSV/JSON waypoints, x,y (survey altitude) or x,y,z (absolute); implies --pattern waypoints "
-                         "and cannot be combined with another --pattern.")
+parser.add_argument(
+    "--max_lead",
+    type=float,
+    default=None,
+    help="Max drone-carrot distance [m] (default 1; the policy was trained on starts within +-1 m).",
+)
+parser.add_argument(
+    "--waypoints",
+    type=str,
+    default=None,
+    help="CSV/JSON waypoints, x,y (survey altitude) or x,y,z (absolute); implies --pattern waypoints "
+    "and cannot be combined with another --pattern.",
+)
 parser.add_argument("--turn", choices=("round", "square"), default=None, help="Lawnmower turn style (default round).")
 parser.add_argument("--direction", choices=("x", "y"), default=None, help="Lawnmower line direction (default x).")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of drones (they split the area).")
-parser.add_argument("--sensor", choices=("grid", "lidar"), default="grid",
-                    help="Mapping rays: 5x5 m grid of vertical rays (0.25 m) or a downward lidar cone.")
-parser.add_argument("--map_resolution", type=float, default=0.25,
-                    help="Elevation map cell size [m]; keep it a multiple of the 0.25 m ray spacing (the cell "
-                         "edges are placed midway between ray rows, see GridSpec.for_survey).")
+parser.add_argument(
+    "--sensor",
+    choices=("grid", "lidar"),
+    default="grid",
+    help="Mapping rays: 5x5 m grid of vertical rays (0.25 m) or a downward lidar cone.",
+)
+parser.add_argument(
+    "--map_resolution",
+    type=float,
+    default=0.25,
+    help="Elevation map cell size [m]; keep it a multiple of the 0.25 m ray spacing (the cell "
+    "edges are placed midway between ray rows, see GridSpec.for_survey).",
+)
 parser.add_argument("--reducer", choices=REDUCERS, default="median", help="Per-cell statistic of the hit heights.")
-parser.add_argument("--max_time", type=float, default=None,
-                    help="Stop after this much sim time [s] (the --settle hover counts).")
-parser.add_argument("--settle", type=float, default=1.5,
-                    help="Hover at the path start for this long before the carrot starts [s]. Right after the "
-                         "spawn the drone dips ~15 cm and recovers within ~1 s; the video starts when the carrot "
-                         "does. 0 starts the carrot at once.")
-parser.add_argument("--physics", dest="physics_backend", choices=("isaacsim_physx", "newton_mjwarp"),
-                    default="isaacsim_physx", help="Physics backend (the multirotor asset is PhysX-only).")
-parser.add_argument("--allow_unsupported_physics", action="store_true",
-                    help="Try --physics newton_mjwarp anyway (expected to fail: Multirotor is PhysX-only).")
-parser.add_argument("--video", dest="record_video", action="store_true",
-                    help="Record runs/<name>/survey.mp4 from a headless Kit camera (needs no moviepy).")
-parser.add_argument("--camera", choices=("overview", "chase"), default="overview",
-                    help="Video camera: high oblique view of the area, or a chase camera behind drone 0.")
-parser.add_argument("--video_fps", type=int, default=30,
-                    help="Playback frame rate. One frame is captured per 0.1 s policy step (10 Hz), so the default "
-                         "30 fps is a 3x time-lapse; 10 plays in real time.")
-parser.add_argument("--video_stride", type=int, default=1,
-                    help="Capture every N-th policy step (multiplies the time-lapse factor by N).")
+parser.add_argument(
+    "--max_time", type=float, default=None, help="Stop after this much sim time [s] (the --settle hover counts)."
+)
+parser.add_argument(
+    "--settle",
+    type=float,
+    default=1.5,
+    help="Hover at the path start for this long before the carrot starts [s]. Right after the "
+    "spawn the drone dips ~15 cm and recovers within ~1 s; the video starts when the carrot "
+    "does. 0 starts the carrot at once.",
+)
+parser.add_argument(
+    "--physics",
+    dest="physics_backend",
+    choices=("isaacsim_physx", "newton_mjwarp"),
+    default="isaacsim_physx",
+    help="Physics backend (the multirotor asset is PhysX-only).",
+)
+parser.add_argument(
+    "--allow_unsupported_physics",
+    action="store_true",
+    help="Try --physics newton_mjwarp anyway (expected to fail: Multirotor is PhysX-only).",
+)
+parser.add_argument(
+    "--video",
+    dest="record_video",
+    action="store_true",
+    help="Record runs/<name>/survey.mp4 from a headless Kit camera (needs no moviepy).",
+)
+parser.add_argument(
+    "--camera",
+    choices=("overview", "chase"),
+    default="overview",
+    help="Video camera: high oblique view of the area, or a chase camera behind drone 0.",
+)
+parser.add_argument(
+    "--video_fps",
+    type=int,
+    default=30,
+    help="Playback frame rate. One frame is captured per 0.1 s policy step (10 Hz), so the default "
+    "30 fps is a 3x time-lapse; 10 plays in real time.",
+)
+parser.add_argument(
+    "--video_stride",
+    type=int,
+    default=1,
+    help="Capture every N-th policy step (multiplies the time-lapse factor by N).",
+)
 parser.add_argument("--video_size", type=int, nargs=2, default=(1280, 720), metavar=("W", "H"))
 parser.add_argument("--show_rays", action="store_true", help="Draw the mapping ray hits (debug markers).")
 parser.add_argument("--hits_every", type=int, default=5, help="Log subsampled hits every N steps (hits.npy).")
@@ -91,8 +142,11 @@ parser.add_argument("--hits_stride", type=int, default=3, help="Keep every N-th 
 parser.add_argument("--seed", type=int, default=0, help="Environment seed (thruster randomization).")
 parser.add_argument("--out", type=str, default=None, help="Run name under runs/ (or a path).")
 parser.add_argument("--no_plots", action="store_true", help="Skip the figures.")
-parser.add_argument("--print_config", action="store_true",
-                    help="Resolve and print the task config, then exit without launching Isaac Sim.")
+parser.add_argument(
+    "--print_config",
+    action="store_true",
+    help="Resolve and print the task config, then exit without launching Isaac Sim.",
+)
 add_launcher_args(parser)
 args_cli, hydra_overrides = parser.parse_known_args()
 
@@ -124,6 +178,11 @@ from drone_lab.survey_io import (  # noqa: E402
 )
 from drone_lab.video import capture_frame, find_kit_visualizer, open_mp4_writer, playback_speedup  # noqa: E402
 
+if TYPE_CHECKING:
+    from isaaclab.envs import ManagerBasedRLEnv
+
+    from drone_lab.tasks.survey.config.arl_robot_1.survey_env_cfg import SurveyEnvCfg
+
 UNSUPPORTED_PHYSICS_MSG = (
     "--physics {name} is not supported for this robot: isaaclab_contrib.assets.Multirotor subclasses the PhysX "
     "articulation (isaaclab_contrib/assets/multirotor/multirotor.py:17) and applies the rotor wrench through the "
@@ -134,12 +193,13 @@ UNSUPPORTED_PHYSICS_MSG = (
 
 
 def resolve_run_dir(out: str | None, prefix: str) -> Path:
+    """``runs/<out>``, ``out`` itself when it is a path, or a time-stamped ``runs/<date>_<prefix>``."""
     if out and ("/" in out or out.startswith("~")):
         return Path(out).expanduser().resolve()
     return PROJECT_ROOT / "runs" / (out or f"{datetime.now():%Y%m%d_%H%M%S}_{prefix}")
 
 
-def configure_env(env_cfg):
+def configure_env(env_cfg: SurveyEnvCfg) -> None:
     """Apply the command-line survey settings to the resolved task config."""
     cmd = env_cfg.commands.survey_target
     try:
@@ -190,9 +250,16 @@ def configure_env(env_cfg):
         open_window = "kit" in (args_cli.visualizer or [])
         w, h = args_cli.video_size
         if args_cli.camera == "chase":
-            viz = KitVisualizerCfg(headless=not open_window, window_width=w, window_height=h, origin_type="asset",
-                                   origin_track_path="robot", origin_env_index=0, eye=(-6.0, -8.0, 5.0),
-                                   lookat=(0.0, 0.0, -1.0))
+            viz = KitVisualizerCfg(
+                headless=not open_window,
+                window_width=w,
+                window_height=h,
+                origin_type="asset",
+                origin_track_path="robot",
+                origin_env_index=0,
+                eye=(-6.0, -8.0, 5.0),
+                lookat=(0.0, 0.0, -1.0),
+            )
         else:
             eye, lookat = overview_camera(env_cfg.scene.terrain.terrain_generator)
             viz = KitVisualizerCfg(headless=not open_window, window_width=w, window_height=h, eye=eye, lookat=lookat)
@@ -205,7 +272,7 @@ def configure_env(env_cfg):
             args_cli.headless = True
 
 
-def load_policy(checkpoint: str, env, device: str):
+def load_policy(checkpoint: str, env: ManagerBasedRLEnv, device: str) -> tuple[torch.nn.Module, str]:
     """Return ``(policy, kind)``; ``policy(obs_tensor) -> actions`` for the 17-D policy observation."""
     path = Path(checkpoint).expanduser().resolve()
     if not path.is_file():
@@ -236,7 +303,8 @@ def load_policy(checkpoint: str, env, device: str):
     return policy, "rsl_rl"
 
 
-def main():
+def main() -> None:
+    """Fly the survey, then save the map, the metrics, the figures and (with ``--video``) the video."""
     import gymnasium as gym
 
     from isaaclab_tasks.utils import parse_env_cfg
@@ -248,22 +316,33 @@ def main():
     else:
         hydra_overrides.append("physics=isaacsim_physx")  # the task's own PhysX preset
 
-    env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs,
-                            overrides=hydra_overrides)
+    env_cfg = parse_env_cfg(
+        args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, overrides=hydra_overrides
+    )
     configure_env(env_cfg)
     if args_cli.print_config:
         cmd = env_cfg.commands.survey_target
-        print(f"[survey_map] task {args_cli.task}: {env_cfg.scene.num_envs} env(s), physics "
-              f"{type(env_cfg.sim.physics).__name__}, dt {env_cfg.sim.dt} x decimation {env_cfg.decimation}")
-        print(f"[survey_map] survey: {cmd.pattern}, spacing {cmd.spacing} m, clearance {cmd.altitude} m, "
-              f"speed {cmd.speed} m/s, max lead {cmd.max_lead} m, turn {cmd.turn}, waypoints {cmd.waypoints}, "
-              f"settle {args_cli.settle:g} s")
-        print(f"[survey_map] mapping sensor: {type(env_cfg.scene.mapping_scanner.pattern_cfg).__name__}, "
-              f"alignment {env_cfg.scene.mapping_scanner.ray_alignment}")
-        print(f"[survey_map] policy observation terms: "
-              f"{[k for k, v in env_cfg.observations.policy.__dict__.items() if hasattr(v, 'func')]}")
-        print(f"[survey_map] video: {args_cli.record_video} ({args_cli.camera}), visualizers "
-              f"{[type(v).__name__ for v in env_cfg.sim.visualizer_cfgs]}")
+        print(
+            f"[survey_map] task {args_cli.task}: {env_cfg.scene.num_envs} env(s), physics "
+            f"{type(env_cfg.sim.physics).__name__}, dt {env_cfg.sim.dt} x decimation {env_cfg.decimation}"
+        )
+        print(
+            f"[survey_map] survey: {cmd.pattern}, spacing {cmd.spacing} m, clearance {cmd.altitude} m, "
+            f"speed {cmd.speed} m/s, max lead {cmd.max_lead} m, turn {cmd.turn}, waypoints {cmd.waypoints}, "
+            f"settle {args_cli.settle:g} s"
+        )
+        print(
+            f"[survey_map] mapping sensor: {type(env_cfg.scene.mapping_scanner.pattern_cfg).__name__}, "
+            f"alignment {env_cfg.scene.mapping_scanner.ray_alignment}"
+        )
+        print(
+            f"[survey_map] policy observation terms: "
+            f"{[k for k, v in env_cfg.observations.policy.__dict__.items() if hasattr(v, 'func')]}"
+        )
+        print(
+            f"[survey_map] video: {args_cli.record_video} ({args_cli.camera}), visualizers "
+            f"{[type(v).__name__ for v in env_cfg.sim.visualizer_cfgs]}"
+        )
         return
 
     cmd = env_cfg.commands.survey_target
@@ -311,9 +390,11 @@ def main():
                 print("[survey_map] WARNING: no Kit visualizer is active; no video will be recorded.")
             else:
                 writer = open_mp4_writer(run_dir / "survey.mp4", args_cli.video_fps)
-                print(f"[survey_map] video: one frame per {step_dt * max(1, args_cli.video_stride):.2f} s of flight "
-                      f"at {args_cli.video_fps} fps = {speedup:g}x real time, from the carrot start "
-                      f"(t={settle_s:g} s)")
+                print(
+                    f"[survey_map] video: one frame per {step_dt * max(1, args_cli.video_stride):.2f} s of flight "
+                    f"at {args_cli.video_fps} fps = {speedup:g}x real time, from the carrot start "
+                    f"(t={settle_s:g} s)"
+                )
         if settle_steps:
             print(f"[survey_map] hovering {settle_s:g} s at the path start before the carrot starts (--settle)")
 
@@ -341,8 +422,11 @@ def main():
                     newly_crashed = terminated & active
                     if torch.any(newly_crashed):
                         for e in torch.nonzero(newly_crashed).flatten().tolist():
-                            print(f"[survey_map] drone {e} crashed at t={steps_done * step_dt:.1f} s "
-                                  f"(progress {100 * float(progress_before[e]):.1f} %)", flush=True)
+                            print(
+                                f"[survey_map] drone {e} crashed at t={steps_done * step_dt:.1f} s "
+                                f"(progress {100 * float(progress_before[e]):.1f} %)",
+                                flush=True,
+                            )
                         crashed |= newly_crashed
                         active &= ~newly_crashed
                     active &= ~truncated
@@ -371,18 +455,36 @@ def main():
                         }
                         roll, pitch, yaw = quat_xyzw_to_euler(rows["quat"])
                         rec.record(
-                            step=rows["step"], time=rows["time"], env=rows["env"],
-                            x=rows["pos"][:, 0], y=rows["pos"][:, 1], z=rows["pos"][:, 2],
-                            qx=rows["quat"][:, 0], qy=rows["quat"][:, 1], qz=rows["quat"][:, 2],
-                            qw=rows["quat"][:, 3], roll=roll, pitch=pitch, yaw=yaw,
-                            vx=rows["lin"][:, 0], vy=rows["lin"][:, 1], vz=rows["lin"][:, 2],
-                            wx=rows["ang"][:, 0], wy=rows["ang"][:, 1], wz=rows["ang"][:, 2],
+                            step=rows["step"],
+                            time=rows["time"],
+                            env=rows["env"],
+                            x=rows["pos"][:, 0],
+                            y=rows["pos"][:, 1],
+                            z=rows["pos"][:, 2],
+                            qx=rows["quat"][:, 0],
+                            qy=rows["quat"][:, 1],
+                            qz=rows["quat"][:, 2],
+                            qw=rows["quat"][:, 3],
+                            roll=roll,
+                            pitch=pitch,
+                            yaw=yaw,
+                            vx=rows["lin"][:, 0],
+                            vy=rows["lin"][:, 1],
+                            vz=rows["lin"][:, 2],
+                            wx=rows["ang"][:, 0],
+                            wy=rows["ang"][:, 1],
+                            wz=rows["ang"][:, 2],
                             speed=np.linalg.norm(rows["lin"], axis=1),
-                            carrot_x=rows["carrot"][:, 0], carrot_y=rows["carrot"][:, 1],
+                            carrot_x=rows["carrot"][:, 0],
+                            carrot_y=rows["carrot"][:, 1],
                             carrot_z=rows["carrot"][:, 2],
                             carrot_dist=np.linalg.norm(rows["pos"] - rows["carrot"], axis=1),
-                            path_s=rows["s"], progress=rows["progress"], path_index=rows["seg"],
-                            obs_dx=rows["obs"][:, 0], obs_dy=rows["obs"][:, 1], obs_dz=rows["obs"][:, 2],
+                            path_s=rows["s"],
+                            progress=rows["progress"],
+                            path_index=rows["seg"],
+                            obs_dx=rows["obs"][:, 0],
+                            obs_dy=rows["obs"][:, 1],
+                            obs_dz=rows["obs"][:, 2],
                             gate=rows["gate"],
                         )
                         hits = scanner.data.ray_hits_w.torch[ids].cpu().numpy().reshape(-1, 3)
@@ -395,8 +497,11 @@ def main():
                             hits_log.append(
                                 np.column_stack([np.full(ok.sum(), t), e_col[ok], h[ok]]).astype(np.float32)
                             )
-                    if (writer is not None and step >= settle_steps
-                            and (step - settle_steps) % max(1, args_cli.video_stride) == 0):
+                    if (
+                        writer is not None
+                        and step >= settle_steps
+                        and (step - settle_steps) % max(1, args_cli.video_stride) == 0
+                    ):
                         try:
                             frame = capture_frame(base.sim, viz)
                             if frame is not None and frame.any():
@@ -413,19 +518,26 @@ def main():
                         prog = ", ".join(f"{100 * p:.0f}%" for p in term.progress.tolist())
                         # flush: with stdout redirected to a log (or | tee) the lines would otherwise only appear
                         # at exit
-                        print(f"[survey_map] t={steps_done * step_dt:7.1f} s  progress [{prog}]  "
-                              f"hits {mapper.num_points:,}  wall {time.time() - t_wall:.0f} s", flush=True)
+                        print(
+                            f"[survey_map] t={steps_done * step_dt:7.1f} s  progress [{prog}]  "
+                            f"hits {mapper.num_points:,}  wall {time.time() - t_wall:.0f} s",
+                            flush=True,
+                        )
                     if not torch.any(active):
                         break
         except KeyboardInterrupt:
             interrupted = "stopped with Ctrl+C"
-            print(f"\n[survey_map] Ctrl+C at t={steps_done * step_dt:.1f} s: saving the partial run "
-                  "(press Ctrl+C again to abort)")
+            print(
+                f"\n[survey_map] Ctrl+C at t={steps_done * step_dt:.1f} s: saving the partial run "
+                "(press Ctrl+C again to abort)"
+            )
         except Exception as exc:  # saved first, re-raised at the end of this block
             loop_error = exc
             interrupted = f"flight loop error: {type(exc).__name__}: {exc}"
-            print(f"[survey_map] ERROR at t={steps_done * step_dt:.1f} s ({type(exc).__name__}: {exc}); saving "
-                  "the partial run first, the traceback follows at the end")
+            print(
+                f"[survey_map] ERROR at t={steps_done * step_dt:.1f} s ({type(exc).__name__}: {exc}); saving "
+                "the partial run first, the traceback follows at the end"
+            )
         finally:
             term.cfg.speed = commanded_speed  # also after a stop during the settle
         if writer is not None:
@@ -444,9 +556,11 @@ def main():
             how = f"stopped at the time limit ({max_time:g} s, --max_time)"
         else:
             how = "finished"
-        print(f"[survey_map] flight {how} after {sim_time:.1f} s sim time ({wall_time:.0f} s wall, "
-              f"{real_time_factor:.1f}x real time); finished {finished.tolist()}, crashed {crashed.tolist()}",
-              flush=True)
+        print(
+            f"[survey_map] flight {how} after {sim_time:.1f} s sim time ({wall_time:.0f} s wall, "
+            f"{real_time_factor:.1f}x real time); finished {finished.tolist()}, crashed {crashed.tolist()}",
+            flush=True,
+        )
 
         saved = False
         if len(rec) == 0:
@@ -510,18 +624,43 @@ def main():
             if args_cli.record_video:
                 extra.update(video_fps=args_cli.video_fps, video_speedup=speedup)
             summary = compute_summary(
-                traj, term.waypoints, grid=grid, area=term.area, elevation=elevation, count=count, ground_truth=gt,
-                ground_truth_range=gt_range, commanded_speed=commanded_speed, crashed=crashed.tolist(), extra=extra,
+                traj,
+                term.waypoints,
+                grid=grid,
+                area=term.area,
+                elevation=elevation,
+                count=count,
+                ground_truth=gt,
+                ground_truth_range=gt_range,
+                commanded_speed=commanded_speed,
+                crashed=crashed.tolist(),
+                extra=extra,
                 ground_truth_at_hits=gt_hits,
             )
             hits_arr = np.concatenate(hits_log) if hits_log else np.zeros((0, 5), dtype=np.float32)
-            meta = {"source": "isaac_sim", "map_reducer": args_cli.reducer, "sensor": args_cli.sensor,
-                    "num_rays": int(scanner.num_rays), "ground_truth_source": gt_source,
-                    "grid_alignment": f"cell edges midway between ray rows (GridSpec.for_survey, ray spacing "
-                                      f"{ray_spacing} m)"}
-            save_run(run_dir, trajectory=traj, planned=term.waypoints, grid=grid, area=term.area,
-                     elevation=elevation, count=count, ground_truth=gt, ground_truth_range=gt_range, hits=hits_arr,
-                     meta=meta, summary=summary)
+            meta = {
+                "source": "isaac_sim",
+                "map_reducer": args_cli.reducer,
+                "sensor": args_cli.sensor,
+                "num_rays": int(scanner.num_rays),
+                "ground_truth_source": gt_source,
+                "grid_alignment": f"cell edges midway between ray rows (GridSpec.for_survey, ray spacing "
+                f"{ray_spacing} m)",
+            }
+            save_run(
+                run_dir,
+                trajectory=traj,
+                planned=term.waypoints,
+                grid=grid,
+                area=term.area,
+                elevation=elevation,
+                count=count,
+                ground_truth=gt,
+                ground_truth_range=gt_range,
+                hits=hits_arr,
+                meta=meta,
+                summary=summary,
+            )
             saved = True
             print(format_summary(json.loads((run_dir / "summary.json").read_text())))
         try:

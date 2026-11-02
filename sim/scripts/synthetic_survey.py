@@ -43,14 +43,19 @@ def resolve_run_dir(out: str | None, prefix: str) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--pattern", choices=PATTERNS, default=None,
-                        help="Survey pattern (default lawnmower; waypoints when --waypoints is given).")
+    parser.add_argument(
+        "--pattern",
+        choices=PATTERNS,
+        default=None,
+        help="Survey pattern (default lawnmower; waypoints when --waypoints is given).",
+    )
     parser.add_argument("--spacing", type=float, default=4.0, help="Line/ring spacing [m].")
     parser.add_argument("--altitude", type=float, default=4.0, help="Clearance above the highest terrain point [m].")
     parser.add_argument("--speed", type=float, default=1.0, help="Carrot speed [m/s].")
     parser.add_argument("--num_drones", type=int, default=1)
-    parser.add_argument("--waypoints", type=str, default=None,
-                        help="CSV/JSON waypoints file; implies --pattern waypoints.")
+    parser.add_argument(
+        "--waypoints", type=str, default=None, help="CSV/JSON waypoints file; implies --pattern waypoints."
+    )
     parser.add_argument("--turn", choices=("round", "square"), default="round")
     parser.add_argument("--direction", choices=("x", "y"), default="x")
     parser.add_argument("--map_resolution", type=float, default=0.25)
@@ -133,8 +138,10 @@ def main(argv: list[str] | None = None) -> int:
         meta=meta,
         summary=result["summary"],
     )
-    print(f"[synthetic] {result['num_hits']:,} ray hits, {len(result['trajectory']['x']):,} samples, "
-          f"{time.time() - t0:.1f} s wall time")
+    print(
+        f"[synthetic] {result['num_hits']:,} ray hits, {len(result['trajectory']['x']):,} samples, "
+        f"{time.time() - t0:.1f} s wall time"
+    )
     print(format_summary(json.loads((run_dir / "summary.json").read_text())))
     if not args.no_plots:
         from drone_lab.plotting import make_all_plots

@@ -461,43 +461,36 @@ CUDA_VISIBLE_DEVICES= python tests/run_cpu_tests.py                             
   `env.terminations.collision=null`.
 * `survey_map.py` also accepts the raw training checkpoint (`model_*.pt`), so step 2 (export) is optional.
 
-## Fixes before the first flight (2026-11-01)
+## Design notes
 
-Six issues of the first version were found and fixed before the first flight in Isaac Sim (see Results), each
-checked against the Isaac Lab 3.0 source. All six are CPU-side changes.
-
-* **Map grid aligned with the rays (major).** The survey lines sit at 2, 6, 10 ... m from the area edge, so the
-  0.25 m rows of rays fell exactly on the 0.25 m cell edges. Every cell was measured along its edge, which
-  shifted the map by 12.5 cm across the lines (opposite-signed errors on north- and south-facing slopes). The
-  cell edges now sit midway between the ray rows (`GridSpec.for_survey`: half the ray spacing, which also keeps
-  `--map_resolution 0.5` or `1.0` symmetric). Synthetic lawnmower: RMSE 0.155 -> 0.086 m, away from steps
-  0.046 -> 0.006 m. The summary also reports a sensor-only error: the map against the true terrain under the
-  very same rays. That number does not depend on where the rays landed and is 0.000 m for the exact synthetic
-  rays. Line spacings off the lattice (3 drones: lines 3.33 m apart) stay at about 0.017 m away from steps.
-* **Markers in the trajectory video.** `eval_trajectory.py --video` now captures frames the way Isaac Lab's own
+* **Map grid aligned with the rays.** The survey lines sit at 2, 6, 10 ... m from the area edge, so the 0.25 m
+  rows of rays fall on a 0.25 m lattice. A grid anchored at the area edge would put every row on a cell edge:
+  each cell would be measured along its edge, shifting the map by 12.5 cm across the lines (opposite-signed
+  errors on north- and south-facing slopes). `GridSpec.for_survey` moves the cell edges midway between the ray
+  rows (half the ray spacing, which also keeps `--map_resolution 0.5` or `1.0` symmetric). Synthetic lawnmower:
+  RMSE 0.086 m instead of 0.155 m, away from steps 0.006 m instead of 0.046 m. The summary also reports a
+  sensor-only error: the map against the true terrain under the very same rays. That number does not depend on
+  where the rays landed and is 0.000 m for the exact synthetic rays. Line spacings off the lattice (3 drones:
+  lines 3.33 m apart) stay at about 0.017 m away from steps.
+* **Markers in the trajectory video.** `eval_trajectory.py --video` captures frames the way Isaac Lab's own
   recorder does (sync the stage, then run the marker callbacks), so the reference and look-ahead spheres move.
   Both GPU scripts share `drone_lab/video.py`.
-* **Ctrl+C keeps the survey.** Ctrl+C or an error during the flight saves everything logged so far (summary, map,
-  plots, marked PARTIAL RUN) before the script exits. An error is re-raised after saving.
+* **Partial runs are kept.** Ctrl+C or an error during the flight saves everything logged so far (summary, map,
+  plots, marked PARTIAL RUN) before the script exits; an error is re-raised after saving. A CPU test runs
+  `survey_map.py` offline with a stand-in environment through both paths.
 * **Coverage holes are visible.** Cells without ray hits are outlined in both map figures, in light and dark
-  themes, so a hole no longer looks like "lowest terrain" or "zero error". The "no ray hits" legend entry only
+  themes, so a hole does not read as "lowest terrain" or "zero error". The "no ray hits" legend entry only
   appears when there are holes.
 * **Video speed is stated.** `survey.mp4` is a 3x time-lapse by default (10 Hz frames written at 30 fps);
   `--video_fps 10` plays in real time. The factor is printed and stored in the summary.
-* **`--waypoints` with another `--pattern`** now stops with a clear message instead of silently flying the
-  generated pattern (`survey_map.py`, `synthetic_survey.py`, `preview_area.py`).
-
-These fixes brought the CPU tests to 49 (10 new), including an offline run of `survey_map.py` with a stand-in
-environment that exercises the Ctrl+C and error paths.
-
-## Fixes after the first flights (2026-11-01)
-
-* **No more stop-and-go carrot at high speed.** A carrot step that would end more than `max_lead` from the drone
-  was rejected whole, so above 3 m/s commanded the carrot stopped and went, and at 10 m/s it stalled for good. The
-  step is now shortened to the remaining lead. `--speed 6`: carrot waiting 84 % -> 0 % of the steps, survey speed
-  0.97 -> 1.32 m/s. Regression test: `test_carrot_keeps_moving_at_high_commanded_speed`.
-* **Time budget.** The default `--max_time` assumed the drone reaches the commanded speed, so fast commands cut the
-  survey short. It now assumes at most 1 m/s, and the log and summary say when the time limit stopped a flight
-  (the summary also records wall time and the real-time factor).
+* **`--waypoints` with another `--pattern`** stops with a clear message instead of flying the generated pattern
+  (`survey_map.py`, `synthetic_survey.py`, `preview_area.py`).
+* **The carrot keeps moving at high speed.** A carrot step that would end more than `max_lead` from the drone is
+  shortened to the remaining lead. Rejecting the whole step instead makes the carrot stop and go above 3 m/s
+  commanded and stall for good at 10 m/s; at `--speed 6` the carrot waits on 0 % of the steps instead of 84 %,
+  and the survey flies 1.32 m/s instead of 0.97 m/s. Test: `test_carrot_keeps_moving_at_high_commanded_speed`.
+* **Time budget.** The default `--max_time` assumes at most 1 m/s, so fast commands do not cut the survey short,
+  and the log and summary say when the time limit stopped a flight (the summary also records wall time and the
+  real-time factor).
 * **`--settle`.** The drone hovers 1.5 s at the start before the carrot moves, so the video starts without the
-  spawn dip (vertical speed in the first 2 s of video: 0.58 -> 0.17 m/s).
+  spawn dip (vertical speed in the first 2 s of video: 0.17 m/s instead of 0.58 m/s).

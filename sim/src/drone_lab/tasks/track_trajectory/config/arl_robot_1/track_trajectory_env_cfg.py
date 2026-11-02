@@ -41,21 +41,27 @@ COMMAND_NAME = "reference"
 
 @configclass
 class TrajectoryCommandsCfg:
+    """Moving reference trajectory with two look-ahead points."""
+
     reference = mdp.TrajectoryReferenceCommandCfg(asset_name="robot", debug_vis=True)
 
 
 @configclass
 class TrajectoryObservationsCfg:
+    """Errors to the reference and its look-ahead points, plus the drone's own state."""
+
     @configclass
     class PolicyCfg(ObsGroup):
         """Observations for the policy group (order preserved)."""
 
         reference_error = ObsTerm(
-            func=mdp.reference_position_error, params={"command_name": COMMAND_NAME, "clip": 2.0},
+            func=mdp.reference_position_error,
+            params={"command_name": COMMAND_NAME, "clip": 2.0},
             noise=Unoise(n_min=-0.02, n_max=0.02),
         )
         velocity_error = ObsTerm(
-            func=mdp.reference_velocity_error, params={"command_name": COMMAND_NAME, "clip": 3.0},
+            func=mdp.reference_velocity_error,
+            params={"command_name": COMMAND_NAME, "clip": 3.0},
             noise=Unoise(n_min=-0.05, n_max=0.05),
         )
         lookahead = ObsTerm(func=mdp.reference_lookahead, params={"command_name": COMMAND_NAME, "clip": 3.0})
@@ -73,6 +79,8 @@ class TrajectoryObservationsCfg:
 
 @configclass
 class TrajectoryEventCfg:
+    """Reset near the start of a freshly sampled reference."""
+
     reset_base = EventTerm(
         func=mdp.reset_near_reference,
         mode="reset",
@@ -82,12 +90,17 @@ class TrajectoryEventCfg:
 
 @configclass
 class TrajectoryRewardsCfg:
-    tracking_fine = RewTerm(func=mdp.reference_tracking_exp, weight=15.0, params={"command_name": COMMAND_NAME,
-                                                                                    "std": 0.4})
-    tracking_coarse = RewTerm(func=mdp.reference_tracking_exp, weight=5.0, params={"command_name": COMMAND_NAME,
-                                                                                     "std": 1.5})
-    velocity_tracking = RewTerm(func=mdp.reference_velocity_exp, weight=5.0, params={"command_name": COMMAND_NAME,
-                                                                                       "std": 1.0})
+    """Position and velocity tracking, attitude and smoothness terms."""
+
+    tracking_fine = RewTerm(
+        func=mdp.reference_tracking_exp, weight=15.0, params={"command_name": COMMAND_NAME, "std": 0.4}
+    )
+    tracking_coarse = RewTerm(
+        func=mdp.reference_tracking_exp, weight=5.0, params={"command_name": COMMAND_NAME, "std": 1.5}
+    )
+    velocity_tracking = RewTerm(
+        func=mdp.reference_velocity_exp, weight=5.0, params={"command_name": COMMAND_NAME, "std": 1.0}
+    )
     # a penalty (negative weight); the built-in tracking task uses +1.0 on this term
     flat_orientation_l2 = RewTerm(func=base_mdp.flat_orientation_l2, weight=-1.0)
     yaw_aligned = RewTerm(func=yaw_aligned, weight=2.0, params={"std": 1.0})
@@ -99,6 +112,8 @@ class TrajectoryRewardsCfg:
 
 @configclass
 class TrajectoryTerminationsCfg:
+    """Time-out, too far from the reference, crash or flip."""
+
     time_out = DoneTerm(func=base_mdp.time_out, time_out=True)
     too_far = DoneTerm(func=mdp.reference_too_far, params={"command_name": COMMAND_NAME, "max_distance": 2.5})
     crash = DoneTerm(func=base_mdp.root_height_below_minimum, params={"minimum_height": -3.0})
@@ -121,6 +136,7 @@ class TrackTrajectoryEnvCfg(NoObstacleEnvCfg):
         self.episode_length_s = 12.0
         self.sim.physics = DronePhysicsCfg()
 
-    def play_mode(self):
+    def play_mode(self) -> None:
+        """``isaaclab play``: the parent's play settings with at most 16 drones."""
         super().play_mode()
         self.scene.num_envs = min(self.scene.num_envs, 16)

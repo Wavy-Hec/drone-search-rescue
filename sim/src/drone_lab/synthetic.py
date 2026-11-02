@@ -65,7 +65,7 @@ def simulate_survey(
     max_time: float | None = None,
     gt_supersample: int = 3,
     extra_summary: dict | None = None,
-):
+) -> dict:
     """Fly every drone along its path and build the map; returns a dict with everything :func:`save_run` needs.
 
     ``map_padding=None`` uses the same map grid as ``scripts/survey_map.py`` (:meth:`GridSpec.for_survey`, cell

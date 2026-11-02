@@ -19,8 +19,12 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from pxr import Usd
 
 CHASE_PARTITION = "chase_view"
 """RTX scene partition of the window / video extras."""
@@ -131,7 +135,7 @@ def rim_points(bounds: tuple[float, float, float, float], inset: float = 0.1, n:
     return np.concatenate([np.column_stack(side) for side in sides])
 
 
-def set_focal_length(stage, camera_path: str, focal_length: float) -> None:
+def set_focal_length(stage: Usd.Stage, camera_path: str, focal_length: float) -> None:
     """Change the lens of a camera prim (in the session layer, like Kit's own viewport camera)."""
     from pxr import Usd, UsdGeom
 
@@ -139,7 +143,7 @@ def set_focal_length(stage, camera_path: str, focal_length: float) -> None:
         UsdGeom.Camera(stage.GetPrimAtPath(camera_path)).GetFocalLengthAttr().Set(float(focal_length))
 
 
-def isolate_chase_view(stage, viewer_camera_path: str, drone_camera_paths: list[str]) -> None:
+def isolate_chase_view(stage: Usd.Stage, viewer_camera_path: str, drone_camera_paths: list[str]) -> None:
     """Assign the viewer camera to :data:`CHASE_PARTITION` and the drone's cameras to a partition of their own."""
     from pxr import Sdf, Usd
 
@@ -155,7 +159,7 @@ def isolate_chase_view(stage, viewer_camera_path: str, drone_camera_paths: list[
             attr.Set(token)
 
 
-def _chase_root(stage):
+def _chase_root(stage: Usd.Stage) -> Usd.Prim:
     """The partitioned parent prim of the extras (created on first use)."""
     from pxr import Sdf, UsdGeom
 
@@ -167,7 +171,11 @@ def _chase_root(stage):
 
 
 def spawn_ground_skirt(
-    stage, bounds: tuple[float, float, float, float], z: float, material_path: str | None, extent: float = 2000.0
+    stage: Usd.Stage,
+    bounds: tuple[float, float, float, float],
+    z: float,
+    material_path: str | None,
+    extent: float = 2000.0,
 ) -> str:
     """Ground from the site's edge to the horizon, for the viewer camera only; returns its prim path.
 
@@ -201,7 +209,7 @@ class ScanRays:
     partition tokens stay valid.
     """
 
-    def __init__(self, stage, num_rays: int, radius: float = 0.04):
+    def __init__(self, stage: Usd.Stage, num_rays: int, radius: float = 0.04):
         import isaaclab.sim as sim_utils
         from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 

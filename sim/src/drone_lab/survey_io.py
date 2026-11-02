@@ -85,7 +85,8 @@ class TrajectoryRecorder:
     def __init__(self):
         self._chunks: list[np.ndarray] = []
 
-    def record(self, **columns):
+    def record(self, **columns: np.ndarray | float) -> None:
+        """Append one block of rows: per-row arrays (all the same length) and scalars broadcast to them."""
         n = None
         for v in columns.values():
             v = np.asarray(v)
@@ -107,6 +108,7 @@ class TrajectoryRecorder:
         return sum(len(c) for c in self._chunks)
 
     def as_dict(self) -> dict[str, np.ndarray]:
+        """Every column of :data:`TRAJECTORY_FIELDS` over all recorded rows."""
         arr = np.concatenate(self._chunks) if self._chunks else np.zeros((0, len(TRAJECTORY_FIELDS)))
         return {name: arr[:, i] for i, name in enumerate(TRAJECTORY_FIELDS)}
 
@@ -121,7 +123,7 @@ def write_trajectory_csv(path: str | Path, traj: dict[str, np.ndarray]) -> None:
         cols = [np.asarray(traj[k]) for k in names]
         for i in range(n):
             row = []
-            for name, col in zip(names, cols):
+            for name, col in zip(names, cols, strict=True):
                 v = col[i]
                 if name in _INT_FIELDS and np.isfinite(v):
                     row.append(str(int(v)))
@@ -149,8 +151,8 @@ def write_planned_path_csv(path: str | Path, waypoints: list[np.ndarray]) -> Non
         w.writerow(["env", "index", "x", "y", "z", "s"])
         for env_id, wp in enumerate(waypoints):
             s = cumulative_length(wp)
-            for i, (p, si) in enumerate(zip(wp, s)):
-                w.writerow([env_id, i, f"{p[0]:.4f}", f"{p[1]:.4f}", f"{p[2]:.4f}", f"{si:.4f}"])
+            for i, p in enumerate(wp):
+                w.writerow([env_id, i, f"{p[0]:.4f}", f"{p[1]:.4f}", f"{p[2]:.4f}", f"{s[i]:.4f}"])
 
 
 def read_planned_path_csv(path: str | Path) -> list[np.ndarray]:
@@ -319,8 +321,9 @@ def compute_summary(
         per_env.append(entry)
         if len(pos):
             all_ct.append(distance_to_polyline(pos, plan, planar=True)[0])
-    map_stats = survey_map_metrics(elevation, count, ground_truth, ground_truth_range, grid, area,
-                                   truth_at_hits=ground_truth_at_hits)
+    map_stats = survey_map_metrics(
+        elevation, count, ground_truth, ground_truth_range, grid, area, truth_at_hits=ground_truth_at_hits
+    )
     summary = {
         "num_drones": len(envs),
         "commanded_speed_mps": commanded_speed,
@@ -408,20 +411,27 @@ def format_summary(summary: dict) -> str:
     if summary.get("interrupted"):
         lines.append(f"  PARTIAL RUN        : {summary['interrupted']} (data up to the interruption)")
     if summary.get("time_limit_reached"):
-        lines.append(f"  TIME LIMIT         : stopped at {_fmt(summary.get('max_time_s'), ' s', 0)} of sim time "
-                     "(--max_time) before every drone reached the end of its path")
+        lines.append(
+            f"  TIME LIMIT         : stopped at {_fmt(summary.get('max_time_s'), ' s', 0)} of sim time "
+            "(--max_time) before every drone reached the end of its path"
+        )
     lines += [
         f"  pattern            : {summary.get('pattern', 'n/a')}, {summary.get('num_drones', 0)} drone(s)",
         f"  flight altitude    : {_fmt(summary.get('flight_z_m'), ' m')} (terrain max "
         f"{_fmt(summary.get('terrain_z_max_m'), ' m')} + clearance {_fmt(summary.get('altitude_clearance_m'), ' m')})",
         f"  duration           : {_fmt(fl.get('duration_s'), ' s', 1)}"
-        + (f" (incl. {_fmt(summary['settle_s'], ' s', 1)} hover at the start, --settle)"
-           if summary.get("settle_s") else ""),
+        + (
+            f" (incl. {_fmt(summary['settle_s'], ' s', 1)} hover at the start, --settle)"
+            if summary.get("settle_s")
+            else ""
+        ),
     ]
     if summary.get("real_time_factor") is not None:  # simulator runs only
-        lines.append(f"  sim / wall time    : {_fmt(summary.get('sim_time_s'), ' s', 1)} / "
-                     f"{_fmt(summary.get('wall_time_s'), ' s', 1)} ({_fmt(summary.get('real_time_factor'), 'x', 1)} "
-                     "real time, flight loop only)")
+        lines.append(
+            f"  sim / wall time    : {_fmt(summary.get('sim_time_s'), ' s', 1)} / "
+            f"{_fmt(summary.get('wall_time_s'), ' s', 1)} ({_fmt(summary.get('real_time_factor'), 'x', 1)} "
+            "real time, flight loop only)"
+        )
     lines += [
         f"  path planned/flown : {_fmt(fl.get('path_length_planned_m'), ' m', 1)} / "
         f"{_fmt(fl.get('path_length_flown_m'), ' m', 1)}",
@@ -447,4 +457,3 @@ def format_summary(summary: dict) -> str:
         f"{_fmt(tr.get('carrot_dist_max_m'), ' m')}",
     ]
     return "\n".join(lines) + "\n"
-

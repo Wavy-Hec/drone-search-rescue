@@ -23,14 +23,22 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
+from numpy.typing import ArrayLike
 
 from drone_lab.mapping import GridSpec
 
 from .traversability import Footprint
+
+if TYPE_CHECKING:
+    from isaaclab.terrains import TerrainGeneratorCfg
+
+    from drone_lab.paths import Area
 
 __all__ = [
     "DEFAULT_FOOTPRINT_RADII",
@@ -93,9 +101,11 @@ class Pin:
 
     @property
     def xy(self) -> np.ndarray:
+        """Position (x, y) [m]."""
         return np.array([self.x, self.y])
 
     def to_dict(self) -> dict:
+        """JSON record (``class`` for ``label``; unknown and empty fields are left out)."""
         d = {"id": self.id, "class": self.label, "x": round(self.x, 3), "y": round(self.y, 3)}
         if math.isfinite(self.z):
             d["z"] = round(self.z, 3)
@@ -165,7 +175,7 @@ def load_pins(path: str | Path, *, confirmed_only: bool = True) -> list[Pin]:
     )
 
 
-def pins_from_data(data, *, confirmed_only: bool = True, source: str = "data") -> list[Pin]:
+def pins_from_data(data: dict | list, *, confirmed_only: bool = True, source: str = "data") -> list[Pin]:
     """Pins from already-parsed JSON data (a list of records or a dict holding one)."""
     path = source
     items = data
@@ -192,7 +202,7 @@ def pins_from_data(data, *, confirmed_only: bool = True, source: str = "data") -
 
 
 def footprints_from_pins(
-    pins, *, radii: dict[str, float] | None = None, default_radius: float = DEFAULT_FOOTPRINT_RADIUS
+    pins: Iterable[Pin], *, radii: dict[str, float] | None = None, default_radius: float = DEFAULT_FOOTPRINT_RADIUS
 ) -> list[Footprint]:
     """Circular footprints of the pinned objects (zero-radius classes such as the landing pad are skipped)."""
     table = dict(DEFAULT_FOOTPRINT_RADII)
@@ -212,7 +222,9 @@ def footprints_from_pins(
     return out
 
 
-def select_goal_pin(pins, *, pin_id: str | None = None, label: str = "person", near_xy=None) -> Pin | None:
+def select_goal_pin(
+    pins: Sequence[Pin], *, pin_id: str | None = None, label: str = "person", near_xy: ArrayLike | None = None
+) -> Pin | None:
     """The pin the robot is sent to: by id, else the ``label`` pin closest to ``near_xy`` (else the first one)."""
     if pin_id is not None:
         for p in pins:
@@ -229,7 +241,7 @@ def select_goal_pin(pins, *, pin_id: str | None = None, label: str = "person", n
 
 
 def infer_person_poses(
-    pins,
+    pins: Iterable[Pin],
     z: np.ndarray,
     grid: GridSpec,
     *,
@@ -270,7 +282,9 @@ def _grid_from_json(path: Path) -> GridSpec:
     return GridSpec.from_dict(d)
 
 
-def load_elevation(source: str | Path, grid_json: str | Path | None = None, *, layer: str = "mean"):
+def load_elevation(
+    source: str | Path, grid_json: str | Path | None = None, *, layer: str = "mean"
+) -> tuple[np.ndarray, GridSpec, str]:
     """Elevation map of a drone run (see the module docstring).
 
     Args:
@@ -309,7 +323,13 @@ def load_elevation(source: str | Path, grid_json: str | Path | None = None, *, l
     return z, grid, f"drone map {npy}"
 
 
-def ground_truth_elevation(resolution: float = 0.25, *, terrain_cfg=None, padding: float = 0.0, supersample: int = 3):
+def ground_truth_elevation(
+    resolution: float = 0.25,
+    *,
+    terrain_cfg: TerrainGeneratorCfg | None = None,
+    padding: float = 0.0,
+    supersample: int = 3,
+) -> tuple[np.ndarray, GridSpec, str]:
     """Terrain ground truth: the exact survey terrain mesh rasterised to a grid (CPU, needs Isaac Lab's terrain
     generator but not the simulator).
 
@@ -333,7 +353,7 @@ def ground_truth_elevation(resolution: float = 0.25, *, terrain_cfg=None, paddin
 
 
 # --------------------------------------------------------------------------------------------- site apron
-def on_map(grid: GridSpec, xy) -> bool:
+def on_map(grid: GridSpec, xy: Sequence[float] | np.ndarray) -> bool:
     """Whether the world point ``xy`` [m] lies on the grid."""
     _, _, valid = grid.cell_index(np.array([float(xy[0])]), np.array([float(xy[1])]))
     return bool(valid[0])
@@ -346,7 +366,7 @@ def _bounds(b) -> tuple[float, float, float, float]:
     return x0, x1, y0, y1
 
 
-def survey_site_bounds(terrain_cfg=None) -> tuple[tuple[float, ...], tuple[float, ...]]:
+def survey_site_bounds(terrain_cfg: TerrainGeneratorCfg | None = None) -> tuple[tuple[float, ...], tuple[float, ...]]:
     """``(terrain, site)`` bounds ``(x_min, x_max, y_min, y_max)`` [m] of the survey terrain: the sub-terrains
     (what the drone surveys) and the whole site with the flat border around them. Needs Isaac Lab's terrain
     configs, not the simulator."""
@@ -357,7 +377,14 @@ def survey_site_bounds(terrain_cfg=None) -> tuple[tuple[float, ...], tuple[float
     return _bounds(inner), _bounds(inner.inset(-float(cfg.border_width)))
 
 
-def extend_with_apron(z: np.ndarray, grid: GridSpec, terrain, site, *, height: float = 0.0):
+def extend_with_apron(
+    z: np.ndarray,
+    grid: GridSpec,
+    terrain: Area | Sequence[float],
+    site: Area | Sequence[float],
+    *,
+    height: float = 0.0,
+) -> tuple[np.ndarray, GridSpec, np.ndarray]:
     """Grow a map to the whole site and fill in the flat apron (the border) around the surveyed terrain.
 
     The grid grows to cover ``site`` with the same cell size and the same cell edges, so the map's own cells are

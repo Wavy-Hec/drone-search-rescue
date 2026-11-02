@@ -31,11 +31,13 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import numpy as np
+from numpy.typing import ArrayLike
 
 from .assets import (
     ASSETS,
@@ -49,6 +51,9 @@ from .assets import (
 )
 from .camera import SAR_CAMERA
 from .people import CELL, PEOPLE_STYLES, POSES, RESPONDER_TAGS, pose_geometry, variants
+
+if TYPE_CHECKING:
+    from isaaclab.terrains import TerrainGeneratorCfg
 
 GROUND_TRUTH_FORMAT = "drone_lab.sar.ground_truth/v1"
 """Identifier written into the ground-truth JSON."""
@@ -206,6 +211,7 @@ def pose_quaternion(pose: str) -> np.ndarray:
 
 
 def yaw_quaternion(yaw: float) -> np.ndarray:
+    """Quaternion (x, y, z, w) of a turn by ``yaw`` [rad] about world z."""
     return np.array([0.0, 0.0, math.sin(0.5 * yaw), math.cos(0.5 * yaw)])
 
 
@@ -257,6 +263,7 @@ class SceneObject:
 
     @property
     def label(self) -> str | None:
+        """Semantic class, or None for an unlabelled object (a tree)."""
         return self.category if self.labeled else None
 
     @property
@@ -265,10 +272,19 @@ class SceneObject:
         return float(math.hypot(self.half_extents[0], self.half_extents[1]))
 
     def prim_path(self, site_prim_path: str = "/World/sar") -> str:
+        """Prim path of the object under the site root."""
         return f"{site_prim_path}/{OBJECTS_SUBPATH}/{self.name}"
 
 
-def object_geometry(spec_lo, spec_hi, pose: str, yaw: float, scale: float, center_xy=None, origin=None):
+def object_geometry(
+    spec_lo: ArrayLike,
+    spec_hi: ArrayLike,
+    pose: str,
+    yaw: float,
+    scale: float,
+    center_xy: Sequence[float] | np.ndarray | None = None,
+    origin: ArrayLike | None = None,
+) -> dict[str, Any]:
     """Posed box geometry of an asset.
 
     Either ``center_xy`` (footprint centre, z ignored) or ``origin`` (asset origin, world) must be given.
@@ -329,7 +345,7 @@ class Rest(NamedTuple):
 class TerrainSite:
     """CPU copy of the survey terrain with height queries and the sub-terrain type of every tile."""
 
-    def __init__(self, terrain_cfg=None):
+    def __init__(self, terrain_cfg: TerrainGeneratorCfg | None = None):
         from drone_lab.mapping import MeshHeightQuery
         from drone_lab.terrain import SURVEY_TERRAIN_CFG, terrain_area
 
@@ -343,9 +359,11 @@ class TerrainSite:
 
     # --- terrain queries -------------------------------------------------------------------------------------
     def heights(self, xy: np.ndarray) -> np.ndarray:
+        """Terrain height [m] at world points ``xy`` (N, 2)."""
         return self.query(np.asarray(xy, dtype=np.float64).reshape(-1, 2))
 
     def height(self, x: float, y: float) -> float:
+        """Terrain height [m] at one world point."""
         return float(self.heights(np.array([[x, y]]))[0])
 
     def tile_of(self, x: float, y: float) -> str:
@@ -368,11 +386,14 @@ class TerrainSite:
         return self.terrain_z_range(inset=-0.5 * spacing - 0.5)[1] + float(clearance)
 
     def in_bounds(self, x: float, y: float, margin: float = 0.0) -> bool:
+        """Whether (x, y) lies on the site (terrain and border), at least ``margin`` inside its edge."""
         x0, x1, y0, y1 = self.bounds
         return x0 + margin <= x <= x1 - margin and y0 + margin <= y <= y1 - margin
 
 
-def generate_terrain_with_tiles(cfg) -> tuple[np.ndarray, np.ndarray, dict[tuple[int, int], str]]:
+def generate_terrain_with_tiles(
+    cfg: TerrainGeneratorCfg,
+) -> tuple[np.ndarray, np.ndarray, dict[tuple[int, int], str]]:
     """Run Isaac Lab's :class:`TerrainGenerator` on the CPU and record the sub-terrain name of each tile.
 
     Returns:
@@ -411,12 +432,15 @@ class Scenario:
     terrain_seed: int | None = None
 
     def by_category(self, category: str) -> list[SceneObject]:
+        """Objects of one category."""
         return [o for o in self.objects if o.category == category]
 
     def labeled(self) -> list[SceneObject]:
+        """Objects with a semantic class (all but the trees)."""
         return [o for o in self.objects if o.labeled]
 
     def counts(self) -> dict[str, int]:
+        """Number of objects per class, plus the unlabelled ones."""
         out = {c: 0 for c in CLASSES}
         out[UNLABELED] = 0
         for o in self.objects:
@@ -505,6 +529,7 @@ class Scenario:
         }
 
     def save_ground_truth(self, path: str | Path, site_prim_path: str = "/World/sar") -> Path:
+        """Write :meth:`ground_truth` to ``path`` (JSON); returns the path."""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(self.ground_truth(site_prim_path), indent=1))
@@ -1002,7 +1027,7 @@ def default_home(site: TerrainSite, cfg: ScenarioCfg) -> tuple[float, float]:
     return a.x_min - 3.0, first_line
 
 
-def generate_scenario(cfg: ScenarioCfg | None = None, site: TerrainSite | None = None, **overrides) -> Scenario:
+def generate_scenario(cfg: ScenarioCfg | None = None, site: TerrainSite | None = None, **overrides: Any) -> Scenario:
     """Place every object of the site for ``cfg.seed`` (deterministic for a given cfg and terrain).
 
     Args:

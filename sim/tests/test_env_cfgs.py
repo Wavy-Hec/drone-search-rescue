@@ -6,14 +6,21 @@ from _runner import main_for, require
 
 SURVEY = "DroneLab-Survey-ARL-Robot-1-v0"
 BUILTIN = "IsaacContrib-TrackPositionNoObstacles-ARL-Robot-1"
-_GROUP_SETTINGS = {"concatenate_terms", "concatenate_dim", "enable_corruption", "history_length",
-                   "flatten_history_dim", "history_order"}
+_GROUP_SETTINGS = {
+    "concatenate_terms",
+    "concatenate_dim",
+    "enable_corruption",
+    "history_length",
+    "flatten_history_dim",
+    "history_order",
+}
 
 
 def _parse(task, overrides=()):
     require("isaaclab_tasks")
-    import drone_lab.tasks  # noqa: F401
     from isaaclab_tasks.utils import parse_env_cfg
+
+    import drone_lab.tasks  # noqa: F401
 
     return parse_env_cfg(task, device="cpu", overrides=list(overrides))
 
@@ -25,9 +32,11 @@ def _terms(group):
 def test_survey_policy_observations_match_training():
     cfg, base = _parse(SURVEY), _parse(BUILTIN)
     pol, bpol = cfg.observations.policy, base.observations.policy
-    assert _terms(pol) == _terms(bpol) == [
-        "base_link_position", "base_orientation", "base_lin_vel", "base_ang_vel", "last_action"
-    ]
+    assert (
+        _terms(pol)
+        == _terms(bpol)
+        == ["base_link_position", "base_orientation", "base_lin_vel", "base_ang_vel", "last_action"]
+    )
     for name in _terms(pol)[1:]:
         t, b = getattr(pol, name), getattr(bpol, name)
         assert t.func is b.func and t.params == b.params and t.scale == b.scale and t.clip == b.clip, name
@@ -88,8 +97,9 @@ def test_physics_presets_and_overrides():
 
 def test_agent_cfg_loads_builtin_checkpoints():
     require("isaaclab_tasks")
-    import drone_lab.tasks  # noqa: F401
     from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
+
+    import drone_lab.tasks  # noqa: F401
 
     ours = load_cfg_from_registry(SURVEY, "rsl_rl_cfg_entry_point")
     base = load_cfg_from_registry(BUILTIN, "rsl_rl_cfg_entry_point")
