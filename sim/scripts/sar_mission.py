@@ -439,6 +439,8 @@ def fly(
                         break
                     flight.touchdown_t = t
                     print(f"[sar_mission] touchdown at t={t:.1f} s: motors off", flush=True)
+                if flight.touchdown_t is not None:
+                    phase = "landed"
                 pos = robot.data.root_pos_w.torch[0].cpu().numpy()
                 hits = scanner.data.ray_hits_w.torch[0].cpu().numpy()
                 clearance.update(t, pos, phase, hits)
