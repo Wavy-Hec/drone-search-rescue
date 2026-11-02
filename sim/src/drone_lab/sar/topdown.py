@@ -1,7 +1,8 @@
 """Top-down object map of a SAR scenario (matplotlib, CPU only).
 
 Shows the terrain (hill-shaded height), the survey area, the landing pad, the default lawnmower path and every
-object's footprint coloured by class (trees as dashed canopies), with labels; optionally over a rendered photo.
+object's footprint coloured by class (trees as dashed canopies), with labels (people: their pose, or responder);
+optionally over a rendered photo.
 """
 
 from __future__ import annotations
@@ -11,7 +12,17 @@ from pathlib import Path
 import numpy as np
 
 from .labels import CLASS_COLORS
-from .scenario import Scenario, TerrainSite
+from .scenario import RESPONDER_GROUP, Scenario, TerrainSite, pose_family
+
+_POSE_TAGS = {"lying_side": "on side", "standing_waving": "waving"}
+"""Map label of a pose when it is not simply its family (lying / sitting / standing)."""
+
+
+def person_tag(obj) -> str:
+    """Short label of a person on the map: lying, on side, sitting, waving, standing or responder."""
+    if obj.group == RESPONDER_GROUP:
+        return "responder"
+    return _POSE_TAGS.get(obj.pose, pose_family(obj.pose))
 
 
 def terrain_raster(site: TerrainSite, resolution: float = 0.1):
@@ -78,7 +89,7 @@ def plot_object_map(
             ax.add_patch(Polygon(fp, closed=True, fc=(*color, 0.55), ec=color, lw=1.4, zorder=5))
         if o.category == "person":
             ax.plot(*o.center[:2], marker="x", color="white", ms=5, zorder=6)
-            tag = f"{o.name.split('_')[-1]} {'lying' if o.pose.startswith('lying') else 'standing'}"
+            tag = f"{o.name.split('_')[-1]} {person_tag(o)}"
             ax.annotate(
                 tag,
                 o.center[:2],
@@ -109,12 +120,11 @@ def plot_object_map(
     ax.set_aspect("equal")
     ax.set_xlabel("x [m]")
     ax.set_ylabel("y [m]")
-    n_people = sum(1 for o in scenario.objects if o.category == "person")
-    n_lying = sum(1 for o in scenario.objects if o.category == "person" and o.pose.startswith("lying"))
+    people = [o for o in scenario.objects if o.category == "person"]
+    tags = [person_tag(o) for o in people]
+    mix = ", ".join(f"{tags.count(t)} {t}" for t in dict.fromkeys(sorted(tags)))
     ax.set_title(
-        title
-        or f"SAR site, seed {scenario.cfg.seed}: {n_people} people ({n_lying} lying), "
-        f"flight z {scenario.flight_z:.2f} m"
+        title or f"SAR site, seed {scenario.cfg.seed}: {len(people)} people ({mix}), flight z {scenario.flight_z:.2f} m"
     )
     fig.tight_layout()
     path = Path(path)

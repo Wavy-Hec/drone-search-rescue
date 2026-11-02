@@ -8,6 +8,7 @@ Findings that shape the scene code:
 
 * People (``Isaac/People/Characters/*``): metres, Z-up, origin between the feet, feet at z = 0, facing -Y, in a
   T-pose (arm span 1.56-1.87 m, height 1.61-1.80 m, front-to-back 0.35-0.43 m). No semantics, no colliders.
+  :mod:`drone_lab.sar.people` bakes them into natural poses (lying, sitting, waving, standing).
 * Simple_Warehouse props and ``Isaac/Props``: metres, Z-up, origin at the bottom centre. Most carry *legacy*
   ``Semantics`` labels ("box", "barel", "crate", "pallet", "cone") and the forklift carries a ``LabelsAPI``
   label "forklift" on its body; the spawner replaces all of them with the classes of :data:`CLASSES`.

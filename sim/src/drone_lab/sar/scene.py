@@ -12,7 +12,9 @@ generator is deterministic, so it matches the imported terrain; this is checked 
 * textures the terrain with several MDL ground materials (grass / soil / gravel / concrete / asphalt, bound to face
   subsets of the terrain mesh by tile type and slope),
 * references every object USD at ``<prim_path>/objects/<name>`` with its pose and scale (unit fix included),
-  replaces any semantic labels the asset brought along and applies ``class: <category>`` (trees get none),
+  replaces any semantic labels the asset brought along and applies ``class: <category>`` (trees get none); with
+  ``people_style="natural"`` each person is a static posed copy of its character, baked on first use into the
+  asset cache (:class:`drone_lab.sar.people.PoseBaker`, ``<cache>/posed_people``),
 * builds the procedural landing pad (base disk with a collider, yellow ring, white "H"),
 * remembers the scenario (:func:`get_spawned_scenario`) and stores its ground truth as custom data on the prim.
 
@@ -48,6 +50,7 @@ from isaaclab.utils import configclass
 
 from .assets import ASSET_CACHE, ASSETS, GROUND_MATERIALS, SEMANTIC_TYPE, SKY_HDRI, UNLABELED, asset_root
 from .camera import SAR_CAMERA, CameraSpec
+from .people import POSES, PoseBaker
 from .scenario import OBJECTS_SUBPATH, Scenario, ScenarioCfg, TerrainSite, generate_scenario
 
 logger = logging.getLogger(__name__)
@@ -57,6 +60,9 @@ _SPAWNED: dict[str, Scenario] = {}
 
 _LOCALIZED: dict[str, str] = {}
 """Remote URL -> local localised copy (one download / rewrite per asset per process)."""
+
+_BAKERS: dict[str, PoseBaker] = {}
+"""Pose bakers by cache folder (they keep the animation rig and the characters loaded)."""
 
 CACHE_COPY_PREFIX = "isaaclab_usd_"
 """Folders of the rewritten USD layers that ``retrieve_file_path`` writes for every retrieval."""
@@ -86,6 +92,11 @@ class SarSiteCfg(SpawnerCfg):
     num_people: tuple[int, int] = (6, 10)
     lying_fraction: float = 0.5
     near_block_fraction: float = 0.4
+    people_style: str = "tpose"
+    """``tpose``: the characters' rest T-pose; ``natural``: victims lying, sitting or waving and responders
+    standing (``env.scene.sar_site.spawn.people_style=natural``). The other objects are the same either way."""
+    num_responders: tuple[int, int] = (2, 3)
+    """Responders by the vehicle and the landing pad (``natural`` only)."""
     num_crates: tuple[int, int] = (7, 10)
     num_barrels: tuple[int, int] = (4, 6)
     num_pallets: tuple[int, int] = (3, 5)
@@ -113,6 +124,8 @@ class SarSiteCfg(SpawnerCfg):
             num_people=tuple(self.num_people),
             lying_fraction=float(self.lying_fraction),
             near_block_fraction=float(self.near_block_fraction),
+            people_style=str(self.people_style),
+            num_responders=tuple(self.num_responders),
             num_crates=tuple(self.num_crates),
             num_barrels=tuple(self.num_barrels),
             num_pallets=tuple(self.num_pallets),
@@ -394,6 +407,15 @@ def localize(url: str, cache_dir: str | None) -> str:
     return _LOCALIZED[key]
 
 
+def pose_baker(cache_dir: str | None) -> PoseBaker:
+    """Baker of the natural people, writing to ``<cache>/posed_people`` (one per cache, kept for the process)."""
+    key = f"baker|{cache_dir}"
+    if key not in _BAKERS:
+        out = os.path.join(cache_dir, "posed_people") if cache_dir else None
+        _BAKERS[key] = PoseBaker(lambda url: localize(url, cache_dir), asset_root(), out)
+    return _BAKERS[key]
+
+
 # ---------------------------------------------------------------------------------------------------------------
 # spawning
 # ---------------------------------------------------------------------------------------------------------------
@@ -472,7 +494,10 @@ def spawn_sar_site(prim_path: str, cfg: SarSiteCfg, translation=None, orientatio
             prim = spawn_landing_pad(path, obj.position, radius=obj.half_extents[0])
         else:
             spec = ASSETS[obj.asset]
-            local = localize(spec.url, cache_dir)
+            if obj.category == "person" and obj.pose in POSES:
+                local = pose_baker(cache_dir).usd(spec.key, spec.path, obj.pose)
+            else:
+                local = localize(spec.url, cache_dir)
             prim = stage.DefinePrim(path, "Xform")
             if not prim.GetReferences().AddReference(local):
                 raise RuntimeError(f"could not reference {local} at {path}")
@@ -489,8 +514,9 @@ def spawn_sar_site(prim_path: str, cfg: SarSiteCfg, translation=None, orientatio
     _SPAWNED[prim_path] = scenario
     counts = {k: v for k, v in scenario.counts().items() if v}
     logger.info(
-        "SAR site seed %d spawned at %s in %.1f s: %s (asset cache %s, %d stale copies pruned)",
+        "SAR site seed %d (%s people) spawned at %s in %.1f s: %s (asset cache %s, %d stale copies pruned)",
         scenario.cfg.seed,
+        scenario.cfg.people_style,
         prim_path,
         time.time() - t0,
         counts,
@@ -498,8 +524,8 @@ def spawn_sar_site(prim_path: str, cfg: SarSiteCfg, translation=None, orientatio
         pruned,
     )
     print(
-        f"[drone_lab.sar] site seed {scenario.cfg.seed}: {counts} spawned in {time.time() - t0:.1f} s "
-        f"(asset cache: {cache_dir or 'Isaac Lab default (/tmp)'})",
+        f"[drone_lab.sar] site seed {scenario.cfg.seed} ({scenario.cfg.people_style} people): {counts} spawned in "
+        f"{time.time() - t0:.1f} s (asset cache: {cache_dir or 'Isaac Lab default (/tmp)'})",
         flush=True,
     )
     return root
@@ -723,6 +749,7 @@ __all__ = [
     "hold_cache_copy",
     "localize",
     "look_at_quat_ros",
+    "pose_baker",
     "prune_cache_copies",
     "read_camera",
     "sar_camera_cfg",

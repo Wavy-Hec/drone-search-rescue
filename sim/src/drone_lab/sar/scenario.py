@@ -16,6 +16,12 @@ terrace or crater wall), and "near_block" marks the people next to a collapsed b
 or stairs tile). The landing pad sits on the flat border next to the start of the default lawnmower path, with
 traffic cones at its corners.
 
+``people_style="natural"`` keeps that layout and then re-poses every person (:mod:`drone_lab.sar.people`): the
+victims lie on their back or side, sit or wave, at their place or slid towards their step (a sitting victim leans
+its back towards it), and a few responders stand by the vehicle and the landing pad. A posed person rests on the
+terrain through the under-side height map of its pose: nothing pokes into the body, and the parts that carry it
+(back, seat, feet) are at most a few centimetres above the ground. The rest of the site is the T-pose site's.
+
 Only numpy (+ Isaac Lab's CPU terrain generator through :mod:`drone_lab.terrain`) is needed; no simulator.
 """
 
@@ -25,6 +31,7 @@ import json
 import math
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 
@@ -39,6 +46,7 @@ from .assets import (
     assets_of,
 )
 from .camera import SAR_CAMERA
+from .people import CELL, PEOPLE_STYLES, POSES, RESPONDER_POSES, pose_geometry
 
 GROUND_TRUTH_FORMAT = "drone_lab.sar.ground_truth/v1"
 """Identifier written into the ground-truth JSON."""
@@ -61,6 +69,11 @@ class ScenarioCfg:
     """Fraction of people that must stand or lie right next to a step at least 0.6 m high (``near_step``). On this
     terrain that is mostly a block of a collapsed building (``near_block``), sometimes a pyramid terrace or the
     crater wall; the rule is kept as is so that every seed keeps its layout."""
+    people_style: str = "tpose"
+    """``tpose``: the characters' rest T-pose, standing or lying flat. ``natural``: the same places, re-posed as
+    victims lying on their back or side, sitting or waving, plus responders (see the module docstring)."""
+    num_responders: tuple[int, int] = (2, 3)
+    """Responders standing by the vehicle and the landing pad (``natural`` only)."""
     num_vehicles: int = 1
     num_crates: tuple[int, int] = (7, 10)
     num_barrels: tuple[int, int] = (4, 6)
@@ -106,6 +119,34 @@ _FLAT_TOL = {
 _CLEARANCE = {"vehicle": 0.25, "person_lying": 0.15, "person_standing": 0.1}
 _NEAR_STEP = 0.6
 """A step next to a person is terrain at least this much higher than the person's ground [m]."""
+_NATURAL_ONLY = ("people_style", "num_responders")
+"""Scenario settings that only exist for natural people (T-pose ground truth leaves them out, unchanged)."""
+_VICTIM_MIX = {
+    "lying": {"lying_back": 0.4, "lying_side": 0.35, "sitting": 0.25},
+    "standing": {"standing_waving": 0.65, "sitting": 0.35},
+}
+"""Natural pose of a victim by the pose of its T-pose place (probabilities)."""
+_VICTIM_FALLBACK = {"lying": ("lying_back", "lying_side", "sitting"), "standing": ("standing_waving", "sitting")}
+_SUPPORT_GAP = {"lying": 0.06, "sitting": 0.05, "standing": 0.05}
+"""Largest drop of the ground under the parts that carry a posed person (back, seat, feet) [m]."""
+_SUPPORT = 0.02
+"""Under-side cells at most this high carry the body (they touch the ground on a flat floor) [m]."""
+_RIM_GRAZE = 0.01
+"""How far the rim of an under-side square may reach into the body [m] (see :meth:`_Placer.natural_fit`)."""
+_SUPPORT_LIFT = 0.01
+"""A posed person must rest on the parts that carry it: within this of the terrain [m] (not, say, on its hand
+over the foot of a wall with its back in the air)."""
+RESPONDER_GROUP = "responders"
+"""``group`` of the responders (victims have none)."""
+RESPONDER_ASSETS = (
+    "female_medical_01",
+    "male_medical_01",
+    "female_police_01",
+    "female_police_02",
+    "female_police_03",
+    "male_police_04",
+)
+"""Characters in uniform that the responders wear."""
 _NEAR_RING = (0.35, 0.8, 1.3)
 """The step must be within these distances of the person's footprint (sampled on a 0.25 m grid) [m]."""
 BUILDING_TILES = ("blocks", "stairs")
@@ -137,13 +178,21 @@ def _quat_to_matrix(q: np.ndarray) -> np.ndarray:
     )
 
 
+def pose_family(pose: str) -> str:
+    """``lying``, ``sitting`` or ``standing`` (``upright`` objects count as standing)."""
+    if pose.startswith("lying"):
+        return "lying"
+    return "sitting" if pose == "sitting" else "standing"
+
+
 def pose_quaternion(pose: str) -> np.ndarray:
     """Quaternion (x, y, z, w) that puts an asset into ``pose`` before its yaw.
 
     The people face -Y, so a rotation about X by -90 deg lays them on their back (front up, body along +Y from the
-    feet) and +90 deg on their front (body along -Y); the T-pose arms stay flat on the ground either way.
+    feet) and +90 deg on their front (body along -Y); the T-pose arms stay flat on the ground either way. Natural
+    poses (:data:`drone_lab.sar.people.POSES`) are baked into their meshes: no rotation.
     """
-    if pose in ("upright", "standing"):
+    if pose in ("upright", "standing") or pose in POSES:
         return np.array([0.0, 0.0, 0.0, 1.0])
     if pose == "lying_face_up":
         return np.array([-math.sqrt(0.5), 0.0, 0.0, math.sqrt(0.5)])
@@ -176,7 +225,8 @@ class SceneObject:
     yaw: float
     """Heading about world z [rad] (applied after the pose rotation)."""
     pose: str
-    """"upright", "standing", "lying_face_up" or "lying_face_down"."""
+    """"upright", "standing", "lying_face_up" or "lying_face_down"; natural people: a key of
+    :data:`drone_lab.sar.people.POSES` ("lying_back", "lying_side", "sitting", "standing_waving", ...)."""
     scale: float
     """Size multiplier; the asset's unit scale (0.01 for centimetre assets) comes on top."""
     unit_scale: float
@@ -257,6 +307,19 @@ def _person_parts(lo, hi):
     arm_lo = np.array([lo[0], lo[1], lo[2] + 0.74 * h])
     arm_hi = np.array([hi[0], hi[1], lo[2] + 0.88 * h])
     return body_lo, body_hi, arm_lo, arm_hi
+
+
+class Rest(NamedTuple):
+    """How a posed person rests on the terrain (:meth:`_Placer.natural_fit`)."""
+
+    ground: float
+    """Height of the asset origin (the lowest point of the body) [m]."""
+    gap: float
+    """Largest drop of the ground under the parts that carry the body (0 on a flat floor) [m]."""
+    lift: float
+    """Smallest height of those parts above the terrain: 0 when the body rests on them [m]."""
+    spread: float
+    """Max - min terrain height under the body [m]."""
 
 
 class TerrainSite:
@@ -397,6 +460,10 @@ class Scenario:
         x0, x1, y0, y1 = self.area
         bx0, bx1, by0, by1 = self.bounds
         pad = next((o for o in self.objects if o.category == "landing_pad"), None)
+        cfg = _jsonable(asdict(self.cfg))
+        if self.cfg.people_style == "tpose":  # T-pose sites keep their original records byte for byte
+            for key in _NATURAL_ONLY:
+                cfg.pop(key)
         return {
             "format": GROUND_TRUTH_FORMAT,
             "seed": self.cfg.seed,
@@ -429,7 +496,7 @@ class Scenario:
             "camera": SAR_CAMERA.to_dict(),
             "counts": {k: v for k, v in self.counts().items()},
             "counts_in_area": {c: sum(1 for o in self.objects if o.category == c and o.in_area) for c in CLASSES},
-            "scenario_cfg": _jsonable(asdict(self.cfg)),
+            "scenario_cfg": cfg,
             "objects": objs,
         }
 
@@ -491,9 +558,11 @@ class _Placer:
         rz = _quat_to_matrix(yaw_quaternion(yaw))[:2, :2]
         return np.column_stack([u.ravel(), v.ravel()]) @ rz.T + np.asarray(origin_xy, float)[:2]
 
-    def free(self, cx, cy, r, group=None, gap=None) -> bool:
+    def free(self, cx, cy, r, group=None, gap=None, skip=None) -> bool:
         gap = self.cfg.gap if gap is None else gap
         for o in self.objects:
+            if o is skip:
+                continue
             g = self.cfg.cluster_gap if (group is not None and o.group == group) else gap
             if math.hypot(o.center[0] - cx, o.center[1] - cy) < o.radius + r + g:
                 return False
@@ -578,14 +647,9 @@ class _Placer:
                 return None
         near_step = near_block = False
         if category == "person":
-            ring = np.concatenate(
-                [self.footprint_points(cx, cy, rz, hx + clear + d, hy + clear + d, step=0.25) for d in _NEAR_RING]
-            )
-            high = site.heights(ring) >= ground + _NEAR_STEP
-            near_step = bool(np.any(high))
+            near_step, near_block = self.near_flags(cx, cy, rz, hx + clear, hy + clear, ground)
             if require_near_step and not near_step:
                 return None
-            near_block = any(site.tile_of(float(x), float(y)) in BUILDING_TILES for x, y in ring[high])
         if category == UNLABELED:
             ground = float(np.median(z))
             if ground + float(geo["corners"][:, 2].max()) > self.flight_z - cfg.tree_top_margin:
@@ -622,6 +686,237 @@ class _Placer:
         )
         self.objects.append(obj)
         return obj
+
+    def near_flags(self, cx, cy, rz, hx, hy, ground) -> tuple[bool, bool]:
+        """(``near_step``, ``near_block``) of a person whose footprint (with clearance) has half sizes hx, hy."""
+        ring = np.concatenate([self.footprint_points(cx, cy, rz, hx + d, hy + d, step=0.25) for d in _NEAR_RING])
+        high = self.site.heights(ring) >= ground + _NEAR_STEP
+        near_block = any(self.site.tile_of(float(x), float(y)) in BUILDING_TILES for x, y in ring[high])
+        return bool(np.any(high)), near_block
+
+    # --- natural people -----------------------------------------------------------------------------------
+    def natural_fit(self, spec: AssetSpec, pose: str, yaw: float, scale: float, cx: float, cy: float) -> Rest | None:
+        """How a posed person whose box is centred at (cx, cy) rests on the terrain (None: off the terrain).
+
+        The under-side height map of the pose is laid over the terrain, sampled at the centre, corners and edge
+        midpoints of every square; the body rests on the highest sample relative to its under-side, so no terrain
+        pokes into it. The parts that carry the body are the squares whose under-side is at most 2 cm high (back,
+        seat, soles): see :class:`Rest` for the two numbers that say whether it stands on them.
+        """
+        geo = pose_geometry(spec.key, pose)
+        under = geo.underside * scale
+        nx, ny = under.shape
+        half = 0.5 * CELL * scale
+        ii, jj = np.meshgrid(np.arange(2 * nx + 1), np.arange(2 * ny + 1), indexing="ij")
+        local = np.column_stack([geo.origin[0] * scale + ii.ravel() * half, geo.origin[1] * scale + jj.ravel() * half])
+        c, s = math.cos(yaw), math.sin(yaw)
+        t = self.site.heights(local @ np.array([[c, s], [-s, c]]) + np.array([cx, cy])).reshape(ii.shape)
+        if np.any(np.isnan(t)):
+            return None
+        near = np.max([t[di : di + 2 * nx : 2, dj : dj + 2 * ny : 2] for di in range(3) for dj in range(3)], axis=0)
+        body = ~np.isnan(under)
+        floor = t[1::2, 1::2]
+        # the square centres stay clear of the body; a square's rim may graze it by 1 cm (the lowest vertex of a
+        # square is rarely right above its highest rim point: on a slope this keeps bodies from floating by cm)
+        ground = float(max(np.max(floor[body] - under[body]), np.max(near[body] - under[body]) - _RIM_GRAZE))
+        support = body & (np.nan_to_num(under, nan=np.inf) <= _SUPPORT * scale)
+        return Rest(
+            ground=ground,
+            gap=float(np.max(ground - floor[support])),
+            lift=float(np.min(ground + under[support] - near[support])),
+            spread=float(floor[body].max() - floor[body].min()),
+        )
+
+    @staticmethod
+    def rests_well(fit: Rest | None, pose: str) -> bool:
+        return fit is not None and fit.gap <= _SUPPORT_GAP[pose_family(pose)] and fit.lift <= _SUPPORT_LIFT
+
+    def natural_object(
+        self, spec: AssetSpec, pose: str, yaw: float, scale: float, cx: float, cy: float, fit, name: str, group=None
+    ) -> SceneObject:
+        """The :class:`SceneObject` of a posed person (origin at the bottom centre of its box)."""
+        geo = pose_geometry(spec.key, pose)
+        ground, spread = fit.ground, fit.spread
+        lo, hi = np.asarray(geo.bbox_min) * scale, np.asarray(geo.bbox_max) * scale
+        hx, hy, hz = (float(v) for v in 0.5 * (hi - lo))
+        rz = _quat_to_matrix(yaw_quaternion(yaw))
+        origin = np.array([cx, cy, ground])
+        world = _box_corners(lo, hi) @ rz.T + origin
+        corners = self.footprint_points(cx, cy, rz, hx, hy, step=1e9)
+        rect = corners[np.argsort(np.arctan2(corners[:, 1] - cy, corners[:, 0] - cx))]
+        clear = _CLEARANCE["person_lying" if pose_family(pose) == "lying" else "person_standing"]
+        near_step, near_block = self.near_flags(cx, cy, rz, hx + clear, hy + clear, ground)
+        return SceneObject(
+            name=name,
+            category="person",
+            asset=spec.key,
+            position=tuple(float(v) for v in origin),
+            quat_xyzw=tuple(float(v) for v in yaw_quaternion(yaw)),
+            yaw=float(yaw),
+            pose=pose,
+            scale=float(scale),
+            unit_scale=float(spec.unit_scale),
+            center=(float(cx), float(cy), float(ground + hz)),
+            half_extents=(hx, hy, hz),
+            aabb_min=tuple(float(v) for v in world.min(axis=0)),
+            aabb_max=tuple(float(v) for v in world.max(axis=0)),
+            footprint_xy=[[float(px), float(py)] for px, py in rect],
+            ground_z=ground,
+            ground_spread=spread,
+            labeled=True,
+            in_area=bool(self.site.area.contains(np.array([[cx, cy]]))[0]),
+            near_block=near_block,
+            group=group,
+            near_step=near_step,
+        )
+
+    def natural_half(self, spec: AssetSpec, pose: str, scale: float) -> tuple[float, float]:
+        """Half length and width of a posed person's footprint [m]."""
+        geo = pose_geometry(spec.key, pose)
+        return 0.5 * scale * (geo.bbox_max[0] - geo.bbox_min[0]), 0.5 * scale * (geo.bbox_max[1] - geo.bbox_min[1])
+
+    def in_area_margin(self, cx: float, cy: float, yaw: float, hx: float, hy: float) -> bool:
+        """Is the footprint (centre, heading, half sizes) inside the survey area by the labelled-object margin?"""
+        a, m = self.site.area, self.cfg.area_margin
+        rz = _quat_to_matrix(yaw_quaternion(yaw))
+        c = self.footprint_points(cx, cy, rz, hx, hy, step=1e9)
+        return bool(
+            c[:, 0].min() >= a.x_min + m
+            and c[:, 0].max() <= a.x_max - m
+            and c[:, 1].min() >= a.y_min + m
+            and c[:, 1].max() <= a.y_max - m
+        )
+
+    def step_direction(self, cx: float, cy: float, ground: float, reach: float = 2.5):
+        """Unit vector and distance from (cx, cy) to the nearest terrain at least 0.5 m above ``ground``."""
+        ang = np.linspace(-math.pi, math.pi, 48, endpoint=False)
+        rad = np.arange(0.3, reach + 1e-9, 0.1)
+        rr, aa = np.meshgrid(rad, ang, indexing="ij")
+        pts = np.column_stack([cx + (rr * np.cos(aa)).ravel(), cy + (rr * np.sin(aa)).ravel()])
+        high = np.nonzero(self.site.heights(pts) >= ground + 0.5)[0]
+        if len(high) == 0:
+            return None
+        k = int(high[0])  # rows are radii: the first hit is the nearest
+        return np.array([math.cos(aa.ravel()[k]), math.sin(aa.ravel()[k])]), float(rr.ravel()[k])
+
+    def repose(self, index: int, rng: np.random.Generator) -> SceneObject:
+        """Natural pose for the T-pose person ``objects[index]``.
+
+        Tries the poses of the victim mix (the drawn one first) inside the old footprint circle, so every spacing
+        rule still holds; near a step, slid towards it (a sitting victim turns its back to it). If none rests within
+        the support tolerance there, it moves up to 1 m away (with the spacing checked again); failing that, it
+        takes the best fit.
+        """
+        old = self.objects[index]
+        spec = ASSETS[old.asset]
+        slot = "lying" if old.pose.startswith("lying") else "standing"
+        mix = _VICTIM_MIX[slot]
+        first = list(mix)[int(rng.choice(len(mix), p=np.array(list(mix.values())) / sum(mix.values())))]
+        order = [first] + [q for q in _VICTIM_FALLBACK[slot] if q != first]
+        step = self.step_direction(old.center[0], old.center[1], old.ground_z) if old.near_step else None
+        jitter = float(rng.uniform(-0.35, 0.35))
+        best = None
+        for far in (False, True):
+            for pose in order:
+                hx, hy = self.natural_half(spec, pose, old.scale)
+                r = math.hypot(hx, hy)
+                room = old.radius - r
+                if room < 0 and not far:
+                    continue
+                for yaw, (dx, dy) in self._repose_candidates(old, pose, step, room, jitter, far):
+                    yaw = math.atan2(math.sin(yaw), math.cos(yaw))
+                    cx, cy = old.center[0] + dx, old.center[1] + dy
+                    if old.in_area and not self.in_area_margin(cx, cy, yaw, hx, hy):
+                        continue
+                    if far and not self.free(cx, cy, r, group=old.group, skip=old):
+                        continue
+                    fit = self.natural_fit(spec, pose, yaw, old.scale, cx, cy)
+                    if fit is None:
+                        continue
+                    args = (spec, pose, yaw, old.scale, cx, cy, fit, old.name, old.group)
+                    if self.rests_well(fit, pose):
+                        return self.natural_object(*args)
+                    score = max(fit.gap - _SUPPORT_GAP[pose_family(pose)], fit.lift - _SUPPORT_LIFT)
+                    if best is None or score < best[0]:
+                        best = (score, args)
+        if best is None:
+            raise RuntimeError(f"no natural pose fits the place of {old.name}")
+        return self.natural_object(*best[1])
+
+    @staticmethod
+    def _repose_candidates(old: SceneObject, pose: str, step, room: float, jitter: float, far: bool):
+        """(yaw, offset) to try, best first. Inside the old circle: the old heading (a sitting victim: back to the
+        step) slid towards the step, then eight headings at moves of up to 0.3 m. ``far``: moves of 0.4-1 m."""
+        headings = [old.yaw + k * math.pi / 4 for k in range(8)]
+        if far:
+            for r in (0.4, 0.6, 0.8, 1.0):
+                for a in np.arange(8) * math.pi / 4:
+                    for yaw in headings:
+                        yield yaw, (r * math.cos(a), r * math.sin(a))
+            return
+        preferred = [old.yaw, old.yaw + math.pi]
+        if pose == "sitting" and step is not None:  # the sitting body's back is its local +Y
+            back = math.atan2(-step[0][0], step[0][1])
+            preferred = [back + jitter, back - jitter, back]
+        slides = [0.0]
+        if step is not None:
+            slides = [float(d) for d in np.arange(min(room, step[1]), 0.0, -0.05)] + [0.0]
+        for yaw in preferred:
+            for d in slides:
+                yield yaw, ((d * step[0][0], d * step[0][1]) if step is not None else (0.0, 0.0))
+        moves = [(0.0, 0.0)] + [
+            (r * math.cos(a), r * math.sin(a)) for r in (0.1, 0.2, 0.3) if r <= room for a in np.arange(8) * math.pi / 4
+        ]
+        for move in moves:
+            for yaw in headings:
+                yield yaw, move
+
+    def place_responders(self, n: int, rng: np.random.Generator, tries: int = 600) -> list[SceneObject]:
+        """Up to ``n`` responders: the first by the vehicle, the others around the landing pad (outside its apron),
+        on the same level as what they stand by and facing it (the vehicle) or the survey area (the pad); standing
+        poses, uniformed characters (each responder a different one, if possible not a victim's)."""
+        vehicle = next((o for o in self.objects if o.category == "vehicle"), None)
+        pad = next(o for o in self.objects if o.category == "landing_pad")
+        victims = {o.asset for o in self.objects if o.category == "person"}
+        a = self.site.area
+        area_c = np.array([0.5 * (a.x_min + a.x_max), 0.5 * (a.y_min + a.y_max)])
+        keep = self.cfg.apron_half * 1.2
+        placed: list[SceneObject] = []
+        for k in range(n):
+            taken = {o.asset for o in placed}
+            keys = [c for c in RESPONDER_ASSETS if c not in victims | taken] or [
+                c for c in RESPONDER_ASSETS if c not in taken
+            ]
+            anchors = ([vehicle] if k == 0 and vehicle is not None else []) + [pad]
+            for anchor in anchors:
+                obj = None
+                for _ in range(tries):
+                    spec = ASSETS[keys[int(rng.integers(len(keys)))]]
+                    pose = RESPONDER_POSES[int(rng.integers(len(RESPONDER_POSES)))]
+                    scale = float(rng.uniform(*spec.scale_range))
+                    hx, hy = self.natural_half(spec, pose, scale)
+                    r = math.hypot(hx, hy)
+                    lo = (keep if anchor is pad else anchor.radius) + r + 0.3
+                    dist, ang = float(rng.uniform(lo, lo + 2.2)), float(rng.uniform(-math.pi, math.pi))
+                    cx, cy = anchor.center[0] + dist * math.cos(ang), anchor.center[1] + dist * math.sin(ang)
+                    look = (area_c if anchor is pad else np.asarray(anchor.center[:2])) - (cx, cy)
+                    yaw = math.atan2(look[0], -look[1]) + float(rng.uniform(-0.4, 0.4))  # faces its local -Y
+                    if anchor is pad and not self.site.in_bounds(cx, cy, r + 0.3):
+                        continue
+                    if anchor is not pad and not self.in_area_margin(cx, cy, yaw, hx, hy):
+                        continue
+                    if not self.free(cx, cy, r, group=RESPONDER_GROUP):
+                        continue
+                    fit = self.natural_fit(spec, pose, yaw, scale, cx, cy)
+                    if not self.rests_well(fit, pose) or abs(fit.ground - anchor.ground_z) > 0.15:
+                        continue
+                    obj = self.natural_object(spec, pose, yaw, scale, cx, cy, fit, self.name("person"), RESPONDER_GROUP)
+                    break
+                if obj is not None:
+                    self.objects.append(obj)
+                    placed.append(obj)
+                    break
+        return placed
 
     def sample_xy(self, region: str = "area", margin: float = 1.0) -> tuple[float, float]:
         a = self.site.area
@@ -707,6 +1002,8 @@ def generate_scenario(cfg: ScenarioCfg | None = None, site: TerrainSite | None =
             in to reuse it (building it costs about a second).
     """
     cfg = replace(cfg or ScenarioCfg(), **overrides)
+    if cfg.people_style not in PEOPLE_STYLES:
+        raise ValueError(f"people_style must be one of {PEOPLE_STYLES}, not {cfg.people_style!r}")
     site = site if site is not None else TerrainSite()
     rng = np.random.default_rng([int(cfg.seed), 0x5A12])
     p = _Placer(site, cfg, rng)
@@ -811,6 +1108,15 @@ def generate_scenario(cfg: ScenarioCfg | None = None, site: TerrainSite | None =
     for i in range(n_trees):
         region = "area" if i < cfg.trees_inside_area else "border"
         p.place_random(trees, UNLABELED, region=region, gap=0.3)
+
+    # 6) natural people: the same places, re-posed, plus responders (own random stream: the layout above is kept)
+    if cfg.people_style == "natural":
+        rng_people = np.random.default_rng([int(cfg.seed), 0x5A12, 0x9E0])
+        for i, o in enumerate(list(p.objects)):
+            if o.category == "person":
+                p.objects[i] = p.repose(i, rng_people)
+        lo, hi = cfg.num_responders
+        p.place_responders(int(rng_people.integers(int(lo), int(hi) + 1)), rng_people)
 
     zmin, zmax = site.terrain_z_range()
     return Scenario(

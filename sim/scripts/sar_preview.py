@@ -8,8 +8,11 @@ Writes to ``runs/<out>/`` (default ``runs/sar_preview_seed<seed>``):
 * ``photo_map.png`` / ``photo_map_pins.png``  -- nadir photo of the whole site from 75 m, and with GT pins on it
 * ``drone/NN_<target>_{rgb,depth,classes,boxes}.png`` + ``.npz`` + ``_labels.json`` -- drone-camera frames above
   chosen objects (RGB, distance-to-image-plane, instance-id segmentation, boxes from the segmentation)
-* ``checks.json``           -- stage vs scenario boxes (scale / placement), labels on the prims and in the frames,
-  stage terrain vs CPU terrain, pixel size of people in the drone frames
+* ``closeups/NN_<pose>_<name>_{rgb,boxes}.png`` -- with ``--closeups``: one person per pose, seen from a low oblique
+  camera about 3 m away
+* ``checks.json``           -- stage vs scenario boxes (scale / placement), how the people's meshes rest on the
+  terrain, labels on the prims and in the frames, segmentation boxes vs the projected meshes, stage terrain vs CPU
+  terrain, pixel size of people in the drone frames
 * ``timing.json``           -- Kit start, site spawn, per-frame render time, env.step rate, VRAM of this process
 * ``summary.txt``
 
@@ -19,6 +22,7 @@ Examples (env_isaaclab, from the project root)::
     python scripts/sar_preview.py --seed 3 --out sar_seed3
     python scripts/sar_preview.py --no_sim             # ground truth + object map only (CPU, seconds)
     python scripts/sar_preview.py --bench_only --bench_steps 200   # drone camera only: render time / VRAM
+    python scripts/sar_preview.py --people_style natural --closeups  # posed people + close-ups of each pose
 
 Trailing ``key=value`` tokens are Hydra overrides of the task config
 (e.g. ``env.scene.sar_site.spawn.num_trees=[2,3]``).
@@ -42,8 +46,21 @@ if str(PROJECT_ROOT / "src") not in sys.path:
 
 TASK = "DroneLab-SAR-ARL-Robot-1-v0"
 
+from drone_lab.sar.people import PEOPLE_STYLES  # noqa: E402
+
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument("--seed", type=int, default=0, help="Scenario seed (same seed, same site).")
+parser.add_argument(
+    "--people_style",
+    choices=PEOPLE_STYLES,
+    default=None,
+    help="People of the site: 'tpose' (the task's default) or 'natural' (posed victims and responders).",
+)
+parser.add_argument("--closeups", action="store_true", help="Low oblique close-ups of one person per pose.")
+parser.add_argument("--closeup_size", type=int, nargs=2, default=(1280, 800), metavar=("W", "H"))
+parser.add_argument(
+    "--closeup_people", nargs="*", default=None, help="Close-ups of these people (e.g. person_08) instead."
+)
 parser.add_argument("--out", type=str, default=None, help="Run name under runs/ (or a path).")
 parser.add_argument("--no_sim", action="store_true", help="Only the CPU outputs (ground truth + object map).")
 parser.add_argument(
@@ -77,17 +94,20 @@ import numpy as np  # noqa: E402
 
 from drone_lab.sar.labels import CLASS_COLORS, class_map, colorize_classes, instance_boxes  # noqa: E402
 from drone_lab.sar.scenario import Scenario, TerrainSite  # noqa: E402
-from drone_lab.sar.topdown import plot_object_map  # noqa: E402
+from drone_lab.sar.topdown import person_tag, plot_object_map  # noqa: E402
 
 SITE = "/World/sar"
+CLOSEUP_HFOV_DEG = 50.0
+"""Horizontal field of view of the close-up camera (a standing person 3.8 m away fills about 85 % of its height)."""
 SEG = "instance_segmentation"
 """Segmentation data type of the cameras (one id per labelled object, with ``idToSemantics``)."""
 
 
-def run_dir_for(out: str | None, seed: int) -> Path:
+def run_dir_for(out: str | None, seed: int, people_style: str | None = None) -> Path:
     if out and ("/" in out or out.startswith("~")):
         return Path(out).expanduser().resolve()
-    return PROJECT_ROOT / "runs" / (out or f"sar_preview_seed{seed}")
+    suffix = f"_{people_style}" if people_style not in (None, "tpose") else ""
+    return PROJECT_ROOT / "runs" / (out or f"sar_preview_seed{seed}{suffix}")
 
 
 def lawnmower_xy(scenario: Scenario) -> np.ndarray:
@@ -212,9 +232,11 @@ def main():  # noqa: C901
 
     import drone_lab.tasks  # noqa: F401  (registers the DroneLab gym ids)
 
-    run_dir = run_dir_for(args_cli.out, args_cli.seed)
+    run_dir = run_dir_for(args_cli.out, args_cli.seed, args_cli.people_style)
     run_dir.mkdir(parents=True, exist_ok=True)
     overrides = list(hydra_overrides) + ["physics=isaacsim_physx", f"env.scene.sar_site.spawn.seed={args_cli.seed}"]
+    if args_cli.people_style:
+        overrides.append(f"env.scene.sar_site.spawn.people_style={args_cli.people_style}")
     env_cfg = parse_env_cfg(TASK, device=getattr(args_cli, "device", None) or "cpu", num_envs=1, overrides=overrides)
     t_cpu = time.time()
     scenario, site, gt_path, map_path = cpu_outputs(run_dir, env_cfg.scene.sar_site.spawn)
@@ -251,18 +273,28 @@ def main():  # noqa: C901
             height=args_cli.photo_size,
             hfov_deg=2.0 * math.degrees(math.atan(0.5 * span / hp)),
         )
+        if args_cli.closeups:  # moved to each person below
+            w, h = args_cli.closeup_size
+            env_cfg.scene.closeup_camera = fixed_camera_cfg(
+                "/World/sar_preview/closeup_cam",
+                eye=(cx, cy - 5.0, 3.0),
+                target=(cx, cy, 0.0),
+                width=w,
+                height=h,
+                hfov_deg=CLOSEUP_HFOV_DEG,
+            )
     if args_cli.no_camera:
         if not args_cli.bench_only:
             sys.exit("[sar_preview] --no_camera only makes sense with --bench_only")
         env_cfg.scene.sar_camera = None
     # RTX global settings are process-wide and Isaac Lab requires them to be identical on every camera
     sar_cam = getattr(env_cfg.scene, "sar_camera", None)
-    for name in ("overview_camera", "topdown_camera"):
+    for name in ("overview_camera", "topdown_camera", "closeup_camera"):
         cam_cfg = getattr(env_cfg.scene, name, None)
         if cam_cfg is not None and sar_cam is not None:
             cam_cfg.renderer_cfg.global_settings = sar_cam.renderer_cfg.global_settings.copy()
     if args_cli.aa != "task":
-        for name in ("sar_camera", "overview_camera", "topdown_camera"):
+        for name in ("sar_camera", "overview_camera", "topdown_camera", "closeup_camera"):
             cam_cfg = getattr(env_cfg.scene, name, None)
             if cam_cfg is not None:
                 cam_cfg.renderer_cfg.global_settings.antialiasing_mode = args_cli.aa
@@ -270,7 +302,12 @@ def main():  # noqa: C901
     if "kit" not in (getattr(args_cli, "visualizer", None) or []):
         args_cli.headless = True
 
-    timing: dict = {"seed": args_cli.seed, "bench_only": args_cli.bench_only, "antialiasing": args_cli.aa}
+    timing: dict = {
+        "seed": args_cli.seed,
+        "people_style": env_cfg.scene.sar_site.spawn.people_style,
+        "bench_only": args_cli.bench_only,
+        "antialiasing": args_cli.aa,
+    }
     checks: dict = {}
     vram = VramMonitor().start()
     t_launch = time.time()
@@ -320,7 +357,8 @@ def main():  # noqa: C901
                 base.step(zero)
 
         # ---------------------------------------------------------------- stage checks (scale / placement / labels)
-        checks.update(stage_checks(scenario, site))
+        people_points: dict[str, np.ndarray] = {}
+        checks.update(stage_checks(scenario, site, people_points))
         # ---------------------------------------------------------------- benchmark: env.step with cameras
         hx, hy, _ = scenario.home
         step_at(hx + 3.0, hy, flight_z, 5)
@@ -338,7 +376,11 @@ def main():  # noqa: C901
         times = np.asarray(times[3:]) * 1000.0
         timing["bench"] = {
             "steps": int(args_cli.bench_steps),
-            "render_products": (0 if cam is None else 1) if args_cli.bench_only else 3,
+            "render_products": sum(
+                1
+                for n in ("sar_camera", "overview_camera", "topdown_camera", "closeup_camera")
+                if n in base.scene.sensors
+            ),
             "env_step_ms_mean": round(float(times.mean()), 1),
             "env_step_ms_p50": round(float(np.percentile(times, 50)), 1),
             "env_step_ms_p95": round(float(np.percentile(times, 95)), 1),
@@ -369,6 +411,24 @@ def main():  # noqa: C901
             save_png(run_dir / "photo_map_pins.png", draw_boxes(ft["out"]["rgb"], boxes_td, pins))
             checks["photo_map_labels"] = label_check(boxes_td, scenario)
             checks["overview_labels"] = label_check(instance_boxes(fo["out"][SEG], fo["seg_info"], SITE), scenario)
+            # ------------------------------------------------------------ close-ups of the people
+            if args_cli.closeups:
+                for old_file in (run_dir / "closeups").glob("*"):
+                    if old_file.is_file():
+                        old_file.unlink()
+                cu = base.scene.sensors["closeup_camera"]
+                t_cu = time.time()
+                rows = []
+                for k, (tag, obj, eye, target) in enumerate(choose_closeups(scenario, site, args_cli.closeup_people)):
+                    cu.set_world_poses_from_view(
+                        torch.tensor([eye], dtype=torch.float32, device=device),
+                        torch.tensor([target], dtype=torch.float32, device=device),
+                    )
+                    step_at(hx, hy, scenario.home[2] + 0.8, args_cli.warmup)
+                    fr = camera_frame(cu, ("rgb", SEG))
+                    rows.append(save_closeup(run_dir / "closeups", k, tag, obj, fr, scenario, people_points))
+                checks["closeups"] = rows
+                timing["closeups"] = {"count": len(rows), "seconds": round(time.time() - t_cu, 1)}
             # ------------------------------------------------------------ drone frames above chosen objects
             for old_file in (run_dir / "drone").glob("*"):  # frames of an earlier run of the same name
                 if old_file.is_file():
@@ -383,7 +443,7 @@ def main():  # noqa: C901
                     base.step(zero)
                 fr = camera_frame(cam)
                 t_frames.append(time.time() - t1)
-                frames.append(save_drone_frame(run_dir / "drone", k, tag, obj, fr, scenario))
+                frames.append(save_drone_frame(run_dir / "drone", k, tag, obj, fr, scenario, people_points))
             timing["drone_frames"] = {
                 "count": len(t_frames),
                 "warmup_steps_per_frame": args_cli.warmup,
@@ -415,8 +475,13 @@ def _json_default(o):
     return str(o)
 
 
-def stage_checks(scenario: Scenario, site: TerrainSite) -> dict:
-    """Compare the spawned prims with the scenario: world boxes, resting height, labels; stage vs CPU terrain."""
+def stage_checks(scenario: Scenario, site: TerrainSite, people_points: dict | None = None) -> dict:
+    """Compare the spawned prims with the scenario: world boxes, resting height, labels; stage vs CPU terrain.
+
+    People are also checked against the terrain point by point: every mesh point's height above the terrain under
+    it (``min_clearance_m`` < 0 means the body sinks in; ``contact_pts`` count the points within 2 cm of the
+    ground). Their world mesh points go into ``people_points`` (name -> (N, 3)) for the box checks of the frames.
+    """
     from pxr import Usd, UsdGeom
 
     import isaaclab.sim as sim_utils
@@ -438,24 +503,28 @@ def stage_checks(scenario: Scenario, site: TerrainSite) -> dict:
     cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), ["default", "render"], useExtentsHint=False)
     xcache = UsdGeom.XformCache(Usd.TimeCode.Default())
 
-    def points_box(prim, frame=None):
-        """Box of the mesh points (rest pose), in the world or in ``frame``'s yawed box frame (centre, yaw).
-        Skinned characters' extent attributes are padded, so the BBoxCache box of a person is ~0.15 m too big;
-        the points are what the asset measurements used."""
-        lo_, hi_ = np.full(3, np.inf), np.full(3, -np.inf)
+    def world_points(prim) -> np.ndarray:
+        """All mesh points under ``prim`` in the world (skinned T-pose characters: their rest pose)."""
+        out = []
         for p in Usd.PrimRange(prim):
             if p.IsA(UsdGeom.Mesh):
                 pts = UsdGeom.Mesh(p).GetPointsAttr().Get()
                 if pts is None or len(pts) == 0:
                     continue
                 m = np.array(xcache.GetLocalToWorldTransform(p)).T
-                w = np.asarray(pts, dtype=np.float64) @ m[:3, :3].T + m[:3, 3]
-                if frame is not None:
-                    c, cy_, sy_ = np.array(frame.center), math.cos(frame.yaw), math.sin(frame.yaw)
-                    d = w - c
-                    w = np.column_stack([d[:, 0] * cy_ + d[:, 1] * sy_, -d[:, 0] * sy_ + d[:, 1] * cy_, d[:, 2]])
-                lo_, hi_ = np.minimum(lo_, w.min(0)), np.maximum(hi_, w.max(0))
-        return lo_, hi_
+                out.append(np.asarray(pts, dtype=np.float64) @ m[:3, :3].T + m[:3, 3])
+        return np.concatenate(out) if out else np.zeros((0, 3))
+
+    def points_box(prim, frame=None):
+        """Box of the mesh points, in the world or in ``frame``'s yawed box frame (centre, yaw). Skinned
+        characters' extent attributes are padded, so the BBoxCache box of a person is ~0.15 m too big; the points
+        are what the asset measurements used."""
+        w = world_points(prim)
+        if frame is not None:
+            c, cy_, sy_ = np.array(frame.center), math.cos(frame.yaw), math.sin(frame.yaw)
+            d = w - c
+            w = np.column_stack([d[:, 0] * cy_ + d[:, 1] * sy_, -d[:, 0] * sy_ + d[:, 1] * cy_, d[:, 2]])
+        return w.min(0), w.max(0)
 
     rows, worst = [], 0.0
     for o in scenario.objects:
@@ -489,11 +558,27 @@ def stage_checks(scenario: Scenario, site: TerrainSite) -> dict:
             "labels": labels,
             "descendant_labels": n_desc_labels,
         }
+        if o.category == "person":
+            pts = world_points(prim)
+            clearance = pts[:, 2] - site.heights(pts[:, :2])
+            row["min_clearance_m"] = round(float(np.nanmin(clearance)), 3)
+            row["below_terrain_pts"] = int(np.sum(clearance < -0.01))
+            row["contact_pts"] = int(np.sum(np.abs(clearance) <= 0.02))
+            if people_points is not None:
+                people_points[o.name] = pts
         if o.category != "tree":  # tree boxes include foliage instancers; checked by eye in the renders
             worst = max(worst, err)
         rows.append(row)
     out["objects"] = rows
     out["max_box_error_m_excluding_trees"] = round(worst, 3)
+    people = [r for r in rows if r["name"].startswith("person")]
+    out["people_on_terrain"] = {
+        "people": len(people),
+        "min_clearance_m": min((r["min_clearance_m"] for r in people), default=None),
+        "people_sinking_over_1cm": [r["name"] for r in people if r["below_terrain_pts"]],
+        "people_without_contact": [r["name"] for r in people if not r["contact_pts"]],
+        "max_bottom_minus_ground_m": max((abs(r["bottom_minus_ground_m"]) for r in people), default=None),
+    }
     bad_labels = [
         r["name"]
         for r in rows
@@ -531,16 +616,32 @@ def choose_targets(scenario: Scenario):
     def first(pred):
         return next((o for o in objs if pred(o) and all(o is not p[1] for p in picks)), None)
 
+    if scenario.cfg.people_style == "tpose":
+        people = [
+            ("person_lying", lambda o: o.category == "person" and o.pose.startswith("lying") and o.near_block),
+            ("person_lying_2", lambda o: o.category == "person" and o.pose.startswith("lying")),
+            ("person_standing", lambda o: o.category == "person" and o.pose == "standing"),
+        ]
+    else:  # one person per pose, next to a collapsed building if there is one
+        people = []
+        for t in ("lying", "on side", "sitting", "waving", "responder"):
+            people += [
+                (
+                    f"person_{t.replace(' ', '_')}",
+                    lambda o, t=t: o.category == "person" and person_tag(o) == t and o.near_block,
+                ),
+                (f"person_{t.replace(' ', '_')}", lambda o, t=t: o.category == "person" and person_tag(o) == t),
+            ]
     for tag, pred in [
         ("landing_pad", lambda o: o.category == "landing_pad"),
-        ("person_lying", lambda o: o.category == "person" and o.pose.startswith("lying") and o.near_block),
-        ("person_lying_2", lambda o: o.category == "person" and o.pose.startswith("lying")),
-        ("person_standing", lambda o: o.category == "person" and o.pose == "standing"),
+        *people,
         ("vehicle", lambda o: o.category == "vehicle"),
         ("crates", lambda o: o.category == "crate" and o.group is not None),
         ("barrels", lambda o: o.category == "barrel"),
         ("tree_inside", lambda o: o.category == "tree" and o.in_area),
     ]:
+        if any(p[0] == tag for p in picks):
+            continue
         o = first(pred)
         if o is not None:
             picks.append((tag, o, (0.0, 0.0), 0.0))
@@ -554,7 +655,111 @@ def choose_targets(scenario: Scenario):
     return picks
 
 
-def save_drone_frame(out_dir: Path, k: int, tag: str, obj, fr: dict, scenario: Scenario) -> dict:
+def mesh_box_check(boxes, fr: dict, shape, people_points: dict | None) -> list[dict]:
+    """Segmentation box of every person in a frame vs the box of its projected mesh points (clipped to the image):
+    IoU near 1 means the label covers exactly the posed body (tight box, nothing missing, nothing extra)."""
+    out = []
+    h, w = shape[:2]
+    for b in boxes:
+        pts = (people_points or {}).get(b.name)
+        if b.label != "person" or pts is None:
+            continue
+        uv, zc = project(pts, fr["pos_w"], fr["quat_w_ros"], fr["K"])
+        uv = uv[zc > 0]
+        if not len(uv):
+            continue
+        lo = np.clip(np.floor(uv.min(axis=0)), 0, [w - 1, h - 1])
+        hi = np.clip(np.ceil(uv.max(axis=0)) - 1, 0, [w - 1, h - 1])
+        mx0, my0, mx1, my1 = (int(v) for v in (*lo, *hi))
+        sx0, sy0, sx1, sy1 = b.bbox_xyxy
+        ix = max(0, min(sx1, mx1) - max(sx0, mx0) + 1) * max(0, min(sy1, my1) - max(sy0, my0) + 1)
+        union = (sx1 - sx0 + 1) * (sy1 - sy0 + 1) + (mx1 - mx0 + 1) * (my1 - my0 + 1) - ix
+        out.append({"name": b.name, "iou_seg_vs_mesh": round(ix / union, 3), "mesh_box": [mx0, my0, mx1, my1]})
+    return out
+
+
+def closeup_view(obj, site: TerrainSite, objects) -> tuple[list[float], list[float]] | None:
+    """Eye and target of a low oblique view of a person (about 3 m away, 0.9 m above the target point) with a
+    clear line of sight over the terrain and past the other objects' boxes; None if every direction is blocked."""
+    from drone_lab.sar.scenario import pose_family
+
+    family = "lying" if obj.pose.startswith("lying") else pose_family(obj.pose)
+    height = obj.aabb_max[2] - obj.aabb_min[2]
+    target = np.array([obj.center[0], obj.center[1], obj.ground_z + (0.5 if family == "lying" else 0.55) * height])
+    dist = {"lying": 2.8, "sitting": 2.8, "standing": 3.8}[family]
+    facing = obj.yaw - 0.5 * math.pi  # standing / sitting people face their local -Y
+    if family == "lying":
+        facing = obj.yaw  # look at the body from its side
+    for da in (0.6, -0.6, 0.0, 1.2, -1.2, math.pi + 0.6, math.pi - 0.6, 1.8, -1.8, math.pi):
+        a = facing + da
+        eye = target + np.array([dist * math.cos(a), dist * math.sin(a), 0.9])
+        line = target[None] + np.linspace(0.12, 1.0, 40)[:, None] * (eye - target)[None]
+        if np.any(site.heights(line[:, :2]) > line[:, 2] - 0.15):
+            continue
+        if any(_segment_hits_box(target, eye, o) for o in objects if o is not obj and o.category != "landing_pad"):
+            continue
+        return [float(v) for v in eye], [float(v) for v in target]
+    return None
+
+
+def _segment_hits_box(p0: np.ndarray, p1: np.ndarray, obj, pad: float = 0.05) -> bool:
+    """Does the segment p0-p1 cross the object's world box (slab test)?"""
+    lo, hi = np.asarray(obj.aabb_min) - pad, np.asarray(obj.aabb_max) + pad
+    d = p1 - p0
+    t0, t1 = 0.0, 1.0
+    for i in range(3):
+        if abs(d[i]) < 1e-12:
+            if p0[i] < lo[i] or p0[i] > hi[i]:
+                return False
+            continue
+        a, b = (lo[i] - p0[i]) / d[i], (hi[i] - p0[i]) / d[i]
+        t0, t1 = max(t0, min(a, b)), min(t1, max(a, b))
+        if t0 > t1:
+            return False
+    return True
+
+
+def choose_closeups(scenario: Scenario, site: TerrainSite, names: list[str] | None = None):
+    """One person per pose (``person_tag``), or the people ``names``: ``(tag, person, eye, target)``."""
+    picks, seen = [], set()
+    for o in scenario.objects:
+        tag = person_tag(o) if o.category == "person" else None
+        if tag is None or (names is None and tag in seen) or (names is not None and o.name not in names):
+            continue
+        view = closeup_view(o, site, scenario.objects)
+        if view is not None:
+            seen.add(tag)
+            picks.append((tag.replace(" ", "_"), o, *view))
+    return picks
+
+
+def save_closeup(out_dir: Path, k: int, tag: str, obj, fr: dict, scenario: Scenario, people_points: dict) -> dict:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = f"{k:02d}_{tag}_{obj.name}"
+    rgb = fr["out"]["rgb"][..., :3].astype(np.uint8)
+    seg = fr["out"][SEG].astype(np.int32)
+    boxes = instance_boxes(seg, fr["seg_info"], SITE)
+    save_png(out_dir / f"{stem}_rgb.png", rgb)
+    save_png(out_dir / f"{stem}_boxes.png", draw_boxes(rgb, boxes))
+    save_png(out_dir / f"{stem}_classes.png", colorize_classes(class_map(seg, fr["seg_info"])))
+    target = next((b for b in boxes if b.name == obj.name), None)
+    tight = mesh_box_check(boxes, fr, rgb.shape, people_points)
+    return {
+        "frame": stem,
+        "target": obj.name,
+        "pose": obj.pose,
+        "group": obj.group,
+        "camera_pos_w": [round(float(v), 3) for v in fr["pos_w"]],
+        "target_box": target.to_dict() if target else None,
+        "target_iou_seg_vs_mesh": next((t["iou_seg_vs_mesh"] for t in tight if t["name"] == obj.name), None),
+        "people_boxes": tight,
+        "label_check": label_check(boxes, scenario),
+    }
+
+
+def save_drone_frame(
+    out_dir: Path, k: int, tag: str, obj, fr: dict, scenario: Scenario, people_points: dict | None = None
+) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{k:02d}_{tag}"
     rgb = fr["out"]["rgb"][..., :3].astype(np.uint8)
@@ -594,11 +799,13 @@ def save_drone_frame(out_dir: Path, k: int, tag: str, obj, fr: dict, scenario: S
         ring &= ~mask & (seg <= 1)  # background / unlabelled pixels next to the object (ground)
         if mask.any() and ring.sum() > 50:
             visible_height = round(float(np.median(depth[ring]) - np.percentile(depth[mask], 2)), 3)
+    tight = mesh_box_check(boxes, fr, rgb.shape, people_points)
     rec = {
         "frame": stem,
         "target": obj.name,
         "target_class": obj.category,
         "target_pose": obj.pose,
+        "people_boxes": tight,
         "camera_pos_w": [round(float(v), 3) for v in fr["pos_w"]],
         "camera_height_above_target_ground_m": round(float(fr["pos_w"][2] - obj.ground_z), 3),
         "depth_at_center_m": round(float(depth[depth.shape[0] // 2, depth.shape[1] // 2]), 3),
@@ -623,7 +830,7 @@ def save_drone_frame(out_dir: Path, k: int, tag: str, obj, fr: dict, scenario: S
 
 
 def make_summary(scenario: Scenario, checks: dict, timing: dict, run_dir: Path) -> str:
-    lines = [f"SAR preview, seed {scenario.cfg.seed}: {run_dir}"]
+    lines = [f"SAR preview, seed {scenario.cfg.seed}, {scenario.cfg.people_style} people: {run_dir}"]
     lines.append("objects: " + ", ".join(f"{k} {v}" for k, v in scenario.counts().items() if v))
     lines.append(
         f"scenario spawned == CPU scenario: {checks.get('scenario_matches_cpu')}; flight z {checks.get('flight_z')}"
@@ -639,6 +846,13 @@ def make_summary(scenario: Scenario, checks: dict, timing: dict, run_dir: Path) 
         f"label mismatches {checks.get('label_mismatches')}; prims with leftover asset labels "
         f"{checks.get('objects_with_descendant_labels')}"
     )
+    pt = checks.get("people_on_terrain")
+    if pt:
+        lines.append(
+            f"people on the terrain: {pt['people']} people, lowest mesh point {pt['min_clearance_m']} m above the "
+            f"terrain under it, sinking >1 cm {pt['people_sinking_over_1cm']}, without ground contact "
+            f"{pt['people_without_contact']}, max |bottom - ground| {pt['max_bottom_minus_ground_m']} m"
+        )
     for key in ("photo_map_labels", "overview_labels"):
         if key in checks:
             c = checks[key]
@@ -648,12 +862,21 @@ def make_summary(scenario: Scenario, checks: dict, timing: dict, run_dir: Path) 
             )
     for fr in checks.get("drone_frames", []):
         lc = fr["label_check"]
+        ious = [t["iou_seg_vs_mesh"] for t in fr.get("people_boxes", [])]
         lines.append(
             f"frame {fr['frame']}: target {fr['target']} ({fr['target_pose']}) box min side "
             f"{fr['target_box_min_side_px']} px, height from depth {fr['target_height_from_depth_m']} m "
             f"(expected {fr['target_expected_height_m']}), "
             f"camera {fr['camera_height_above_target_ground_m']} m "
             f"above its ground; labels {lc['correct']}/{lc['objects_seen']} correct, wrong {lc['wrong']}"
+            + (f"; person boxes vs meshes IoU {ious}" if ious else "")
+        )
+    for cu in checks.get("closeups", []):
+        lc, box = cu["label_check"], cu["target_box"]
+        lines.append(
+            f"close-up {cu['frame']}: {cu['pose']}{' (responder)' if cu['group'] else ''}, box "
+            f"{box['bbox_xyxy'] if box else None}, IoU seg vs mesh {cu['target_iou_seg_vs_mesh']}; labels "
+            f"{lc['correct']}/{lc['objects_seen']} correct, wrong {lc['wrong']}"
         )
     b = timing.get("bench", {})
     lines.append(

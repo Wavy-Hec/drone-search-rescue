@@ -1,10 +1,11 @@
 """Search-and-rescue (SAR) dressing of the survey site: a seeded disaster scene plus the drone's downward camera.
 
-Modules (the first five need no simulator):
+Modules (all but :mod:`.scene` work without a simulator; :mod:`.people` needs pxr only to bake poses):
 
 * :mod:`.assets`   -- verified asset URLs, unit fixes, measured sizes, semantic classes, ground materials.
 * :mod:`.camera`   -- intrinsics / mount of the downward RGB-D camera and the pixel-budget math.
 * :mod:`.scenario` -- seeded placement on the terrain (height queries, flatness, spacing) and the ground-truth JSON.
+* :mod:`.people`   -- natural poses of the characters: clip frames retargeted and baked into static meshes.
 * :mod:`.labels`   -- instance-segmentation ids -> objects / classes / 2D boxes (numpy only).
 * :mod:`.capture`  -- drone views, lights and ground looks of the detector dataset (numpy only).
 * :mod:`.topdown`  -- top-down object map figure (matplotlib).
