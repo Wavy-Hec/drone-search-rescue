@@ -149,43 +149,53 @@ with the block walls). Closest approach to an obstacle: 2.4 m, the crown of a tr
 steps per second headless (1.7-2.1x real time) and the link costs it 0.9 ms per step. Comparison with the stock
 COCO detector, the geometry check with perfect boxes and the loop rates: the drone_gcs README (Results).
 
-## Rescue finale: a quadruped walks the route planned on the drone's map
+## Rescue finale: Hector's quadruped walks to a person the drone found
 
-After the survey, a ground robot goes to a person the drone found. A Unitree Go2, driven by Isaac Lab's
-rough-terrain locomotion policy (unchanged), gets the drone's elevation map and the pins of the people and objects.
-It works out where it can walk (slope, step height, roughness, object footprints, its own size), plans the cheapest
-safe route with A*, and follows it with pure pursuit. It starts on the drone's landing pad, which sits on the flat
-border just outside the surveyed area, so the planner adds that border to the drone's map. Commands, method and
-tests: [`src/drone_lab/teaming/README.md`](src/drone_lab/teaming/README.md).
+After the mission, a ground robot goes to a person the drone found. Hector's own quadruped
+(`quadruped_lab`, the converted Isaac Lab 2.x height-scan policy, unchanged) gets the drone's
+elevation map and its pins of people and objects from the ground station's mission report. It works out where it
+can walk (slope, step height, roughness, object footprints, its own size), plans the cheapest safe route with A*,
+and follows it with pure pursuit. It starts on the drone's landing pad and walks on Isaac Sim PhysX, the drone
+mission's backend, over the same seeded terrain and dressed site. Commands, method and tests:
+[`src/drone_lab/teaming/README.md`](src/drone_lab/teaming/README.md).
 
-![The Go2 next to the person after walking the route planned on the drone's map](docs/images/rescue_finale_arrival.jpg)
+![The quadruped next to the person in the crater, after walking the route planned on the drone's map](docs/images/rescue_finale_arrival.jpg)
 
-![The route planned on the drone's elevation map, and the traversability cost](docs/images/rescue_finale_plan.png)
+![The route planned on the drone's elevation map and pins, and the traversability cost](docs/images/rescue_finale_plan.png)
 
-*Dressed site seed 0, route planned on the drone's map of the survey `runs/lawnmower_v1`: from the landing pad north
-along the border, past the crater rim, to a person lying among the collapsed buildings. Top: the arrival in the
-follow-cam video (the minimap shows the route and the walked track). Bottom: the elevation the robot planned on and
-the traversability cost with the no-go cells.*
+*Planned on the report of the full mission (`drone_gcs/runs/sar_demo_seed0`: 9 of 9 people found): from the landing
+pad along the border and down the crater wall to person #34, whom the drone saw lying in the crater (the pin is
+0.24 m from person_08's true centre). Top: the arrival in the follow-cam video, with the minimap of the drone's map
+and the walked track. Bottom: the elevation the robot planned on (the drone's map plus the known flat border around
+the surveyed area) and the traversability cost with the no-go cells.*
 
-| Map the route was planned on | Person | Outcome | Planned / walked | Falls |
+| Map and pins | Person | 8 robots at once, no second tries | Planned route | Falls |
 |---|---|---|---|---|
-| the drone's survey map (`--run runs/lawnmower_v1 --sar_seed 0`) | person_03, lying among the blocks | reached in 34.9 s | 25.2 / 25.0 m | 0 |
-| terrain ground truth (default) | lying between the collapsed buildings | reached in 33.0 s | 24.0 / 23.8 m | 0 |
-| ground truth, dressed site (`--sar_seed 0`) | person_05, standing on the hill | reached in 25.8 s | 18.7 / 18.5 m | 0 |
-| same, `--goal_pin person_08 --max_slope 26` | person_08, down in the crater | reached in 21.6 s | 14.5 / 14.5 m | 0 |
+| the full mission's report (`--report <drone_gcs run>`) | pin #34, lying in the crater (person_08) | 8/8 reached, 23.1-23.7 s | 16.1 m | 0 |
+| the first 90 s of a mission (5 people found) | pin #30, lying next to the crates (person_02) | 8/8, 20.0-20.9 s | 12.8 m | 0 |
+| the drone's survey map `runs/lawnmower_v1` + the site's pins | person_08 in the crater | 8/8, 23.2-23.7 s | 16.0 m | 0 |
+| terrain + site ground truth (default without a report) | person_08 in the crater | 8/8, 22.5-23.1 s | 15.6 m | 0 |
+| ground truth, `--goal_pin person_04` | person_04, lying by the collapsed buildings | 8/8, 29.7-30.1 s | 18.6 m | 0 |
+| ground truth, `--max_slope 22` | person_08, from the crater rim | 8/8, 35.0-35.8 s | 23.7 m | 0 |
 
-With 8 robots at once on two routes and no second tries, the 600- and the 1500-iteration checkpoints both reached the
-person 8/8 times, also with looser limits (30 deg slopes, 0.2 m steps). The drone flies on Isaac Sim PhysX and the
-Go2 walks on Newton, the backend its policy was trained on (on PhysX this checkpoint flips within about 2 s), so
-they run as two simulations of the same seeded terrain.
+The pins do not say whether a person is lying or standing; the height of a pin above the mapped ground does (a
+lying person's back is at most 0.4 m up, a standing person's head 1.3-1.8 m), so the planner picks a lying person
+15-25 m away first and gives them a larger footprint. The site's textured terrain needed one change for walking
+robots: on PhysX a collision mesh with material face subsets stops colliding (the robot fell through the ground), so
+the rescue tasks move the textures to a render-only copy of the terrain mesh. The Unitree Go2 with Isaac Lab's
+rough-terrain policy remains as a fallback (`--robot go2`, on Newton: that checkpoint flips within about 2 s on
+PhysX); it reached the crater person 4/4.
 
 ```bash
 CUDA_VISIBLE_DEVICES= python scripts/rescue_finale.py --plan_only --out rescue_plan    # CPU, seconds: plan only
-python scripts/rescue_finale.py --run runs/lawnmower_v1 --sar_seed 0 --video --out rescue_drone_sar0   # GPU walk
+python scripts/rescue_finale.py --report ~/isaac_ws/projects/drone_gcs/runs/<mission> --video --out finale_mission
+python scripts/rescue_finale.py --video --out finale_gt                  # without a report: the ground truth
+python scripts/rescue_finale.py --num_envs 8 --out finale_x8             # 8 robots at once: success rate, falls
 ```
 
-Each run writes `runs/<out>/plan.png`, `walk.png`, `summary.txt` and, with `--video`, `rescue.mp4` plus
-`rescue_share.mp4` (about 5x smaller, for sharing).
+Each run writes `runs/<out>/plan.png`, `walk.png`, `summary.txt` and, with `--video`, `rescue.mp4` (a title card
+with the plan, the follow-cam walk with a HUD and a minimap, an end card with the result) plus `rescue_share.mp4`
+(about 5x smaller, for sharing).
 
 ## Layout
 
@@ -203,12 +213,13 @@ src/drone_lab/
   register.py       task-registration callback for the isaaclab CLI without pip install
   sar/              search-and-rescue site: assets, seeded scenario + ground truth, camera, spawner, labels,
                     mission plan
-  teaming/          rescue finale: traversability, A* planner, pure-pursuit follower, drone-map inputs, figures
+  teaming/          rescue finale: traversability, A* planner, pure-pursuit follower, inputs, robots, figures
   tasks/
     physics.py      physics preset (Isaac Sim PhysX)
     survey/         DroneLab-Survey-ARL-Robot-1-v0          (flies the built-in policy, not for training)
     sar/            DroneLab-SAR-ARL-Robot-1-v0             (the survey over the dressed site, with the camera)
-    rescue/         DroneLab-Rescue-Go2-v0                  (a Go2 walks a planned route; Newton physics)
+    rescue/         DroneLab-Rescue-CustomQuad-v0           (Hector's quadruped walks a planned route; PhysX)
+                    DroneLab-Rescue-Go2-v0                  (the Go2 fallback; Newton physics)
     track_trajectory/ DroneLab-TrackTrajectory-ARL-Robot-1-v0 (new RL task: follow moving references)
 scripts/
   survey_map.py     GPU: fly the survey with a trained policy, map, score, plot, video
@@ -219,7 +230,7 @@ scripts/
   sar_preview.py    GPU: render the SAR site (overview, photo map, drone frames) and check its scale and labels
   sar_mission.py    GPU: the search-and-rescue mission, streamed live to the drone_gcs ground station
   gen_yolo_dataset.py GPU: render the detector dataset (RGB + instance segmentation over many seeded sites)
-  rescue_finale.py  rescue finale: plan on the drone's map (CPU), walk it with the Go2 (GPU), follow-cam video
+  rescue_finale.py  rescue finale: plan on the drone's map (CPU), walk it with the quadruped (GPU), follow-cam video
 tests/              CPU tests (run_cpu_tests.py or pytest)
 docs/images/        Isaac Sim figures (isaac_*, sar_*) and CPU-pipeline previews (synthetic_*, area_preview)
 ```
