@@ -1,4 +1,4 @@
-"""Rescue finale with Hector's custom quadruped (``quadruped_lab``) on the drone mission's disaster site.
+"""Rescue finale with the custom quadruped (``quadruped_lab``) on the drone mission's disaster site.
 
 The base is ``quadruped_lab``'s ``CustomQuadRoughEnvCfg`` (task ``Isaac-Velocity-Rough-Custom-Quad-v0``): same robot
 (``robot.usd``, DC motors), actions (joint position, scale 0.25), policy observations (base velocities, projected

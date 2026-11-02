@@ -9,7 +9,7 @@
 2. **Plan (CPU):** slope / step / roughness traversability with the robot's limits + object footprints +
    robot-radius inflation, then cost-weighted A* with start/goal snapping and smoothing (``drone_lab.teaming``).
    Writes ``plan.png`` and ``plan.json``. ``--plan_only`` stops here (no simulator).
-3. **Walk (GPU):** ``--robot custom`` (default): Hector's quadruped (``quadruped_lab``, converted 2.x height-scan
+3. **Walk (GPU):** ``--robot custom`` (default): the custom quadruped (``quadruped_lab``, converted 2.x height-scan
    policy) on Isaac Sim PhysX, the drone mission's backend; ``--robot go2``: the Unitree Go2 with Isaac Lab's
    rough-terrain policy on Newton (the fallback). The rescue task puts the robot on the same seeded terrain and SAR
    site and replaces its velocity command with pure pursuit on the route. After a fall the robot respawns where it
@@ -55,7 +55,7 @@ parser.add_argument(
     "--robot",
     choices=tuple(ROBOTS),
     default=next(iter(ROBOTS)),
-    help="Ground robot: 'custom' = Hector's quadruped on Isaac Sim PhysX, 'go2' = the Go2 fallback on Newton.",
+    help="Ground robot: 'custom' = the custom quadruped on Isaac Sim PhysX, 'go2' = the Go2 fallback on Newton.",
 )
 src = parser.add_argument_group("map and pins")
 src.add_argument(

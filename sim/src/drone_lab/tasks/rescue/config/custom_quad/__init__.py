@@ -1,4 +1,4 @@
-"""Rescue finale with Hector's custom quadruped (``quadruped_lab``, converted 2.x height-scan policy, PhysX)."""
+"""Rescue finale with the custom quadruped (``quadruped_lab``, converted 2.x height-scan policy, PhysX)."""
 
 import gymnasium as gym
 

@@ -1,6 +1,6 @@
 """Ground robots of the rescue finale: task, policy, physics and what the planner may ask of each (no simulator).
 
-* ``custom`` -- Hector's own quadruped (``quadruped_lab``): the converted Isaac Lab 2.x height-scan policy on Isaac
+* ``custom`` -- the custom quadruped (``quadruped_lab``): the converted Isaac Lab 2.x height-scan policy on Isaac
   Sim PhysX, the drone mission's backend, so the robot walks the very site the drone flew over.
 * ``go2`` -- the Unitree Go2 with Isaac Lab's rough-terrain policy trained on Newton (the fallback; it flips within
   about 2 s on PhysX, so it walks on Newton).
@@ -54,7 +54,7 @@ class RobotProfile:
 
 CUSTOM_QUAD = RobotProfile(
     key="custom",
-    name="Hector's quadruped",
+    name="Custom quadruped",
     task="DroneLab-Rescue-CustomQuad-v0",
     physics="isaacsim_physx",
     checkpoint=str(quadruped_lab_dir() / "checkpoints_2x" / "height_scanner_model_rslrl5.pt"),
@@ -76,7 +76,7 @@ CUSTOM_QUAD = RobotProfile(
     lookahead_m=0.8,
     camera_scale=1.25,
 )
-"""Hector's quadruped: ``quadruped_lab`` task ``Isaac-Velocity-Rough-Custom-Quad-v0``, converted 2.x checkpoint."""
+"""The custom quadruped: ``quadruped_lab`` task ``Isaac-Velocity-Rough-Custom-Quad-v0``, converted 2.x checkpoint."""
 
 GO2 = RobotProfile(
     key="go2",

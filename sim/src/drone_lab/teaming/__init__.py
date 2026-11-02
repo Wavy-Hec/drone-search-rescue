@@ -1,7 +1,7 @@
 """Air-ground teaming: the drone's map guides a ground robot to a person (the rescue finale).
 
-After the survey flight, a quadruped (Hector's own robot on Isaac Sim PhysX, or a Unitree Go2 on Newton) gets the
-drone's elevation map and the pins of what it found, and walks to a person over the rubble:
+After the survey flight, a quadruped (the custom one of quadruped_lab on Isaac Sim PhysX, or a Unitree Go2 on
+Newton) gets the drone's elevation map and the pins of what it found, and walks to a person over the rubble:
 
 * :mod:`.traversability` -- slope / step / roughness costs from the elevation grid, unknown cells, object
   footprints, inflation by the robot radius -> a cost map.
