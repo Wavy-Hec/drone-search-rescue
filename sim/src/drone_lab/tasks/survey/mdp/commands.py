@@ -214,6 +214,4 @@ class SurveyCarrotCommand(CommandTerm):
         if not self.robot.is_initialized or not hasattr(self, "_path_marker_points"):
             return
         self.carrot_visualizer.visualize(translations=self.carrot_w, environment_ids=self._env.scene._ALL_INDICES)
-        self.path_visualizer.visualize(
-            translations=self._path_marker_points, environment_ids=self._path_marker_env_ids
-        )
+        self.path_visualizer.visualize(translations=self._path_marker_points, environment_ids=self._path_marker_env_ids)

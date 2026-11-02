@@ -51,11 +51,13 @@ class TrajectoryObservationsCfg:
         """Observations for the policy group (order preserved)."""
 
         reference_error = ObsTerm(
-            func=mdp.reference_position_error, params={"command_name": COMMAND_NAME, "clip": 2.0},
+            func=mdp.reference_position_error,
+            params={"command_name": COMMAND_NAME, "clip": 2.0},
             noise=Unoise(n_min=-0.02, n_max=0.02),
         )
         velocity_error = ObsTerm(
-            func=mdp.reference_velocity_error, params={"command_name": COMMAND_NAME, "clip": 3.0},
+            func=mdp.reference_velocity_error,
+            params={"command_name": COMMAND_NAME, "clip": 3.0},
             noise=Unoise(n_min=-0.05, n_max=0.05),
         )
         lookahead = ObsTerm(func=mdp.reference_lookahead, params={"command_name": COMMAND_NAME, "clip": 3.0})
@@ -82,12 +84,15 @@ class TrajectoryEventCfg:
 
 @configclass
 class TrajectoryRewardsCfg:
-    tracking_fine = RewTerm(func=mdp.reference_tracking_exp, weight=15.0, params={"command_name": COMMAND_NAME,
-                                                                                    "std": 0.4})
-    tracking_coarse = RewTerm(func=mdp.reference_tracking_exp, weight=5.0, params={"command_name": COMMAND_NAME,
-                                                                                     "std": 1.5})
-    velocity_tracking = RewTerm(func=mdp.reference_velocity_exp, weight=5.0, params={"command_name": COMMAND_NAME,
-                                                                                       "std": 1.0})
+    tracking_fine = RewTerm(
+        func=mdp.reference_tracking_exp, weight=15.0, params={"command_name": COMMAND_NAME, "std": 0.4}
+    )
+    tracking_coarse = RewTerm(
+        func=mdp.reference_tracking_exp, weight=5.0, params={"command_name": COMMAND_NAME, "std": 1.5}
+    )
+    velocity_tracking = RewTerm(
+        func=mdp.reference_velocity_exp, weight=5.0, params={"command_name": COMMAND_NAME, "std": 1.0}
+    )
     # a penalty (negative weight); the built-in tracking task uses +1.0 on this term
     flat_orientation_l2 = RewTerm(func=base_mdp.flat_orientation_l2, weight=-1.0)
     yaw_aligned = RewTerm(func=yaw_aligned, weight=2.0, params={"std": 1.0})

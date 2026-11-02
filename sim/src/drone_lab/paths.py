@@ -14,6 +14,7 @@ import csv
 import json
 import math
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
@@ -60,10 +61,10 @@ class Area:
             raise ValueError("n must be >= 1")
         if axis == "y":
             edges = np.linspace(self.y_min, self.y_max, n + 1)
-            return [Area(self.x_min, self.x_max, float(a), float(b)) for a, b in zip(edges[:-1], edges[1:])]
+            return [Area(self.x_min, self.x_max, float(a), float(b)) for a, b in pairwise(edges)]
         if axis == "x":
             edges = np.linspace(self.x_min, self.x_max, n + 1)
-            return [Area(float(a), float(b), self.y_min, self.y_max) for a, b in zip(edges[:-1], edges[1:])]
+            return [Area(float(a), float(b), self.y_min, self.y_max) for a, b in pairwise(edges)]
         raise ValueError(f"axis must be 'x' or 'y', got {axis!r}")
 
     def contains(self, xy: np.ndarray, tol: float = 0.0) -> np.ndarray:

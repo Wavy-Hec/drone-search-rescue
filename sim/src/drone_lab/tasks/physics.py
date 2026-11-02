@@ -1,8 +1,7 @@
 """Physics presets shared by the drone tasks."""
 
-from isaaclab_physx.physics import PhysxCfg
-
 from isaaclab.utils import configclass
+from isaaclab_physx.physics import PhysxCfg
 
 from isaaclab_tasks.utils import PresetCfg
 

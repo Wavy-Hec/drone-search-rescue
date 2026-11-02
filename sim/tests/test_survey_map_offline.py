@@ -18,7 +18,6 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
-
 from _runner import main_for, require
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "survey_map.py"
@@ -48,8 +47,16 @@ class _FakeTerm:
         self.terrain_z_min, self.terrain_z_max = float(z.min()), float(z.max())
         self.flight_altitude = self.terrain_z_max + cfg.altitude
         custom = waypoints_array(cfg.waypoints, self.flight_altitude) if cfg.waypoints else None
-        self.waypoints = build_env_paths(cfg.pattern, num_envs, self.area, cfg.spacing, self.flight_altitude,
-                                         waypoints=custom, direction=cfg.direction, turn=cfg.turn)
+        self.waypoints = build_env_paths(
+            cfg.pattern,
+            num_envs,
+            self.area,
+            cfg.spacing,
+            self.flight_altitude,
+            waypoints=custom,
+            direction=cfg.direction,
+            turn=cfg.turn,
+        )
         self.path_points, self.path_arclength, self.path_length = pad_paths(self.waypoints, cfg.path_resolution)
         self.s = torch.zeros(num_envs)
         self.carrot_w = self.path_points[:, 0].clone()
@@ -64,8 +71,16 @@ class _FakeTerm:
     def update(self, pos, dt: float):
         from drone_lab.carrot import advance_carrot, interpolate_path
 
-        self.s, self.carrot_w, self.gate = advance_carrot(self.s, self.path_points, self.path_arclength, pos,
-                                                          self.cfg.speed, dt, self.cfg.max_lead, self.cfg.slow_lead)
+        self.s, self.carrot_w, self.gate = advance_carrot(
+            self.s,
+            self.path_points,
+            self.path_arclength,
+            pos,
+            self.cfg.speed,
+            dt,
+            self.cfg.max_lead,
+            self.cfg.slow_lead,
+        )
         _, self.segment_index = interpolate_path(self.path_points, self.path_arclength, self.s)
         self.done |= self.s >= self.path_length - 1e-4
 
@@ -90,8 +105,9 @@ class _FakeEnv:
         mesh = generate_terrain_mesh(env_cfg.scene.terrain.terrain_generator)
         self._terrain = MeshHeightQuery(*mesh)
         self._offsets = grid_offsets()
-        self.term = _FakeTerm(env_cfg.commands.survey_target, self.num_envs, env_cfg.scene.terrain.terrain_generator,
-                              mesh)
+        self.term = _FakeTerm(
+            env_cfg.commands.survey_target, self.num_envs, env_cfg.scene.terrain.terrain_generator, mesh
+        )
         n = self.num_envs
         self._pos = self.term.path_points[:, 0].clone()
         self._vel = torch.zeros(n, 3)
@@ -100,8 +116,9 @@ class _FakeEnv:
         self.scanner = type("Scanner", (), {"num_rays": len(self._offsets)})()
         self.scanner.data = type("ScanData", (), {})()
         self.command_manager = type("Cmd", (), {"get_term": lambda _self, name: self.term})()
-        self.scene = type("Scene", (), {"sensors": {"mapping_scanner": self.scanner},
-                                        "__getitem__": lambda _self, key: self.robot})()
+        self.scene = type(
+            "Scene", (), {"sensors": {"mapping_scanner": self.scanner}, "__getitem__": lambda _self, key: self.robot}
+        )()
         self.sim = type("Sim", (), {"visualizers": []})()
         self.closed = False
         self._publish()
@@ -283,8 +300,9 @@ def test_settle_holds_the_carrot_at_the_start():
 
     with tempfile.TemporaryDirectory() as d:
         run_dir = Path(d) / "settle"
-        mod = _load_script(["--checkpoint", "fake.pt", "--max_time", "5", "--settle", "2", "--no_plots",
-                            "--out", str(run_dir)])
+        mod = _load_script(
+            ["--checkpoint", "fake.pt", "--max_time", "5", "--settle", "2", "--no_plots", "--out", str(run_dir)]
+        )
         with _offline(mod, _Policy()) as envs:
             mod.main()
         traj = read_trajectory_csv(run_dir / "trajectory.csv")
@@ -309,8 +327,9 @@ def test_settle_holds_the_carrot_at_the_start():
 
         # --settle 0: the carrot starts at once (the behaviour before the option existed)
         now_dir = Path(d) / "no_settle"
-        mod = _load_script(["--checkpoint", "fake.pt", "--max_time", "1", "--settle", "0", "--no_plots",
-                            "--out", str(now_dir)])
+        mod = _load_script(
+            ["--checkpoint", "fake.pt", "--max_time", "1", "--settle", "0", "--no_plots", "--out", str(now_dir)]
+        )
         with _offline(mod, _Policy()):
             mod.main()
         traj = read_trajectory_csv(now_dir / "trajectory.csv")
@@ -324,8 +343,9 @@ def test_waypoints_flag_conflicts_with_generated_pattern():
     with tempfile.TemporaryDirectory() as d:
         wp = Path(d) / "wp.csv"
         wp.write_text("x,y\n-10,-10\n10,-10\n10,10\n")
-        mod = _load_script(["--checkpoint", "fake.pt", "--waypoints", str(wp), "--pattern", "lawnmower",
-                            "--print_config"])
+        mod = _load_script(
+            ["--checkpoint", "fake.pt", "--waypoints", str(wp), "--pattern", "lawnmower", "--print_config"]
+        )
         try:
             mod.main()
         except SystemExit as exc:

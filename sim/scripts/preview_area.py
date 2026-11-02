@@ -30,13 +30,18 @@ from drone_lab.survey_io import write_planned_path_csv  # noqa: E402
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--pattern", choices=PATTERNS, default=None,
-                        help="Survey pattern (default lawnmower; waypoints when --waypoints is given).")
+    parser.add_argument(
+        "--pattern",
+        choices=PATTERNS,
+        default=None,
+        help="Survey pattern (default lawnmower; waypoints when --waypoints is given).",
+    )
     parser.add_argument("--spacing", type=float, default=4.0)
     parser.add_argument("--altitude", type=float, default=4.0, help="Clearance above the highest terrain point [m].")
     parser.add_argument("--num_drones", type=int, default=1)
-    parser.add_argument("--waypoints", type=str, default=None,
-                        help="CSV/JSON waypoints file; implies --pattern waypoints.")
+    parser.add_argument(
+        "--waypoints", type=str, default=None, help="CSV/JSON waypoints file; implies --pattern waypoints."
+    )
     parser.add_argument("--turn", choices=("round", "square"), default="round")
     parser.add_argument("--direction", choices=("x", "y"), default="x")
     parser.add_argument("--resolution", type=float, default=0.25, help="Height map cell size [m].")
@@ -58,8 +63,16 @@ def main(argv: list[str] | None = None) -> int:
     z = vertices[band.contains(vertices[:, :2]), 2]
     flight_z = float(z.max()) + args.altitude
     custom = load_waypoints(args.waypoints, default_z=flight_z) if args.waypoints else None
-    paths = build_env_paths(args.pattern, args.num_drones, area, args.spacing, flight_z, waypoints=custom,
-                            direction=args.direction, turn=args.turn)
+    paths = build_env_paths(
+        args.pattern,
+        args.num_drones,
+        area,
+        args.spacing,
+        flight_z,
+        waypoints=custom,
+        direction=args.direction,
+        turn=args.turn,
+    )
     border = SURVEY_TERRAIN_CFG.border_width
     grid = GridSpec.from_area(area, args.resolution, padding=border)
     gt, _ = ground_truth_map(vertices, faces, grid, supersample=1, query=MeshHeightQuery(vertices, faces))
@@ -86,8 +99,9 @@ def main(argv: list[str] | None = None) -> int:
         f"{args.altitude:g} m) · path {max(lengths):.0f} m ≈ {max(lengths) / args.speed / 60:.1f} min at "
         f"{args.speed:g} m/s"
     )
-    png = plot_area_preview(gt, grid, area, paths, out_dir / "area_preview.png", get_theme(args.theme),
-                            subtitle=subtitle)
+    png = plot_area_preview(
+        gt, grid, area, paths, out_dir / "area_preview.png", get_theme(args.theme), subtitle=subtitle
+    )
     print(json.dumps({k: v for k, v in info.items() if k != "grid"}, indent=2))
     print(f"[preview_area] wrote {png}")
     return 0

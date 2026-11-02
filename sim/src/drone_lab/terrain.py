@@ -30,8 +30,8 @@ from isaaclab.terrains.height_field import (
     HfRandomUniformTerrainCfg,
     HfTerrainBaseCfg,
     HfWaveTerrainCfg,
+    hf_terrains,
 )
-from isaaclab.terrains.height_field import hf_terrains
 from isaaclab.terrains.height_field.utils import height_field_to_mesh
 from isaaclab.terrains.trimesh import MeshPyramidStairsTerrainCfg
 from isaaclab.utils import configclass

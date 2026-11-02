@@ -10,7 +10,9 @@ from isaaclab.utils import configclass
 REFERENCE_MARKER_CFG = VisualizationMarkersCfg(
     prim_path="/Visuals/TrackTrajectory/reference",
     markers={
-        "now": sim_utils.SphereCfg(radius=0.08, visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.1, 0.1))),
+        "now": sim_utils.SphereCfg(
+            radius=0.08, visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.1, 0.1))
+        ),
         "ahead": sim_utils.SphereCfg(
             radius=0.05, visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.6, 0.1))
         ),

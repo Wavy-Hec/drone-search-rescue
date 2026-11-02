@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-
 from _runner import main_for
 
 from drone_lab.mapping import (
@@ -105,8 +104,9 @@ def test_mesh_query_exact_on_planar_and_matches_heightfield():
 
 def test_mesh_query_takes_top_surface():
     # two horizontal triangles stacked above the same xy: the higher one is the top surface
-    v = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 2], [1, 0, 2], [0, 1, 2], [0, 0, 0], [0, 0, 5], [1, 0, 0]],
-                 dtype=float)
+    v = np.array(
+        [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 2], [1, 0, 2], [0, 1, 2], [0, 0, 0], [0, 0, 5], [1, 0, 0]], dtype=float
+    )
     f = np.array([[0, 1, 2], [3, 4, 5], [6, 7, 8]])  # the third one is vertical and ignored
     assert np.allclose(mesh_top_heights(v, f, np.array([[0.2, 0.2]])), 2.0)
 

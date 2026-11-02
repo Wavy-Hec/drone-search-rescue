@@ -7,7 +7,6 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
-
 from _runner import main_for, require
 
 from drone_lab.mapping import (
@@ -44,19 +43,51 @@ def _make_run(run_dir: Path, spacing: float = 3.0) -> None:
     for k, p in enumerate(path):
         rays = p[:2] + off
         mapper.add(np.column_stack([rays, query(rays)]))
-        rec.record(step=[k], time=[0.1 * (k + 1)], env=[0], x=[p[0]], y=[p[1] + 0.05], z=[p[2]], speed=[1.5],
-                   carrot_dist=[0.6], progress=[k / (len(path) - 1)], obs_dx=[0.1], obs_dy=[0.0], obs_dz=[0.0],
-                   agl=[p[2] - query(p[None, :2])[0]])
+        rec.record(
+            step=[k],
+            time=[0.1 * (k + 1)],
+            env=[0],
+            x=[p[0]],
+            y=[p[1] + 0.05],
+            z=[p[2]],
+            speed=[1.5],
+            carrot_dist=[0.6],
+            progress=[k / (len(path) - 1)],
+            obs_dx=[0.1],
+            obs_dy=[0.0],
+            obs_dz=[0.0],
+            agl=[p[2] - query(p[None, :2])[0]],
+        )
     elev, count = mapper.finalize("median")
     gt, gt_range = ground_truth_map(v, f, grid, query=query)
     traj = rec.as_dict()
-    summary = compute_summary(traj, [plan], grid=grid, area=AREA, elevation=elev, count=count, ground_truth=gt,
-                              ground_truth_range=gt_range, commanded_speed=1.5,
-                              extra={"pattern": "lawnmower", "flight_z_m": 4.0, "max_lead_m": 1.0},
-                              ground_truth_at_hits=truth_at_hits_map(mapper.points(), grid, query))
-    save_run(run_dir, trajectory=traj, planned=[plan], grid=grid, area=AREA, elevation=elev, count=count,
-             ground_truth=gt, ground_truth_range=gt_range, hits=np.zeros((0, 5)), meta={"source": "test"},
-             summary=summary)
+    summary = compute_summary(
+        traj,
+        [plan],
+        grid=grid,
+        area=AREA,
+        elevation=elev,
+        count=count,
+        ground_truth=gt,
+        ground_truth_range=gt_range,
+        commanded_speed=1.5,
+        extra={"pattern": "lawnmower", "flight_z_m": 4.0, "max_lead_m": 1.0},
+        ground_truth_at_hits=truth_at_hits_map(mapper.points(), grid, query),
+    )
+    save_run(
+        run_dir,
+        trajectory=traj,
+        planned=[plan],
+        grid=grid,
+        area=AREA,
+        elevation=elev,
+        count=count,
+        ground_truth=gt,
+        ground_truth_range=gt_range,
+        hits=np.zeros((0, 5)),
+        meta={"source": "test"},
+        summary=summary,
+    )
 
 
 def test_run_roundtrip_and_summary():

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-
 from _runner import main_for, require
 
 from drone_lab.paths import Area, lawnmower
