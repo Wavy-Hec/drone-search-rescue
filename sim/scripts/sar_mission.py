@@ -31,6 +31,7 @@ Examples (env_isaaclab, from the project root)::
     python scripts/sar_mission.py --checkpoint <policy.pt> --max_time 90 --out sar_short    # short test flight
     python scripts/sar_mission.py --checkpoint <policy.pt> --video --view overview          # fixed view of the site
     python scripts/sar_mission.py --checkpoint <trajectory policy.pt> --pilot trajectory    # trajectory-tracking pilot
+    python scripts/sar_mission.py --checkpoint <policy.pt> --terrain_seed 3 --out sar_t3    # another terrain
 
 Trailing ``key=value`` tokens are Hydra overrides of the task config.
 """
@@ -58,6 +59,9 @@ parser.add_argument(
     help="Policy type of --checkpoint: the built-in hover policy, or one trained on the trajectory-tracking task.",
 )
 parser.add_argument("--seed", type=int, default=0, help="Site seed (same seed, same site; 0 is the demo site).")
+parser.add_argument(
+    "--terrain_seed", type=int, default=None, help="Seed of the terrain generator (default: the standard terrain)."
+)
 parser.add_argument("--spacing", type=float, default=5.0, help="Lawnmower line spacing [m].")
 parser.add_argument("--altitude", type=float, default=4.0, help="Clearance above the highest terrain point [m].")
 parser.add_argument("--speed", type=float, default=1.5, help="Carrot speed for transit and survey [m/s].")
@@ -142,6 +146,7 @@ from drone_lab.sar.mission import (
     gt_objects,
     import_drone_gcs,
     plan_mission,
+    set_terrain_seed,
     survey_geometry,
 )
 from drone_lab.sar.scenario import Scenario, TerrainSite
@@ -405,6 +410,7 @@ def announce(stream, mission: Mission) -> None:
         speed=args_cli.speed,
         phases=plan.to_dict()["phases"],
         seed=args_cli.seed,
+        terrain_seed=args_cli.terrain_seed,
     )
     stream.gt_objects(gt_objects(mission.scenario.objects))
     heights, x_min, y_min = terrain_truth(mission.site)
@@ -516,6 +522,7 @@ def save_outputs(run_dir: Path, mission: Mission, flight: Flight, stats: dict, l
         "task": TASK,
         "pilot": args_cli.pilot,
         "seed": args_cli.seed,
+        "terrain_seed": args_cli.terrain_seed,
         "checkpoint": str(Path(args_cli.checkpoint).expanduser().resolve()),
         "outcome": flight.outcome,
         "sim_time_s": round(flight.t, 2),
@@ -560,6 +567,8 @@ def main() -> None:
 
     overrides = [*hydra_overrides, "physics=isaacsim_physx", f"env.scene.sar_site.spawn.seed={args_cli.seed}"]
     env_cfg = parse_env_cfg(TASK, device=args_cli.device, num_envs=1, overrides=overrides)
+    if args_cli.terrain_seed is not None:
+        set_terrain_seed(env_cfg, args_cli.terrain_seed)
     t0 = time.time()
     mission = prepare_mission(env_cfg)
     plan, g = mission.plan, mission.geometry

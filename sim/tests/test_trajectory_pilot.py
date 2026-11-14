@@ -1,5 +1,5 @@
-"""Mission flown by a trajectory-tracking policy: the carrot as a moving reference, the two tasks and the pilot
-choice (CPU only; torch for the reference math, env_isaaclab for the configs, no Kit).
+"""Mission flown by a trajectory-tracking policy: the carrot as a moving reference, the two tasks, the pilot
+choice and the terrain seed (CPU only; torch for the reference math, env_isaaclab for the configs, no Kit).
 
 Run: ``CUDA_VISIBLE_DEVICES= python tests/test_trajectory_pilot.py`` (or with pytest).
 """
@@ -337,7 +337,7 @@ def test_trajectory_observations_read_the_survey_carrot():
 
 
 ##
-# Pilot choice of the mission
+# Pilot choice and terrain seed of the mission
 ##
 
 
@@ -356,6 +356,53 @@ def test_pilot_tasks_are_registered():
     }
     for task, entry in entries.items():
         assert gym.spec(task).kwargs["env_cfg_entry_point"] == entry, task
+
+
+def test_terrain_seed_builds_and_dresses_another_site():
+    """As ``scripts/sar_mission.py`` does: parse, set the terrain seed, regenerate the site, plan the flight."""
+    require("isaaclab_tasks")
+    from isaaclab.utils import clone
+
+    from drone_lab.sar.mission import PILOT_TASKS, plan_mission, set_terrain_seed
+    from drone_lab.sar.scenario import TerrainSite
+    from drone_lab.sar.scene import scenario_for
+    from drone_lab.terrain import SURVEY_TERRAIN_CFG
+
+    spacing, altitude = 5.0, 4.0
+    grid = np.arange(-19.5, 20.0, 1.0)
+    grid = np.stack(np.meshgrid(grid, grid), axis=-1).reshape(-1, 2)
+    heights, flight_z = {}, {}
+    for seed in (1, 3):
+        cfg = _parse(PILOT_TASKS["trajectory"], ["physics=isaacsim_physx", "env.scene.sar_site.spawn.seed=0"])
+        assert cfg.scene.terrain.terrain_generator.seed == 17  # the standard terrain
+        # a site that holds its own copy of the generator config must end up on the scene's one as well
+        cfg.scene.sar_site.spawn.terrain_generator = clone(cfg.scene.terrain.terrain_generator)
+        set_terrain_seed(cfg, seed)
+        assert cfg.scene.terrain.terrain_generator.seed == seed
+        assert cfg.scene.sar_site.spawn.terrain_generator is cfg.scene.terrain.terrain_generator
+        assert SURVEY_TERRAIN_CFG.seed == 17  # the shared default is not touched
+
+        built = TerrainSite(cfg.scene.terrain.terrain_generator)  # the terrain the simulator imports
+        scenario = scenario_for(cfg.scene.sar_site.spawn)  # the objects the site spawner places
+        in_area = [o for o in scenario.objects if o.in_area]
+        assert len(in_area) >= 20, seed
+        for o in in_area:  # every object rests on the terrain that is built
+            ground = built.height(o.center[0], o.center[1])
+            assert abs(o.ground_z - ground) <= o.ground_spread + 0.01, (seed, o.name, o.ground_z, ground)
+
+        pad = next(o for o in scenario.objects if o.category == "landing_pad")
+        home = (float(pad.center[0]), float(pad.center[1]), float(pad.aabb_max[2]))
+        terrain_z = built.terrain_z_range(inset=-(0.5 * spacing + 0.5))
+        plan = plan_mission(scenario.area, home, terrain_z[1] + altitude, spacing)
+        first, last = plan.survey_waypoints
+        survey = plan.waypoints[first : last + 1]
+        assert float(np.min(survey[:, 2] - built.heights(survey[:, :2]))) >= altitude - 1e-6, seed
+        np.testing.assert_allclose(plan.waypoints[0], [home[0], home[1], home[2] + 0.5])
+        heights[seed], flight_z[seed] = built.heights(grid), plan.flight_z
+
+    # two seeds, two terrains: the heights differ by about 1 m on average, and so do the flight heights
+    assert float(np.mean(np.abs(heights[1] - heights[3]))) > 0.3
+    assert abs(flight_z[1] - flight_z[3]) > 0.05
 
 
 if __name__ == "__main__":

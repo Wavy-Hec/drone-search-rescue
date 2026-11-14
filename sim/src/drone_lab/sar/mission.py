@@ -176,6 +176,17 @@ def plan_mission(
     )
 
 
+def set_terrain_seed(env_cfg: Any, seed: int) -> None:
+    """Build the terrain of a SAR env config from ``seed`` and dress the site on that very terrain.
+
+    The scene's terrain generator gets the seed, and the site spawner is handed the same generator config, so
+    the objects are placed on the terrain that is actually built.
+    """
+    generator = env_cfg.scene.terrain.terrain_generator
+    generator.seed = int(seed)
+    env_cfg.scene.sar_site.spawn.terrain_generator = generator
+
+
 def survey_geometry(
     flight_z: float,
     spacing: float,
@@ -325,5 +336,6 @@ __all__ = [
     "gt_objects",
     "import_drone_gcs",
     "plan_mission",
+    "set_terrain_seed",
     "survey_geometry",
 ]
