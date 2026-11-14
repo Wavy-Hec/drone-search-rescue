@@ -38,6 +38,7 @@ MODULES = (
     "test_sar_mission",
     "test_teaming_traversability",
     "test_teaming_planner",
+    "test_teaming_tour",
     "test_teaming_follower",
     "test_teaming_inputs",
     "test_teaming_obstacles",

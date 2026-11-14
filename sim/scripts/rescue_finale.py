@@ -11,7 +11,9 @@
    With a ``drone_gcs`` report that has a surface map (``maps/surface_max.npy``, from the camera's depth), anything
    standing more than ``--obstacle_height`` above the terrain map is a no-go area too, pinned or not
    (``--no_surface_obstacles``: the pins only). Writes ``plan.png`` and ``plan.json``. ``--plan_only`` stops here
-   (no simulator).
+   (no simulator). ``--tour [N]`` plans one route past the N nearest reachable people instead (all of them without
+   N), in the cheapest order, writes ``tour.png``, ``tour.json`` and ``tour_legs.sh`` (one command per leg, to walk
+   them one after another) and stops there too.
 3. **Walk (GPU):** ``--robot custom`` (default): the custom quadruped (``quadruped_lab``, converted 2.x height-scan
    policy) on Isaac Sim PhysX, the drone mission's backend; ``--robot go2``: the Unitree Go2 with Isaac Lab's
    rough-terrain policy on Newton (the fallback). The rescue task puts the robot on the same seeded terrain and SAR
@@ -25,6 +27,7 @@
 Examples (env_isaaclab, from the project root)::
 
     python scripts/rescue_finale.py --plan_only                                 # CPU: plan on the ground truth
+    python scripts/rescue_finale.py --tour 4 --out tour                         # CPU: one route past 4 people
     python scripts/rescue_finale.py --video --out finale                        # walk it, follow-cam video
     python scripts/rescue_finale.py --num_envs 8 --out finale_x8                # 8 robots at once: success rate
     python scripts/rescue_finale.py --report <drone_gcs report dir> --video     # plan on the drone's map + pins
@@ -166,6 +169,17 @@ plan_g.add_argument(
     help="Cost weight of walking across a slope (robot default; 0 = the cost does not depend on the direction).",
 )
 plan_g.add_argument("--plan_only", action="store_true", help="Plan, write plan.png / plan.json and stop (CPU only).")
+plan_g.add_argument(
+    "--tour",
+    type=int,
+    nargs="?",
+    const=0,
+    default=None,
+    metavar="N",
+    help="Plan one route from the start past the N reachable people nearest to it (straight line; no N or 0: all of "
+    "them), in the order with the lowest total cost. Writes tour.png, tour.json and tour_legs.sh (one command per "
+    "leg) and stops (CPU only, like --plan_only).",
+)
 walk_g = parser.add_argument_group("walk")
 walk_g.add_argument("--task", type=str, default=None, help="Rescue task id (default: the robot's).")
 walk_g.add_argument(
@@ -211,7 +225,9 @@ args_cli, hydra_overrides = parser.parse_known_args()
 
 import json
 import math
+import shlex
 import time
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import datetime
 
@@ -235,6 +251,7 @@ from drone_lab.teaming.inputs import (
     survey_site_bounds,
 )
 from drone_lab.teaming.planner import PlanResult, plan_path
+from drone_lab.teaming.tour import TourResult, plan_tour
 from drone_lab.teaming.traversability import Footprint, TraversabilityCfg, TraversabilityMap, compute_traversability
 
 VIEWER_CAMERA = "/OmniverseKit_Persp"
@@ -243,6 +260,38 @@ VIEWER_CAMERA = "/OmniverseKit_Persp"
 PERSON_RADIUS = {"lying": 1.2, "standing": 0.7}
 """Footprint radius of a person without an exact outline (a drone pin), by pose [m]: the body and outstretched arms
 (1.8 m long lying, 1.7 m from hand to hand) plus about 0.3 m for the pin's error."""
+
+LEG_OPTIONS = {
+    "--robot": "robot",
+    "--report": "report",
+    "--elevation": "elevation",
+    "--grid": "grid",
+    "--gcs_layer": "gcs_layer",
+    "--pins": "pins",
+    "--all_pins": "all_pins",
+    "--ground_truth": "ground_truth",
+    "--sar_seed": "sar_seed",
+    "--plain_terrain": "plain_terrain",
+    "--resolution": "resolution",
+    "--no_apron": "no_apron",
+    "--obstacle_height": "obstacle_height",
+    "--no_surface_obstacles": "no_surface_obstacles",
+    "--max_goal_snap": "max_goal_snap",
+    "--person_pose": "person_pose",
+    "--max_slope": "max_slope",
+    "--max_step": "max_step",
+    "--max_roughness": "max_roughness",
+    "--robot_radius": "robot_radius",
+    "--cross_slope_weight": "cross_slope_weight",
+    "--task": "task",
+    "--checkpoint": "checkpoint",
+    "--physics": "physics_backend",
+    "--speed": "speed",
+    "--lookahead": "lookahead",
+}
+"""The map, plan and robot options (flag -> its name in ``args_cli``) a tour hands on to the command of each leg."""
+LEG_PATH_OPTIONS = ("--report", "--elevation", "--grid", "--pins", "--checkpoint")
+"""The :data:`LEG_OPTIONS` that name a file or a folder: written as absolute paths, so the legs run from anywhere."""
 
 
 def log(msg: str) -> None:
@@ -297,13 +346,15 @@ def goal_candidates(pins: list[Pin], start: np.ndarray) -> list[Pin]:
     return sorted((p for p in pins if p.label == "person"), key=key)
 
 
-def goal_footprints(pins: list[Pin], goal_pin: Pin) -> list[Footprint]:
-    """Object footprints for planning to ``goal_pin``; a person without an outline gets a pose-sized circle."""
+def goal_footprints(pins: list[Pin], goal_pins: Sequence[Pin]) -> list[Footprint]:
+    """Object footprints for planning to ``goal_pins`` (one person, or the people of a tour); a goal person without
+    an outline gets a pose-sized circle."""
     footprints = footprints_from_pins(pins, radii={"person": DEFAULT_FOOTPRINT_RADII["person"]})
-    if goal_pin.polygon is None:
-        footprints = [f for f in footprints if not (abs(f.x - goal_pin.x) < 1e-6 and abs(f.y - goal_pin.y) < 1e-6)]
-        pose = "lying" if (goal_pin.pose or args_cli.person_pose).startswith("lying") else "standing"
-        footprints.append(Footprint(goal_pin.x, goal_pin.y, PERSON_RADIUS[pose], "person (goal)"))
+    for goal_pin in goal_pins:
+        if goal_pin.polygon is None:
+            footprints = [f for f in footprints if not (abs(f.x - goal_pin.x) < 1e-6 and abs(f.y - goal_pin.y) < 1e-6)]
+            pose = "lying" if (goal_pin.pose or args_cli.person_pose).startswith("lying") else "standing"
+            footprints.append(Footprint(goal_pin.x, goal_pin.y, PERSON_RADIUS[pose], "person (goal)"))
     return footprints
 
 
@@ -320,8 +371,9 @@ def traversability_cfg(profile: RobotProfile) -> TraversabilityCfg:
     return replace(profile.traversability, **{k: v for k, v in overrides.items() if v is not None})
 
 
-def build_plan(run_dir: Path, profile: RobotProfile) -> dict:
-    """Map + pins -> traversability -> route. Returns a dict with everything the walk and the figures need."""
+def load_map_and_pins() -> dict:
+    """The elevation map, the obstacles of the surface map, the pins and the robot's start, as the command line
+    asks for them. Returns a dict with what a plan (one person, or a tour) is built from."""
     a = args_cli
     if (a.report or a.elevation) and a.ground_truth:
         sys.exit("[rescue] --ground_truth plans on the ground truth: drop --report / --elevation (or the flag)")
@@ -410,6 +462,48 @@ def build_plan(run_dir: Path, profile: RobotProfile) -> dict:
                 f"{poses.count('standing')} standing" + (f", {poses.count('')} unknown" if "" in poses else "")
             )
 
+    map_label = "terrain ground truth" if mode == "ground_truth" else "drone elevation map"
+    src_label = f"{map_label} ({grid.resolution:g} m cells)"
+    if apron_cells:
+        src_label += " + the site's flat apron around it"
+    if not a.plain_terrain:
+        src_label += f", SAR site seed {a.sar_seed}"
+    return {
+        "z": z,
+        "grid": grid,
+        "mode": mode,
+        "source": source,
+        "src_label": src_label,
+        "obstacles": obstacles,
+        "apron_cells": apron_cells,
+        "site_pins": site_pins,
+        "pins": pins,
+        "pins_source": pins_source,
+        "drone_pins": drone_pins,
+        "start": start,
+        "requested_start": requested_start,
+    }
+
+
+def log_surface_obstacles(tmap: TraversabilityMap) -> None:
+    """Say how many cells the report's surface map made no-go areas."""
+    unpinned = int((tmap.lethal_obstacles & ~tmap.lethal_objects).sum())
+    log(
+        f"surface map: {int(tmap.lethal_obstacles.sum())} cells with something standing more than "
+        f"{args_cli.obstacle_height:g} m above the terrain map are no-go areas, {unpinned} of them outside every "
+        f"pin's footprint"
+    )
+
+
+def build_plan(run_dir: Path, profile: RobotProfile) -> dict:
+    """Map + pins -> traversability -> route. Returns a dict with everything the walk and the figures need."""
+    a = args_cli
+    site = load_map_and_pins()
+    z, grid, mode, source, src_label = site["z"], site["grid"], site["mode"], site["source"], site["src_label"]
+    obstacles, apron_cells = site["obstacles"], site["apron_cells"]
+    site_pins, pins, pins_source, drone_pins = site["site_pins"], site["pins"], site["pins_source"], site["drone_pins"]
+    start, requested_start = site["start"], site["requested_start"]
+
     # goal: --goal (a person placed there), else a person pin (by id, or the default selection)
     if a.goal is not None:
         goal = Pin(id="goal", label="person", x=float(a.goal[0]), y=float(a.goal[1]), pose=a.person_pose)
@@ -431,7 +525,7 @@ def build_plan(run_dir: Path, profile: RobotProfile) -> dict:
     tcfg = traversability_cfg(profile)
     t0 = time.time()
     for goal_pin in candidates:
-        tmap = compute_traversability(z, grid, tcfg, footprints=goal_footprints(pins, goal_pin), obstacles=obstacles)
+        tmap = compute_traversability(z, grid, tcfg, footprints=goal_footprints(pins, [goal_pin]), obstacles=obstacles)
         plan: PlanResult = plan_path(tmap, start, goal_pin.xy, max_goal_snap_m=a.max_goal_snap)
         if plan.success:
             break
@@ -440,13 +534,8 @@ def build_plan(run_dir: Path, profile: RobotProfile) -> dict:
             break
         log(f"no route to {goal_pin.label} {goal_pin.id} at {goal_pin.xy.round(2).tolist()}: {plan.message}")
     log(f"traversability ({profile.name} limits) {tmap.summary()}")
-    obstacle_cells = int(tmap.lethal_obstacles.sum())
     if obstacles is not None:
-        unpinned = int((tmap.lethal_obstacles & ~tmap.lethal_objects).sum())
-        log(
-            f"surface map: {obstacle_cells} cells with something standing more than {a.obstacle_height:g} m above "
-            f"the terrain map are no-go areas, {unpinned} of them outside every pin's footprint"
-        )
+        log_surface_obstacles(tmap)
     log(
         f"goal: {goal_pin.label} {goal_pin.id} at {goal_pin.xy.round(2).tolist()}"
         f"{f' ({goal_pin.pose})' if goal_pin.pose else ''}, {np.linalg.norm(goal_pin.xy - start):.1f} m from the "
@@ -465,12 +554,6 @@ def build_plan(run_dir: Path, profile: RobotProfile) -> dict:
 
     from drone_lab.teaming.plots import plot_plan
 
-    map_label = "terrain ground truth" if mode == "ground_truth" else "drone elevation map"
-    src_label = f"{map_label} ({grid.resolution:g} m cells)"
-    if apron_cells:
-        src_label += " + the site's flat apron around it"
-    if not a.plain_terrain:
-        src_label += f", SAR site seed {a.sar_seed}"
     plot_plan(
         tmap,
         plan,
@@ -490,7 +573,7 @@ def build_plan(run_dir: Path, profile: RobotProfile) -> dict:
         "pins_source": pins_source,
         "grid": grid.to_dict(),
         "apron_cells": apron_cells,
-        "surface_obstacle_cells": obstacle_cells,
+        "surface_obstacle_cells": int(tmap.lethal_obstacles.sum()),
         "start_requested_xy": [float(v) for v in requested_start],
         "start_xy": [float(v) for v in start],
         "person_xy": [float(goal_pin.x), float(goal_pin.y)],
@@ -535,6 +618,155 @@ def save_traversability(path: Path, tmap: TraversabilityMap) -> None:
         clearance=tmap.clearance,
         grid=np.array([g.x_min, g.y_min, g.resolution, g.nx, g.ny]),
     )
+
+
+# ------------------------------------------------------------------------------------------------------ tour
+def leg_options() -> list[str]:
+    """The :data:`LEG_OPTIONS` of this run that differ from their defaults, as command-line words."""
+    words = []
+    for flag, name in LEG_OPTIONS.items():
+        value = getattr(args_cli, name)
+        if value == parser.get_default(name):
+            continue
+        if value is True:  # a switch
+            words.append(flag)
+        elif flag in LEG_PATH_OPTIONS:
+            words += [flag, str(Path(value).expanduser().resolve())]
+        else:
+            words += [flag, str(value)]
+    return words
+
+
+def leg_commands(run_dir: Path, tour: TourResult, people: list[Pin]) -> list[str]:
+    """One command per leg of the tour: this script from the leg's start to its person, with this run's options.
+    Every command ends with ``"$@"``, so options given to ``tour_legs.sh`` (``--video``, ...) reach every leg."""
+    commands = []
+    for k, (leg, person) in enumerate(zip(tour.legs, people, strict=True), start=1):
+        x, y = leg.start_xy
+        words = ["python", str(Path(__file__).resolve()), "--start", f"{x:.3f}", f"{y:.3f}"]
+        words += ["--goal_pin", str(person.id), "--out", f"{run_dir}_leg{k}", *leg_options()]
+        commands.append(shlex.join(words) + ' "$@"')
+    return commands
+
+
+def build_tour(run_dir: Path, profile: RobotProfile) -> int:
+    """Map + pins -> traversability -> one route past the nearest reachable people, in the cheapest order.
+
+    Writes ``tour.json``, ``tour.png`` and ``tour_legs.sh``. Returns the exit code (2: no route).
+    """
+    a = args_cli
+    if a.goal is not None or a.goal_pin is not None:
+        sys.exit("[rescue] --tour visits the person pins: drop --goal / --goal_pin (or the flag)")
+    if a.tour < 0:
+        sys.exit("[rescue] --tour N: N is a number of people (0 or no N: all of them)")
+    site = load_map_and_pins()
+    grid, pins, start = site["grid"], site["pins"], site["start"]
+    people = sorted((p for p in pins if p.label == "person"), key=lambda p: float(np.linalg.norm(p.xy - start)))
+    if not people:
+        log("no person pin: nobody to visit")
+        return 2
+
+    # every person is a goal here, so every person gets the footprint the single-goal plan gives its goal
+    tcfg = traversability_cfg(profile)
+    t0 = time.time()
+    tmap = compute_traversability(
+        site["z"], grid, tcfg, footprints=goal_footprints(pins, people), obstacles=site["obstacles"]
+    )
+    log(f"traversability ({profile.name} limits) {tmap.summary()}")
+    if site["obstacles"] is not None:
+        log_surface_obstacles(tmap)
+
+    # the nearest people the robot can get to (nearest first), then the cheapest order to visit them in
+    reachable, unreachable = [], []
+    for person in people:
+        alone = plan_path(tmap, start, person.xy, max_goal_snap_m=a.max_goal_snap, smooth=False)
+        if alone.start_failed:  # the start's problem: nobody is reachable
+            log(f"no route from the start {start.round(2).tolist()}: {alone.message}")
+            return 2
+        if alone.success:
+            reachable.append(person)
+        else:
+            unreachable.append(person)
+            log(f"no route to {person.label} {person.id} at {person.xy.round(2).tolist()}: {alone.message}")
+    if not reachable:
+        log("no route: none of the people can be reached")
+        return 2
+    chosen = reachable[: a.tour] if a.tour else reachable
+    tour = plan_tour(tmap, start, [p.xy for p in chosen], max_goal_snap_m=a.max_goal_snap)
+    visited = [chosen[i] for i in tour.order]
+    speed = profile.cruise_speed
+    log(
+        f"tour ({time.time() - t0:.2f} s): {len(visited)} of {len(people)} people ({len(unreachable)} not reachable), "
+        f"order {tour.method}: {tour.length_m:.1f} m, cost {tour.cost:.1f}, about {tour.length_m / speed:.0f} s of "
+        f"walking at {speed:g} m/s"
+    )
+    print(" leg  person        from x, y [m]      stop x, y [m]     length [m]     cost   time [s]", flush=True)
+    legs_json = []
+    for k, (leg, person) in enumerate(zip(tour.legs, visited, strict=True), start=1):
+        (x0, y0), (x1, y1) = leg.start_snapped_xy, leg.goal_snapped_xy
+        print(
+            f" {k:3d}  {person.id!s:<12} {x0:8.2f}, {y0:7.2f}   {x1:8.2f}, {y1:7.2f}   {leg.length_m:10.1f} "
+            f"{leg.graph_cost:8.1f} {leg.length_m / speed:10.0f}",
+            flush=True,
+        )
+        legs_json.append(
+            {
+                "leg": k,
+                "pin": person.to_dict(),
+                "from_xy": [round(float(x0), 4), round(float(y0), 4)],
+                "stop_xy": [round(float(x1), 4), round(float(y1), 4)],
+                "stop_to_person_m": round(leg.goal_snap_m, 3),
+                "length_m": round(leg.length_m, 3),
+                "cost": round(leg.graph_cost, 3),
+                "walk_time_s": round(leg.length_m / speed, 1),
+                "path_xy": np.round(leg.path_xy, 4).tolist(),
+                "path_z": np.round(leg.path_z, 4).tolist(),
+            }
+        )
+
+    from drone_lab.teaming.plots import plot_tour
+
+    src_label = site["src_label"]
+    if unreachable:
+        src_label += f"  |  {len(unreachable)} of the {len(people)} people not reachable"
+    plot_tour(tmap, tour, run_dir / "tour.png", pins=pins, source=src_label, theme=a.theme, robot=profile.name)
+    tour_json = {
+        "created": datetime.now().isoformat(timespec="seconds"),
+        "robot": profile.key,
+        "map_mode": site["mode"],
+        "map_source": site["source"],
+        "pins_source": site["pins_source"],
+        "grid": grid.to_dict(),
+        "apron_cells": site["apron_cells"],
+        "surface_obstacle_cells": int(tmap.lethal_obstacles.sum()),
+        "start_requested_xy": [float(v) for v in site["requested_start"]],
+        "start_xy": [float(v) for v in start],
+        "sar_seed": None if a.plain_terrain else a.sar_seed,
+        "people": len(people),
+        "max_people": a.tour or None,
+        "order": [p.id for p in visited],
+        "unreachable": [p.id for p in unreachable],
+        "method": tour.method,
+        "length_m": round(tour.length_m, 3),
+        "cost": round(tour.cost, 3),
+        "cruise_speed_mps": speed,
+        "walk_time_s": round(tour.length_m / speed, 1),
+        "legs": legs_json,
+        "pins": [p.to_dict() for p in pins],
+        "traversability_cfg": tcfg.to_dict(),
+        "traversability": tmap.summary(),
+    }
+    (run_dir / "tour.json").write_text(json.dumps(tour_json, indent=1))
+    lines = [
+        "#!/usr/bin/env bash",
+        f"# The legs of the tour in {run_dir}, to walk one after another in the simulator.",
+        "# Each command plans its own leg again, from the tour's stop to the next person. Options given to this",
+        "# script go to every leg, e.g.: bash tour_legs.sh --video",
+        *leg_commands(run_dir, tour, visited),
+    ]
+    (run_dir / "tour_legs.sh").write_text("\n".join(lines) + "\n")
+    log(f"wrote {run_dir / 'tour.png'}, tour.json and tour_legs.sh")
+    return 0
 
 
 # ------------------------------------------------------------------------------------------------------ walk
@@ -1240,6 +1472,8 @@ def main() -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
     log(f"run directory: {run_dir}")
     log(f"robot: {profile.name} ({profile.task}, {profile.physics})")
+    if args_cli.tour is not None:
+        return build_tour(run_dir, profile)
     ctx = build_plan(run_dir, profile)
     if not ctx["plan"].success:
         log(f"no route: {ctx['plan'].message}")

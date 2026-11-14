@@ -1,4 +1,5 @@
-"""Figures of the rescue finale: the plan, the walked path, and a minimap for the video (matplotlib, Agg).
+"""Figures of the rescue finale: the plan, a tour past several people, the walked path, and a minimap for the video
+(matplotlib, Agg).
 
 Colour roles follow :mod:`drone_lab.plotting` (same validated palette and ink tokens):
 
@@ -6,7 +7,8 @@ Colour roles follow :mod:`drone_lab.plotting` (same validated palette and ink to
 * traversal cost (magnitude): the blue sequential ramp (light = cheap, dark = expensive);
 * no-go cells (lethal after inflation): primary ink, semi-opaque; unknown cells: surface colour + outline;
 * identity: planned route = categorical slot 2 (orange), walked path = slot 1 (blue), each with a surface halo;
-  the raw A* path is a thin dashed muted line;
+  the raw A* path is a thin dashed muted line; the stops of a tour are rings in the route's colour with the visiting
+  number in primary ink;
 * falls use the reserved status colour *critical* and always carry an "x" marker and a "fall" label.
 """
 
@@ -30,6 +32,7 @@ from matplotlib.patches import Circle, Patch, Polygon, Rectangle  # noqa: E402
 from drone_lab.plotting import Theme, get_theme  # noqa: E402
 
 from .planner import PlanResult  # noqa: E402
+from .tour import TourResult  # noqa: E402
 from .traversability import TraversabilityMap  # noqa: E402
 
 if TYPE_CHECKING:
@@ -37,7 +40,15 @@ if TYPE_CHECKING:
 
     from .inputs import Pin
 
-__all__ = ["BLUE_SEQUENTIAL", "STATUS_CRITICAL", "STATUS_GOOD", "plot_plan", "plot_walk", "render_minimap"]
+__all__ = [
+    "BLUE_SEQUENTIAL",
+    "STATUS_CRITICAL",
+    "STATUS_GOOD",
+    "plot_plan",
+    "plot_tour",
+    "plot_walk",
+    "render_minimap",
+]
 
 BLUE_SEQUENTIAL = ("#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b")
 """Blue sequential ramp (steps 100, 200, 300, 400, 500, 600, 700 of the reference palette)."""
@@ -212,6 +223,44 @@ def _route(ax, th: Theme, xy, color, *, lw=2.0, ls="-", zorder=6, halo=True, lab
     return line
 
 
+def _cost_max(tmap: TraversabilityMap) -> float:
+    """Top of the cost colour scale: the 99th percentile of the free cells' cost, at least 1.5."""
+    finite = tmap.cost[np.isfinite(tmap.cost)]
+    cmax = float(np.percentile(finite, 99)) if finite.size else 2.0
+    return max(cmax, 1.5)
+
+
+def _cost_colorbar(fig, im, cax, th: Theme):
+    cb = fig.colorbar(im, cax=cax)
+    cb.set_label("cost per metre (1 = flat open ground)", color=th.ink_secondary, fontsize=8)
+    cb.outline.set_edgecolor(th.axis)
+    cb.ax.tick_params(colors=th.ink_muted, labelcolor=th.ink_secondary, labelsize=7.5)
+
+
+def _draw_start(ax, th: Theme, xy):
+    ax.plot(*xy, marker="o", ms=9, mfc=th.surface, mec=th.ink, mew=1.8, zorder=10)
+    ax.annotate(
+        "start",
+        xy,
+        xytext=(7, -11),
+        textcoords="offset points",
+        fontsize=7.5,
+        color=th.ink,
+        zorder=10,
+        path_effects=_text_halo(th),
+    )
+
+
+def _limits_text(tmap: TraversabilityMap, robot: str) -> str:
+    """The robot's limits and the walkable share of the map, for a figure's subtitle."""
+    c = tmap.cfg
+    return (
+        f"{robot} limits: slope <= {c.max_slope_deg:g} deg, step <= {c.max_step_m:g} m, roughness <= "
+        f"{c.max_roughness_m:g} m, robot radius {c.robot_radius_m:g} m  |  "
+        f"{100 * tmap.summary()['free_fraction']:.0f} % of the map walkable"
+    )
+
+
 # ------------------------------------------------------------------------------------------------ figures
 def plot_plan(
     tmap: TraversabilityMap,
@@ -229,14 +278,10 @@ def plot_plan(
     both with the route, the start, the goal and the pins."""
     th = _theme(theme)
     g = tmap.grid
-    c = tmap.cfg
     fig = plt.figure(figsize=(13.0, 7.0), dpi=150, facecolor=th.surface)
     axes = [fig.add_axes([0.05, 0.07, 0.42, 0.72]), fig.add_axes([0.52, 0.07, 0.42, 0.72])]
     cax = fig.add_axes([0.957, 0.15, 0.010, 0.56])
     view = _view_bounds(tmap, [plan.path_xy, plan.start_xy[None], plan.goal_xy[None]], 4.0, full_view)
-    finite = tmap.cost[np.isfinite(tmap.cost)]
-    cmax = float(np.percentile(finite, 99)) if finite.size else 2.0
-    cmax = max(cmax, 1.5)
 
     axes[0].imshow(
         _hillshade_rgb(tmap.elevation, th, g.resolution),
@@ -245,7 +290,7 @@ def plot_plan(
         interpolation="nearest",
         zorder=1,
     )
-    im = _cost_layers(axes[1], tmap, th, cmax)
+    im = _cost_layers(axes[1], tmap, th, _cost_max(tmap))
     for ax, panel in zip(axes, ("Elevation the robot planned on", "Traversability cost and no-go cells"), strict=False):
         _style_axes(ax, th)
         _draw_footprints(ax, th, tmap)
@@ -254,17 +299,7 @@ def plot_plan(
         if plan.success:
             _route(ax, th, plan.path_xy, th.series[1], lw=2.4, zorder=6)
         _draw_pins(ax, th, pins, goal_pin, labels=(ax is axes[0]))
-        ax.plot(*plan.start_xy, marker="o", ms=9, mfc=th.surface, mec=th.ink, mew=1.8, zorder=10)
-        ax.annotate(
-            "start",
-            plan.start_xy,
-            xytext=(7, -11),
-            textcoords="offset points",
-            fontsize=7.5,
-            color=th.ink,
-            zorder=10,
-            path_effects=_text_halo(th),
-        )
+        _draw_start(ax, th, plan.start_xy)
         if plan.goal_snapped_xy is not None:
             ax.plot(*plan.goal_snapped_xy, marker="o", ms=6, color=th.series[1], mec=th.surface, mew=1.0, zorder=10)
         if goal_pin is None:
@@ -288,10 +323,7 @@ def plot_plan(
         _scale_bar(
             ax, th, view[0] + 0.04 * (view[1] - view[0]), view[2] + 0.04 * (view[3] - view[2]), view[1] - view[0]
         )
-    cb = fig.colorbar(im, cax=cax)
-    cb.set_label("cost per metre (1 = flat open ground)", color=th.ink_secondary, fontsize=8)
-    cb.outline.set_edgecolor(th.axis)
-    cb.ax.tick_params(colors=th.ink_muted, labelcolor=th.ink_secondary, labelsize=7.5)
+    _cost_colorbar(fig, im, cax, th)
 
     handles = [
         Line2D([], [], color=th.series[1], lw=2.4, label="planned route (smoothed)"),
@@ -320,12 +352,7 @@ def plot_plan(
         title = f"Rescue route: {plan.length_m:.1f} m to the person"
     else:
         title = "Rescue route: no safe route found"
-    summ = tmap.summary()
-    sub1 = (
-        f"{robot} limits: slope <= {c.max_slope_deg:g} deg, step <= {c.max_step_m:g} m, roughness <= "
-        f"{c.max_roughness_m:g} m, robot radius {c.robot_radius_m:g} m  |  {100 * summ['free_fraction']:.0f} % "
-        f"of the map walkable"
-    )
+    sub1 = _limits_text(tmap, robot)
     sub2 = source
     if plan.success and plan.goal_snap_m > 0.05:
         sub2 += f"  |  stops {plan.goal_snap_m:.1f} m from the person's centre"
@@ -334,6 +361,97 @@ def plot_plan(
     fig.text(0.04, 0.975, title, ha="left", va="top", fontsize=13, fontweight="semibold", color=th.ink)
     fig.text(0.04, 0.938, sub1, ha="left", va="top", fontsize=8.5, color=th.ink_secondary)
     fig.text(0.04, 0.913, sub2, ha="left", va="top", fontsize=8.5, color=th.ink_secondary)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, facecolor=th.surface)
+    plt.close(fig)
+    return out_path
+
+
+def plot_tour(
+    tmap: TraversabilityMap,
+    tour: TourResult,
+    out_path: str | Path,
+    *,
+    pins: Sequence[Pin] = (),
+    source: str = "",
+    robot: str = "Go2",
+    theme: str | Theme = "light",
+) -> Path:
+    """The traversability cost with no-go cells, every leg of the tour and its stops numbered in visiting order."""
+    th = _theme(theme)
+    g = tmap.grid
+    fig = plt.figure(figsize=(8.6, 8.4), dpi=150, facecolor=th.surface)
+    ax = fig.add_axes([0.085, 0.055, 0.77, 0.79])
+    cax = fig.add_axes([0.875, 0.165, 0.016, 0.57])
+    im = _cost_layers(ax, tmap, th, _cost_max(tmap))
+    _style_axes(ax, th)
+    _draw_footprints(ax, th, tmap)
+    for leg in tour.legs:
+        _route(ax, th, leg.path_xy, th.series[1], lw=2.2, zorder=6)
+    _draw_pins(ax, th, pins, None)
+    _draw_start(ax, th, tour.start_xy)
+    for number, leg in enumerate(tour.legs, start=1):
+        x, y = leg.goal_snapped_xy
+        ax.plot(x, y, marker="o", ms=11, mfc=th.surface, mec=th.series[1], mew=1.6, zorder=11)
+        ax.text(
+            x,
+            y,
+            str(number),
+            ha="center",
+            va="center_baseline",
+            fontsize=6.5,
+            fontweight="bold",
+            color=th.ink,
+            zorder=12,
+        )
+    ax.set_xlim(g.x_min, g.x_max)
+    ax.set_ylim(g.y_min, g.y_max)
+    ax.set_aspect("equal")
+    ax.set_xlabel("x [m]")
+    ax.set_ylabel("y [m]")
+    span = g.x_max - g.x_min
+    _scale_bar(ax, th, g.x_min + 0.04 * span, g.y_min + 0.04 * (g.y_max - g.y_min), span)
+    _cost_colorbar(fig, im, cax, th)
+
+    handles = [
+        Line2D([], [], color=th.series[1], lw=2.2, label="planned route, leg by leg"),
+        Line2D(
+            [], [], marker="o", ls="", ms=9, mfc=th.surface, mec=th.series[1], mew=1.6, label="stop (visiting order)"
+        ),
+        Line2D([], [], marker="o", ls="", ms=8, mfc=th.surface, mec=th.ink, mew=1.6, label="start"),
+        Line2D([], [], marker="*", ls="", ms=11, color=th.ink, label="person"),
+        Patch(facecolor=th.ink, alpha=0.82, label="no-go (slope, step, roughness or object, + robot radius)"),
+    ]
+    if tmap.footprints:
+        handles.append(Line2D([], [], color=th.ink_secondary, lw=0.8, ls=(0, (2, 1.5)), label="object footprint"))
+    if np.any(tmap.unknown):
+        handles.append(Patch(facecolor=th.surface, edgecolor=th.ink_muted, label="not seen by the drone"))
+    fig.legend(
+        handles=handles,
+        loc="upper left",
+        bbox_to_anchor=(0.045, 0.912),
+        ncol=4,
+        frameon=False,
+        fontsize=7.8,
+        labelcolor=th.ink_secondary,
+        handlelength=2.2,
+        columnspacing=1.6,
+    )
+
+    if tour.success:
+        order = "in the cheapest order" if tour.method == "held_karp" else "(order: nearest neighbour + 2-opt)"
+        title = f"Rescue tour: {tour.length_m:.1f} m past {len(tour.order)} people {order}"
+    else:
+        title = "Rescue tour: no safe route found"
+    sub2 = source
+    if tour.unreachable:
+        sub2 += f"  |  {len(tour.unreachable)} of the {len(tour.goals_xy)} goals not reachable"
+    if not tour.success:
+        sub2 += f"  |  {tour.message}"
+    fig.text(0.04, 0.980, title, ha="left", va="top", fontsize=13, fontweight="semibold", color=th.ink)
+    fig.text(0.04, 0.949, _limits_text(tmap, robot), ha="left", va="top", fontsize=8.5, color=th.ink_secondary)
+    fig.text(0.04, 0.928, sub2, ha="left", va="top", fontsize=8.5, color=th.ink_secondary)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, facecolor=th.surface)
