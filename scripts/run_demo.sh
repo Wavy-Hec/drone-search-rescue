@@ -10,20 +10,26 @@
 #   scripts/run_demo.sh --dry-run            # print the commands only
 #
 # Options: --name NAME (run folder, default demo), --seed N (site, default 0), --video (record the Isaac Sim view and
-# compose the side-by-side demo video), --headless, --finale, --dry-run.
+# compose the side-by-side demo video), --headless, --finale, --dry-run; --terrain-seed N (another terrain under the
+# site; default: the standard one), --record (the ground station saves the link stream for replays), --pilot
+# hover|trajectory with --policy FILE (fly with a trajectory-tracking policy instead of the released hover policy).
 # Environment: SIM_ENV (conda env with Isaac Sim + Isaac Lab, default env_isaaclab), GCS_ENV (ground station, default
 # vision), CONDA_SH (conda's profile script, found automatically).
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 SIM_ENV=${SIM_ENV:-env_isaaclab}
 GCS_ENV=${GCS_ENV:-vision}
-NAME=demo SEED=0 HEADLESS=0 VIDEO=0 FINALE=0 DRY=0
+NAME=demo SEED=0 HEADLESS=0 VIDEO=0 FINALE=0 DRY=0 TERRAIN_SEED="" RECORD=0 PILOT="" POLICY=""
 
-usage() { sed -n '2,17s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; }
+usage() { sed -n '2,19s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; }
 while (($#)); do
   case $1 in
     --name) NAME=${2:?--name needs a value}; shift ;;
     --seed) SEED=${2:?--seed needs a value}; shift ;;
+    --terrain-seed) TERRAIN_SEED=${2:?--terrain-seed needs a value}; shift ;;
+    --pilot) PILOT=${2:?--pilot needs hover or trajectory}; shift ;;
+    --policy) POLICY=${2:?--policy needs a file}; shift ;;
+    --record) RECORD=1 ;;
     --headless) HEADLESS=1 ;;
     --video) VIDEO=1 ;;
     --finale) FINALE=1 ;;
@@ -34,7 +40,12 @@ while (($#)); do
   shift
 done
 
-POLICY=$ROOT/downloads/arl-robot-1_policy.pt
+if ((FINALE)) && [[ -n $TERRAIN_SEED ]]; then
+  echo "--finale walks on the standard terrain: it cannot follow a mission flown with --terrain-seed" >&2
+  exit 2
+fi
+
+POLICY=${POLICY:-$ROOT/downloads/arl-robot-1_policy.pt}
 WEIGHTS=$ROOT/downloads/drone_sar_yolo26n.pt
 QUAD_POLICY=$ROOT/quadruped/checkpoints_2x/height_scanner_model_rslrl5.pt
 
@@ -72,6 +83,9 @@ gcs_cmd=(python scripts/gcs.py --name "$NAME" --weights "$WEIGHTS" --exit-on-end
 sim_cmd=(python scripts/sar_mission.py --checkpoint "$POLICY" --seed "$SEED" --out "$NAME")
 if ((HEADLESS)); then gcs_cmd+=(--headless); else sim_cmd+=(--viz kit); fi
 ((VIDEO)) && sim_cmd+=(--video)
+((RECORD)) && gcs_cmd+=(--record)
+[[ -n $TERRAIN_SEED ]] && sim_cmd+=(--terrain_seed "$TERRAIN_SEED")
+[[ -n $PILOT ]] && sim_cmd+=(--pilot "$PILOT")
 
 echo "== 1/3 ground station ($GCS_ENV): waits for the drone, writes gcs/runs/$NAME/ after the landing"
 if ((DRY)); then
