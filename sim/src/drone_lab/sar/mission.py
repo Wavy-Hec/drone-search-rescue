@@ -44,6 +44,14 @@ PHASES: tuple[str, ...] = ("takeoff", "transit", "survey", "return", "descent", 
 FLIGHT_PHASES: tuple[str, ...] = ("transit", "survey", "return")
 """Phases away from the landing pad (obstacle clearance is measured in these)."""
 
+PILOT_TASKS: dict[str, str] = {
+    # Isaac Lab's built-in hover policy (17 observations) chasing the carrot
+    "hover": "DroneLab-SAR-ARL-Robot-1-v0",
+    # a policy trained on DroneLab-TrackTrajectory-ARL-Robot-1-v0 (26 observations) tracking the carrot
+    "trajectory": "DroneLab-SAR-Trajectory-ARL-Robot-1-v0",
+}
+"""Gymnasium id of the mission task for each pilot (``--pilot`` of ``scripts/sar_mission.py``)."""
+
 
 @dataclass(frozen=True)
 class MissionPlan:
@@ -311,6 +319,7 @@ def import_drone_gcs(root: str | Path | None = None) -> ModuleType:
 __all__ = [
     "FLIGHT_PHASES",
     "PHASES",
+    "PILOT_TASKS",
     "ClearanceMonitor",
     "MissionPlan",
     "gt_objects",

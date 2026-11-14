@@ -22,6 +22,7 @@ MODULES = (
     "test_paths",
     "test_mapping",
     "test_carrot",
+    "test_trajectory_pilot",
     "test_reference",
     "test_plotting",
     "test_video",

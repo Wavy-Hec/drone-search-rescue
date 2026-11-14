@@ -12,7 +12,7 @@ import torch
 from isaaclab.managers import CommandTerm
 from isaaclab.markers import VisualizationMarkers
 
-from drone_lab.carrot import advance_carrot, interpolate_path, pad_paths
+from drone_lab.carrot import advance_carrot, interpolate_path, pad_paths, path_reference
 from drone_lab.paths import Area, build_env_paths, waypoints_array
 
 from .terrain_utils import terrain_mesh_from_stage
@@ -31,6 +31,11 @@ class SurveyCarrotCommand(CommandTerm):
     Public state used by observations, events, terminations and the mapping script:
 
     * :attr:`command` / :attr:`carrot_w` -- carrot position in the world frame (num_envs, 3).
+    * :attr:`ref_pos_w`, :attr:`ref_vel_w`, :attr:`lookahead_w` -- the carrot as the moving reference of a
+      trajectory-tracking policy: its position (num_envs, 3), its velocity over the last step (num_envs, 3) [m/s]
+      and the points it reaches after :attr:`SurveyCarrotCommandCfg.lookahead_times` (num_envs, L, 3), world frame.
+    * :attr:`speed` -- carrot speed that ramps towards the configured one at
+      :attr:`SurveyCarrotCommandCfg.max_accel` (num_envs,) [m/s]; not used without ``max_accel``.
     * :attr:`path_start_w` -- first path point, where the drone is reset (num_envs, 3).
     * :attr:`s`, :attr:`progress`, :attr:`segment_index` -- carrot arclength [m], fraction of the path, and
       index of the dense path segment it is on.
@@ -74,6 +79,9 @@ class SurveyCarrotCommand(CommandTerm):
         # carrot state
         self.s = torch.zeros(self.num_envs, device=self.device)
         self.carrot_w = self.path_points[:, 0].clone()
+        self.speed = torch.zeros(self.num_envs, device=self.device)
+        self.ref_vel_w = torch.zeros(self.num_envs, 3, device=self.device)
+        self.lookahead_w = self.carrot_w.unsqueeze(1).repeat(1, len(cfg.lookahead_times), 1)
         self.segment_index = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.gate = torch.ones(self.num_envs, device=self.device)
         self.done = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
@@ -115,6 +123,11 @@ class SurveyCarrotCommand(CommandTerm):
     @property
     def command(self) -> torch.Tensor:
         """Carrot position in the world frame. Shape is (num_envs, 3)."""
+        return self.carrot_w
+
+    @property
+    def ref_pos_w(self) -> torch.Tensor:
+        """Reference position of a trajectory-tracking policy: the carrot, world frame. Shape is (num_envs, 3)."""
         return self.carrot_w
 
     @property
@@ -172,6 +185,9 @@ class SurveyCarrotCommand(CommandTerm):
         # (re)start the carrot at the beginning of the path
         self.s[env_ids] = 0.0
         self.carrot_w[env_ids] = self.path_points[env_ids, 0]
+        self.speed[env_ids] = 0.0
+        self.ref_vel_w[env_ids] = 0.0
+        self.lookahead_w[env_ids] = self.path_points[env_ids, 0].unsqueeze(1)
         self.segment_index[env_ids] = 0
         self.gate[env_ids] = 1.0
         self.done[env_ids] = False
@@ -180,20 +196,31 @@ class SurveyCarrotCommand(CommandTerm):
     def _update_command(self):
         dt = self._env.step_dt
         pos = self.robot.data.root_pos_w.torch
+        speed = self.cfg.speed
+        if self.cfg.max_accel is not None:
+            # the carrot's own speed moves towards the configured one by at most max_accel * dt per step
+            dv = self.cfg.max_accel * dt
+            self.speed += torch.clamp(self.cfg.speed - self.speed, -dv, dv)
+            speed = self.speed
         s, carrot, gate = advance_carrot(
             self.s,
             self.path_points,
             self.path_arclength,
             pos,
-            self.cfg.speed,
+            speed,
             dt,
             self.cfg.max_lead,
             self.cfg.slow_lead,
         )
         _, seg = interpolate_path(self.path_points, self.path_arclength, s)
+        ref_vel, lookahead = path_reference(
+            self.path_points, self.path_arclength, self.s, s, dt, self.cfg.lookahead_times
+        )
         self.time_since_done += self.done.float() * dt
         self.s[:] = s
         self.carrot_w[:] = carrot
+        self.ref_vel_w[:] = ref_vel
+        self.lookahead_w[:] = lookahead
         self.gate[:] = gate
         self.segment_index[:] = seg
         self.done |= s >= self.path_length - 1e-4

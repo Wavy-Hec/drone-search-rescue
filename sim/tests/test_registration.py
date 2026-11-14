@@ -28,10 +28,29 @@ EXPECTED = {
         "rsl_rl_cfg_entry_point": "drone_lab.tasks.survey.config.arl_robot_1.agents.rsl_rl_ppo_cfg:SurveyPPORunnerCfg",
         "default_agent": "rsl_rl",
     },
+    "DroneLab-SAR-Trajectory-ARL-Robot-1-v0": {
+        "entry_point": "isaaclab.envs:ManagerBasedRLEnv",
+        "env_cfg_entry_point": "drone_lab.tasks.sar.config.arl_robot_1.sar_trajectory_env_cfg:SarTrajectoryEnvCfg",
+        # flown by a policy of the trajectory-tracking task, so it shares that task's runner config
+        "rsl_rl_cfg_entry_point": (
+            "drone_lab.tasks.track_trajectory.config.arl_robot_1.agents.rsl_rl_ppo_cfg:TrackTrajectoryPPORunnerCfg"
+        ),
+        "default_agent": "rsl_rl",
+    },
     "DroneLab-Survey-ARL-Robot-1-v0": {
         "entry_point": "isaaclab.envs:ManagerBasedRLEnv",
         "env_cfg_entry_point": "drone_lab.tasks.survey.config.arl_robot_1.survey_env_cfg:SurveyEnvCfg",
         "rsl_rl_cfg_entry_point": "drone_lab.tasks.survey.config.arl_robot_1.agents.rsl_rl_ppo_cfg:SurveyPPORunnerCfg",
+        "default_agent": "rsl_rl",
+    },
+    "DroneLab-Survey-Trajectory-ARL-Robot-1-v0": {
+        "entry_point": "isaaclab.envs:ManagerBasedRLEnv",
+        "env_cfg_entry_point": (
+            "drone_lab.tasks.survey.config.arl_robot_1.survey_trajectory_env_cfg:SurveyTrajectoryEnvCfg"
+        ),
+        "rsl_rl_cfg_entry_point": (
+            "drone_lab.tasks.track_trajectory.config.arl_robot_1.agents.rsl_rl_ppo_cfg:TrackTrajectoryPPORunnerCfg"
+        ),
         "default_agent": "rsl_rl",
     },
     "DroneLab-TrackTrajectory-ARL-Robot-1-v0": {

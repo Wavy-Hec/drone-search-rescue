@@ -9,6 +9,9 @@ its env origin. Two safeguards keep the observation inside the training distribu
   carrot never gets more than ``max_lead`` metres ahead of the drone.
 * :func:`clamp_offset` limits the observed offset to a ball of radius ``max_norm`` and to per-axis limits.
 
+A trajectory-tracking policy follows the same carrot as a moving reference: :func:`path_reference` gives the
+carrot's velocity and the look-ahead points such a policy observes.
+
 All functions are batched over environments (first dimension) and work on any device.
 """
 
@@ -121,6 +124,39 @@ def advance_carrot(
     carrot_short, _ = interpolate_path(points, arclength, s_short)
     carrot_new = torch.where(ok.unsqueeze(-1), carrot_try, carrot_short)
     return s_new, carrot_new, gate
+
+
+def path_reference(
+    points: torch.Tensor,
+    arclength: torch.Tensor,
+    s_prev: torch.Tensor,
+    s_new: torch.Tensor,
+    dt: float,
+    lookahead_times: tuple[float, ...],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Reference velocity and look-ahead points of a carrot that moved from ``s_prev`` to ``s_new`` in one step.
+
+    This is what a trajectory-tracking policy observes besides the carrot position. The velocity is the carrot's
+    displacement over the step divided by ``dt``. The look-ahead points are where the carrot will be after each
+    look-ahead time if it keeps its current speed along the path, ``(s_new - s_prev) / dt``; they stop at the end
+    of the path.
+
+    Args:
+        points, arclength: padded paths from :func:`pad_paths`.
+        s_prev, s_new: (E,) carrot arclength before and after the step [m].
+        dt: time step [s].
+        lookahead_times: look-ahead times [s], at least one.
+
+    Returns:
+        ``(ref_vel (E, 3) [m/s], lookahead (E, L, 3) [m])`` in the frame of the path.
+    """
+    carrot_prev, _ = interpolate_path(points, arclength, s_prev)
+    carrot_new, _ = interpolate_path(points, arclength, s_new)
+    ref_vel = (carrot_new - carrot_prev) / dt
+    speed = (s_new - s_prev) / dt
+    # interpolate_path clamps the arclength, so a point past the end of the path is the last path point
+    ahead = [interpolate_path(points, arclength, s_new + speed * t)[0] for t in lookahead_times]
+    return ref_vel, torch.stack(ahead, dim=1)
 
 
 def clamp_offset(

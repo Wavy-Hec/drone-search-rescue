@@ -1,8 +1,10 @@
 """Fly the search-and-rescue mission in Isaac Sim and stream it live to the drone_gcs ground station.
 
 The trained tracking policy takes off from the landing pad, flies a lawnmower survey over the dressed site of
-``DroneLab-SAR-ARL-Robot-1-v0``, comes back and lands on the pad. Every policy step (10 Hz) it streams through
-``drone_gcs.link.Sender`` (non-blocking: a slow or absent ground station only costs dropped frames):
+``DroneLab-SAR-ARL-Robot-1-v0``, comes back and lands on the pad. With ``--pilot trajectory`` the pilot is a policy
+trained on ``DroneLab-TrackTrajectory-ARL-Robot-1-v0`` and the task is ``DroneLab-SAR-Trajectory-ARL-Robot-1-v0``.
+Every policy step (10 Hz) it streams through ``drone_gcs.link.Sender`` (non-blocking: a slow or absent ground
+station only costs dropped frames):
 
 * MISSION (area, map grid, planned path, landing pad) and, for the scorecard only, GT_OBJECTS (the site's ground
   truth) and GT_TERRAIN (the true terrain height),
@@ -28,6 +30,7 @@ Examples (env_isaaclab, from the project root)::
     python scripts/sar_mission.py --checkpoint <policy.pt> --viz kit --video                # live window + recording
     python scripts/sar_mission.py --checkpoint <policy.pt> --max_time 90 --out sar_short    # short test flight
     python scripts/sar_mission.py --checkpoint <policy.pt> --video --view overview          # fixed view of the site
+    python scripts/sar_mission.py --checkpoint <trajectory policy.pt> --pilot trajectory    # trajectory-tracking pilot
 
 Trailing ``key=value`` tokens are Hydra overrides of the task config.
 """
@@ -44,15 +47,22 @@ if str(PROJECT_ROOT / "src") not in sys.path:
 
 from isaaclab.app import add_launcher_args, launch_simulation
 
-TASK = "DroneLab-SAR-ARL-Robot-1-v0"
 SITE = "/World/sar"
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument("--checkpoint", type=str, required=True, help="TorchScript tracking policy (exported/policy.pt).")
+parser.add_argument(
+    "--pilot",
+    choices=("hover", "trajectory"),
+    default="hover",
+    help="Policy type of --checkpoint: the built-in hover policy, or one trained on the trajectory-tracking task.",
+)
 parser.add_argument("--seed", type=int, default=0, help="Site seed (same seed, same site; 0 is the demo site).")
 parser.add_argument("--spacing", type=float, default=5.0, help="Lawnmower line spacing [m].")
 parser.add_argument("--altitude", type=float, default=4.0, help="Clearance above the highest terrain point [m].")
 parser.add_argument("--speed", type=float, default=1.5, help="Carrot speed for transit and survey [m/s].")
+parser.add_argument("--climb_speed", type=float, default=1.0, help="Carrot speed of the take-off climb [m/s].")
+parser.add_argument("--descent_speed", type=float, default=0.8, help="Carrot speed of the descent to the pad [m/s].")
 parser.add_argument("--settle", type=float, default=1.5, help="Hover above the pad before the take-off [s].")
 parser.add_argument("--max_time", type=float, default=None, help="End the mission after this much sim time [s].")
 parser.add_argument(
@@ -126,6 +136,7 @@ from drone_lab.sar.chase_view import (
     spawn_ground_skirt,
 )
 from drone_lab.sar.mission import (
+    PILOT_TASKS,
     ClearanceMonitor,
     MissionPlan,
     gt_objects,
@@ -136,6 +147,8 @@ from drone_lab.sar.mission import (
 from drone_lab.sar.scenario import Scenario, TerrainSite
 from drone_lab.video import capture_frame, find_kit_visualizer, open_mp4_writer, playback_speedup
 
+TASK = PILOT_TASKS[args_cli.pilot]
+"""Gymnasium id of the mission task for the chosen pilot."""
 ZERO_THRUST = -1.0
 """Raw action that the thrust action term maps to 0 N (scale 3, offset 3)."""
 VIEWER_CAMERA = "/OmniverseKit_Persp"
@@ -352,11 +365,21 @@ def prepare_mission(env_cfg) -> Mission:
     band = 0.5 * args_cli.spacing + 0.5  # the U-turns run this far outside the area
     terrain_z = site.terrain_z_range(inset=-band)
     flight_z = terrain_z[1] + args_cli.altitude
-    plan = plan_mission(scenario.area, home, flight_z, args_cli.spacing, speed=args_cli.speed)
+    plan = plan_mission(
+        scenario.area,
+        home,
+        flight_z,
+        args_cli.spacing,
+        speed=args_cli.speed,
+        climb_speed=args_cli.climb_speed,
+        descent_speed=args_cli.descent_speed,
+    )
+    # flown speed: the hover policy tops out near 1.3 m/s
+    flown_speed = min(args_cli.speed, 1.25) if args_cli.pilot == "hover" else args_cli.speed
     geometry = survey_geometry(
         flight_z,
         args_cli.spacing,
-        min(args_cli.speed, 1.25),  # flown speed: the policy tops out near 1.3 m/s
+        flown_speed,
         SAR_CAMERA.focal_px,
         (SAR_CAMERA.width, SAR_CAMERA.height),
         min_clearance=args_cli.altitude + SAR_CAMERA.mount_pos[2],  # camera above the highest terrain point
@@ -491,6 +514,7 @@ def save_outputs(run_dir: Path, mission: Mission, flight: Flight, stats: dict, l
     wall = max(flight.wall_s, 1e-6)
     summary = {
         "task": TASK,
+        "pilot": args_cli.pilot,
         "seed": args_cli.seed,
         "checkpoint": str(Path(args_cli.checkpoint).expanduser().resolve()),
         "outcome": flight.outcome,
