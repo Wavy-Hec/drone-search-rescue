@@ -868,6 +868,9 @@ class Receiver:
 
     ``drain()`` / ``get()`` return :class:`~drone_gcs.protocol.Message` objects in arrival order. The inbound
     queue keeps only the newest ``camera_queue`` CAMERA frames if the consumer falls behind.
+
+    ``record``: a file that every frame that decodes is also written to, before the inbound queue can drop it
+    (format and reader: ``drone_gcs/recording.py``). It is opened by :meth:`start` and finished by :meth:`close`.
     """
 
     def __init__(
@@ -878,12 +881,15 @@ class Receiver:
         max_queue: int = 200_000,
         decode_jpeg: bool = True,
         backlog: int = 8,
+        record: str | os.PathLike | None = None,
     ):
         self.address = address or default_address()
         self._family, self._sockaddr, self.address_str = parse_address(self.address)
         self._queue = BoundedMessageQueue({CAMERA: camera_queue}, default_limit=max_queue)
         self._decode_jpeg = decode_jpeg
         self._backlog = backlog
+        self._record = record
+        self.recorder = None  # the LinkRecorder of ``record``, while the receiver runs
         self._listener: socket.socket | None = None
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -901,6 +907,10 @@ class Receiver:
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> Receiver:
         """Listen on the address (replacing a stale socket file; a live GCS there is an error); returns self."""
+        if self._record is not None:
+            from .recording import LinkRecorder  # noqa: PLC0415  (only a recording station needs that module)
+
+            self.recorder = LinkRecorder(self._record)
         if self._family == socket.AF_UNIX:
             path = self._sockaddr
             if os.path.exists(path):
@@ -944,6 +954,8 @@ class Receiver:
                 c.shutdown(socket.SHUT_RDWR)
         for t in self._threads:
             t.join(timeout=2.0)
+        if self.recorder is not None:
+            self.recorder.close()
         if self._family == socket.AF_UNIX and self._unix_ino is not None:
             try:
                 if os.stat(self._sockaddr).st_ino == self._unix_ino:
@@ -1049,6 +1061,8 @@ class Receiver:
                 if header is None or payload is None:
                     raise ConnectionError("connection closed mid-frame")
                 msg = decode_message(header, payload, decode_jpeg=self._decode_jpeg)
+                if self.recorder is not None:
+                    self.recorder.write(time.time(), cid, prefix, header, payload)
                 now = time.monotonic()
                 msg.recv_time = now
                 msg.conn_id = cid

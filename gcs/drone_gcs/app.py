@@ -1,7 +1,8 @@
-"""The GCS application: receive -> map -> detect -> dashboard (window and/or mp4) -> report."""
+"""The GCS application: receive (or replay a recording) -> map -> detect -> dashboard (window and/or mp4) -> report."""
 
 from __future__ import annotations
 
+import collections
 import contextlib
 import logging
 import os
@@ -19,7 +20,8 @@ import numpy as np
 from .dashboard import LAYERS, STATS, Dashboard
 from .detector import DetectorWorker, detections_from_boxes, make_detector
 from .link import Receiver
-from .protocol import MISSION, Message
+from .protocol import CAMERA, MISSION, Message, ProtocolError
+from .recording import read_recording
 from .report import format_summary, write_report
 from .state import GCSConfig, GCSState
 
@@ -56,6 +58,9 @@ class AppConfig:
     screenshot_at: list[float] = field(default_factory=list)
     auto_layer_cycle: float | None = None
     window_pos: tuple[int, int] | None = None
+    record: str | None = None  # save the link stream to this file ("" = link.dgcrec in the run folder)
+    replay: Path | None = None  # process this saved link stream instead of listening on the link
+    replay_speed: float = 0.0  # 0 = as fast as possible, no frame skipped; 1 = real time; N = N times faster
     gcs: GCSConfig = field(default_factory=GCSConfig)
 
 
@@ -167,17 +172,98 @@ def resolve_run_dir(out_dir: Path, name: str | None) -> Path:
     return d
 
 
+class ReplaySource:
+    """Stands in for the :class:`~drone_gcs.link.Receiver` when a recording is replayed: it has the members the
+    app uses of it, plus ``finished`` and :meth:`next_message`.
+
+    ``speed`` > 0 is a paced replay: :meth:`drain` returns the messages whose recorded receive time, divided by
+    ``speed``, has passed since the first call, so the station works as on a live link (a detector that is too
+    slow skips frames). ``speed`` == 0 is a lossless replay: the app takes the messages one by one with
+    :meth:`next_message`, as fast as it can process them.
+    """
+
+    def __init__(self, path: str | os.PathLike, speed: float = 0.0):
+        self.path = Path(path)
+        self.speed = float(speed)
+        self.address_str = f"replay:{self.path.name}"
+        self.counts: collections.Counter = collections.Counter()  # messages handed out, per type
+        self.total_bytes = 0
+        self.dropped: dict = {}  # a replay drops nothing
+        self.errors: list[str] = []
+        self.finished = False  # every recorded message has been handed out
+        self._messages = read_recording(self.path)
+        self._next: Message | None = None  # read from the file, not handed out yet
+        self._t0: float | None = None  # time.monotonic() of the first drain()
+        self._rate: collections.deque = collections.deque()  # (monotonic time, nbytes) of the messages handed out
+
+    def start(self) -> ReplaySource:
+        """Open the recording and read its first message (raises OSError or ProtocolError for a bad file)."""
+        self._next = next(self._messages, None)
+        self.finished = self._next is None
+        return self
+
+    def close(self) -> None:
+        """Close the recording file."""
+        self._messages.close()
+
+    @property
+    def connected(self) -> bool:
+        """Messages are left to replay."""
+        return not self.finished
+
+    def rates(self, window: float = 2.0) -> tuple[float, float]:
+        """``(messages/s, bytes/s)`` handed out over the last ``window`` seconds of wall time."""
+        now = time.monotonic()
+        while self._rate and now - self._rate[0][0] > window:
+            self._rate.popleft()
+        return len(self._rate) / window, sum(x[1] for x in self._rate) / window
+
+    def next_message(self) -> Message | None:
+        """The next recorded message, or ``None`` after the last one."""
+        msg = self._next
+        if msg is None:
+            return None
+        self._next = next(self._messages, None)
+        self.finished = self._next is None
+        self.counts[msg.type] += 1
+        self.total_bytes += msg.nbytes
+        self._rate.append((time.monotonic(), msg.nbytes))
+        return msg
+
+    def drain(self) -> list[Message]:
+        """Paced replay: the messages that are due by now (the clock starts at the first call)."""
+        now = time.monotonic()
+        if self._t0 is None:
+            self._t0 = now
+        due = (now - self._t0) * self.speed  # position in the recording [s since its first message]
+        out = []
+        while self._next is not None and self._next.recv_time <= due:
+            out.append(self.next_message())
+        return out
+
+
 class GCSApp:
     """The ground station: link, mission state, detector worker, dashboard window and recording, report."""
 
     def __init__(self, cfg: AppConfig):
         self.cfg = cfg
+        if cfg.record is not None and cfg.replay is not None:
+            raise ValueError("record and replay cannot be combined (the replayed file is the recording)")
         if cfg.exit_on_end is None:
             cfg.exit_on_end = cfg.headless
         self.run_dir = resolve_run_dir(cfg.out_dir, cfg.name)
         self.state = GCSState(cfg.gcs)
         self.dashboard = Dashboard(cfg.size)
-        self.receiver = Receiver(cfg.addr)
+        self.record_path: Path | None = None  # where the link stream is saved
+        if cfg.record is not None:
+            self.record_path = Path(cfg.record) if cfg.record else self.run_dir / "link.dgcrec"
+        self.replay: ReplaySource | None = None  # set when a recording is processed instead of the live link
+        self.receiver: Receiver | ReplaySource
+        if cfg.replay is not None:
+            self.replay = self.receiver = ReplaySource(cfg.replay, cfg.replay_speed)
+        else:
+            self.receiver = Receiver(cfg.addr, record=self.record_path)
+        self.lossless = self.replay is not None and cfg.replay_speed <= 0  # replay every message, skip no frame
         self.worker: DetectorWorker | None = None
         self.detector_desc = "detector off"
         self.window: str | None = None
@@ -338,6 +424,22 @@ class GCSApp:
         elif self.cfg.detector == "gt" and frame.gt_boxes is not None:
             st.apply_detections(frame, detections_from_boxes(frame.gt_boxes), 0.0)
 
+    def _replay_until(self, deadline: float) -> None:
+        """Lossless replay: apply recorded messages until ``deadline`` (``time.monotonic()``), at least one.
+
+        After every CAMERA message the detector finishes that frame and its result is applied before the next
+        message is read. So no frame is skipped, and the outcome does not depend on how fast this computer is."""
+        while self.quit_reason is None:
+            msg = self.replay.next_message()
+            if msg is None:
+                return
+            self.handle_message(msg)
+            if msg.type == CAMERA and self.worker is not None:
+                self.worker.wait_idle()
+                self._apply_detector_results()
+            if time.monotonic() >= deadline:
+                return
+
     def _rollover(self) -> None:
         """A new MISSION (different mission_id) arrived: archive the current one and start fresh."""
         self._apply_detector_results()  # what finished so far still belongs to the old mission
@@ -361,14 +463,24 @@ class GCSApp:
 
     # ------------------------------------------------------------------ main loop
     def run(self) -> int:
-        """Run until a key, the window, a signal, the mission end or ``max_time`` stops it; returns the exit code."""
+        """Run until a key, the window, a signal, the mission end, the end of a replayed recording or ``max_time``
+        stops it; returns the exit code."""
         self._install_signals()
         try:
             self.receiver.start()
-        except (OSError, RuntimeError) as e:
-            log.error("cannot listen on %s: %s", self.receiver.address_str, e)
+        except (OSError, RuntimeError, ProtocolError) as e:
+            if self.replay is not None:
+                log.error("cannot replay %s: %s", self.replay.path, e)
+            else:
+                log.error("cannot listen on %s: %s", self.receiver.address_str, e)
             return 2
-        log.info("listening on %s  (run dir %s)", self.receiver.address_str, self.run_dir)
+        if self.replay is not None:
+            pace = "as fast as possible, no frame skipped" if self.lossless else f"{self.replay.speed:g}x real time"
+            log.info("replaying %s, %s  (run dir %s)", self.replay.path, pace, self.run_dir)
+        else:
+            log.info("listening on %s  (run dir %s)", self.receiver.address_str, self.run_dir)
+        if self.record_path is not None:
+            log.info("recording the link to %s", self.record_path)
         try:
             self._init_detector()
         except Exception as e:  # noqa: BLE001
@@ -389,8 +501,11 @@ class GCSApp:
         try:
             while self.quit_reason is None:
                 t0 = time.monotonic()
-                for msg in self.receiver.drain():
-                    self.handle_message(msg)
+                if self.lossless:
+                    self._replay_until(next_tick)  # next_tick: when this loop's dashboard frame is due
+                else:
+                    for msg in self.receiver.drain():
+                        self.handle_message(msg)
                 self._apply_detector_results()
                 st = self.state
                 if self.ui["active_drone"] is None and st.drones:
@@ -417,15 +532,18 @@ class GCSApp:
                     self.ui["layer"] = LAYERS[(LAYERS.index(self.ui["layer"]) + 1) % len(LAYERS)]
                 if st.ended and self.cfg.exit_on_end and time.time() - (st.end_wall or 0) >= self.cfg.linger:
                     self.quit_reason = f"mission end ({st.end_reason})"
+                if self.replay is not None and self.replay.finished and not st.ended and self.cfg.exit_on_end:
+                    self.quit_reason = "end of recording"  # the recording stops before its mission's END
                 if self.cfg.max_time is not None and el >= self.cfg.max_time:
                     self.quit_reason = "max time"
                 self.loop_ms = 0.9 * self.loop_ms + 0.1 * (time.monotonic() - t0) * 1000
                 next_tick += period
                 sleep = next_tick - time.monotonic()
-                if sleep > 0:
-                    time.sleep(sleep)
-                else:
+                input_left = self.lossless and not self.replay.finished  # then the time goes to the next messages
+                if sleep <= 0:
                     next_tick = time.monotonic()
+                elif not input_left:
+                    time.sleep(sleep)
         finally:
             self.finish()
         return 0
@@ -437,6 +555,11 @@ class GCSApp:
             self._apply_detector_results()  # results that finished in the meantime still count
             self.worker.close()
         self.receiver.close()
+        if self.replay is None and self.receiver.recorder is not None:
+            rec = self.receiver.recorder
+            log.info(
+                "link recorded: %d frames, %.1f MB before compression, in %s", rec.frames, rec.nbytes / 1e6, rec.path
+            )
         if self.window is not None:
             try:
                 cv2.destroyWindow(self.window)
@@ -463,6 +586,12 @@ class GCSApp:
                         "link_messages": dict(self.receiver.counts),
                         "link_dropped": self.receiver.dropped,
                         "link_errors": self.receiver.errors[-5:],
+                        "recording": self.record_path.name if self.record_path is not None else None,
+                        "replay": (
+                            {"file": self.replay.path.name, "speed": self.replay.speed}
+                            if self.replay is not None
+                            else None
+                        ),
                         "screenshots": self.shots,
                         "archived_missions": [p.name for p in self.reports],
                     }

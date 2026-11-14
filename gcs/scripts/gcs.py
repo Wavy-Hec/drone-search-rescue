@@ -13,6 +13,8 @@ Examples::
     python scripts/gcs.py --detector blob --name demo      # colour-blob stand-in for the fake world
     python scripts/gcs.py --headless --detector blob       # record only, exit after END
     python scripts/gcs.py --addr tcp://127.0.0.1:47800     # TCP instead of the default UNIX socket
+    python scripts/gcs.py --record                         # also save the link stream to <run>/link.dgcrec
+    python scripts/gcs.py --replay runs/demo/link.dgcrec --headless   # process a saved stream again, no simulator
 """
 
 from __future__ import annotations
@@ -103,8 +105,30 @@ def main(argv=None) -> int:
     p.add_argument("--screenshot-at", default="", help="comma-separated wall seconds for automatic canvas screenshots")
     p.add_argument("--auto-layer-cycle", type=float, default=None, help="demo: switch map layer every N seconds")
     p.add_argument("--window-pos", type=int, nargs=2, default=None, metavar=("X", "Y"), help="window position")
+    link_g = p.add_mutually_exclusive_group()
+    link_g.add_argument(
+        "--record",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="PATH",
+        help="save the link stream for --replay (default PATH: link.dgcrec in the run folder; a PATH ending in "
+        ".gz is gzip-compressed)",
+    )
+    link_g.add_argument(
+        "--replay", default=None, metavar="FILE", help="process a stream saved with --record instead of the live link"
+    )
+    p.add_argument(
+        "--replay-speed",
+        type=float,
+        default=0.0,
+        metavar="X",
+        help="0 (default): as fast as possible with every frame processed; 1: real time; N: N times faster",
+    )
     p.add_argument("-v", "--verbose", action="store_true")
     a = p.parse_args(argv)
+    if a.replay_speed < 0:
+        p.error("--replay-speed must be 0 or more")
     logging.basicConfig(
         level=logging.DEBUG if a.verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
@@ -135,6 +159,9 @@ def main(argv=None) -> int:
         screenshot_at=[float(s) for s in a.screenshot_at.split(",") if s.strip()],
         auto_layer_cycle=a.auto_layer_cycle,
         window_pos=tuple(a.window_pos) if a.window_pos else None,
+        record=a.record,
+        replay=Path(a.replay) if a.replay else None,
+        replay_speed=a.replay_speed,
         gcs=GCSConfig(
             photo_mode=a.photo_mode,
             depth_elevation=a.depth_elevation,

@@ -381,7 +381,7 @@ class DetectorWorker:
                 self.n_dropped += 1
             self._pending[key] = (rgb, context)  # a replaced key keeps its place in the round
             self.n_submitted += 1
-            self._cond.notify()
+            self._cond.notify_all()  # the worker; a wait_idle() caller may be waiting on the same condition
 
     def poll(self) -> list[tuple]:
         """Finished results: ``[(context, detections, inference_ms), ...]``."""
@@ -389,6 +389,12 @@ class DetectorWorker:
         while self._results:
             out.append(self._results.popleft())
         return out
+
+    def wait_idle(self, timeout: float | None = None) -> bool:
+        """Block until no frame is waiting or being detected (True), or ``timeout`` seconds have passed (False).
+        The results of the finished frames are then ready for :meth:`poll`."""
+        with self._cond:
+            return self._cond.wait_for(lambda: not self.busy, timeout)
 
     def close(self, timeout: float = 2.0) -> None:
         """Stop the thread (waits up to ``timeout`` seconds for the frame in progress)."""
@@ -425,4 +431,6 @@ class DetectorWorker:
             self.avg_ms = ms if self.n_done == 0 else 0.85 * self.avg_ms + 0.15 * ms
             self.n_done += 1
             self._results.append((ctx, dets, ms))
-            self._busy = False
+            with self._cond:
+                self._busy = False
+                self._cond.notify_all()  # wake wait_idle()
