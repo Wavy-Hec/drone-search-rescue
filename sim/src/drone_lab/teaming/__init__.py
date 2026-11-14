@@ -4,11 +4,12 @@ After the survey flight, a quadruped (the custom one of quadruped_lab on Isaac S
 Newton) gets the drone's elevation map and the pins of what it found, and walks to a person over the rubble:
 
 * :mod:`.traversability` -- slope / step / roughness costs from the elevation grid, unknown cells, object
-  footprints, inflation by the robot radius -> a cost map.
+  footprints, obstacle cells, inflation by the robot radius -> a cost map.
 * :mod:`.planner` -- cost-weighted 8-connected A* with start/goal snapping and path smoothing.
 * :mod:`.follower` -- pure pursuit -> body-frame ``(vx, vy, yaw_rate)`` clipped to the locomotion policy's
   command ranges.
-* :mod:`.inputs` -- drone maps (drone_lab / drone_gcs runs), pins, terrain ground truth.
+* :mod:`.inputs` -- drone maps (drone_lab / drone_gcs runs), pins, terrain ground truth, and the obstacles the
+  detector did not pin (the drone_gcs surface map against the elevation map).
 * :mod:`.robots` -- the ground robots: task, policy, physics and planner limits of each.
 * :mod:`.plots` -- plan and walked-path figures (matplotlib).
 

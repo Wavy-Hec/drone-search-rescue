@@ -8,7 +8,10 @@
    the site's flat apron is added around the map (``--no_apron``: the start moves onto the map edge instead).
 2. **Plan (CPU):** slope / step / roughness traversability with the robot's limits + object footprints +
    robot-radius inflation, then cost-weighted A* with start/goal snapping and smoothing (``drone_lab.teaming``).
-   Writes ``plan.png`` and ``plan.json``. ``--plan_only`` stops here (no simulator).
+   With a ``drone_gcs`` report that has a surface map (``maps/surface_max.npy``, from the camera's depth), anything
+   standing more than ``--obstacle_height`` above the terrain map is a no-go area too, pinned or not
+   (``--no_surface_obstacles``: the pins only). Writes ``plan.png`` and ``plan.json``. ``--plan_only`` stops here
+   (no simulator).
 3. **Walk (GPU):** ``--robot custom`` (default): the custom quadruped (``quadruped_lab``, converted 2.x height-scan
    policy) on Isaac Sim PhysX, the drone mission's backend; ``--robot go2``: the Unitree Go2 with Isaac Lab's
    rough-terrain policy on Newton (the fallback). The rescue task puts the robot on the same seeded terrain and SAR
@@ -101,6 +104,19 @@ src.add_argument(
     help="Plan on the drone map alone. By default, when the start (e.g. the landing pad on the flat border) lies "
     "off a drone map, the site's flat apron around the surveyed terrain is added to the map; with this flag the "
     "start moves onto the map edge instead.",
+)
+src.add_argument(
+    "--obstacle_height",
+    type=float,
+    default=0.2,
+    metavar="H",
+    help="Anything the drone's camera saw standing more than this above the terrain map is a no-go area [m] "
+    "(drone_gcs reports with a surface map, maps/surface_max.npy).",
+)
+src.add_argument(
+    "--no_surface_obstacles",
+    action="store_true",
+    help="Do not use the report's surface map: obstacles come from the pins only.",
 )
 plan_g = parser.add_argument_group("plan")
 plan_g.add_argument(
@@ -210,9 +226,12 @@ from drone_lab.teaming.inputs import (
     infer_person_poses,
     load_elevation,
     load_pins,
+    load_surface,
+    mask_on_grid,
     on_map,
     pins_from_data,
     select_goal_pin,
+    surface_obstacles,
     survey_site_bounds,
 )
 from drone_lab.teaming.planner import PlanResult, plan_path
@@ -317,6 +336,17 @@ def build_plan(run_dir: Path, profile: RobotProfile) -> dict:
     known = 100 * np.mean(np.isfinite(z))
     log(f"map: {source}, {grid.nx} x {grid.ny} cells of {grid.resolution} m, {known:.1f} % known")
 
+    # what stands on the terrain, pinned or not: the camera's surface map against the terrain map (drone_gcs reports)
+    obstacles = None
+    if a.report and a.no_surface_obstacles:
+        log("--no_surface_obstacles: obstacles come from the pins only")
+    elif a.report:
+        surface = load_surface(a.report, grid)
+        if surface is None:
+            log("the report has no surface map (maps/surface_max.npy): obstacles come from the pins only")
+        else:
+            obstacles = surface_obstacles(z, surface, a.obstacle_height)
+
     # the dressed site: what the simulator spawns, the robot's start and the truth to check the drone's pins against
     site_pins: list[Pin] = []
     home = None
@@ -352,8 +382,10 @@ def build_plan(run_dir: Path, profile: RobotProfile) -> dict:
     if mode == "drone_map" and not a.no_apron:
         # the base sits on the flat border around the surveyed terrain, which a survey map leaves out (drone_lab) or
         # knows only where the drone happened to scan it (drone_gcs)
-        old_extent, start_was_on_map = grid.extent, on_map(grid, start)
+        old_grid, old_extent, start_was_on_map = grid, grid.extent, on_map(grid, start)
         z, grid, apron = extend_with_apron(z, grid, *survey_site_bounds())
+        if obstacles is not None:
+            obstacles = mask_on_grid(obstacles, old_grid, grid)  # the map's cells keep their place in the world
         apron_cells = int(apron.sum())
         if apron_cells:
             log(
@@ -399,7 +431,7 @@ def build_plan(run_dir: Path, profile: RobotProfile) -> dict:
     tcfg = traversability_cfg(profile)
     t0 = time.time()
     for goal_pin in candidates:
-        tmap = compute_traversability(z, grid, tcfg, footprints=goal_footprints(pins, goal_pin))
+        tmap = compute_traversability(z, grid, tcfg, footprints=goal_footprints(pins, goal_pin), obstacles=obstacles)
         plan: PlanResult = plan_path(tmap, start, goal_pin.xy, max_goal_snap_m=a.max_goal_snap)
         if plan.success:
             break
@@ -408,6 +440,13 @@ def build_plan(run_dir: Path, profile: RobotProfile) -> dict:
             break
         log(f"no route to {goal_pin.label} {goal_pin.id} at {goal_pin.xy.round(2).tolist()}: {plan.message}")
     log(f"traversability ({profile.name} limits) {tmap.summary()}")
+    obstacle_cells = int(tmap.lethal_obstacles.sum())
+    if obstacles is not None:
+        unpinned = int((tmap.lethal_obstacles & ~tmap.lethal_objects).sum())
+        log(
+            f"surface map: {obstacle_cells} cells with something standing more than {a.obstacle_height:g} m above "
+            f"the terrain map are no-go areas, {unpinned} of them outside every pin's footprint"
+        )
     log(
         f"goal: {goal_pin.label} {goal_pin.id} at {goal_pin.xy.round(2).tolist()}"
         f"{f' ({goal_pin.pose})' if goal_pin.pose else ''}, {np.linalg.norm(goal_pin.xy - start):.1f} m from the "
@@ -451,6 +490,7 @@ def build_plan(run_dir: Path, profile: RobotProfile) -> dict:
         "pins_source": pins_source,
         "grid": grid.to_dict(),
         "apron_cells": apron_cells,
+        "surface_obstacle_cells": obstacle_cells,
         "start_requested_xy": [float(v) for v in requested_start],
         "start_xy": [float(v) for v in start],
         "person_xy": [float(goal_pin.x), float(goal_pin.y)],

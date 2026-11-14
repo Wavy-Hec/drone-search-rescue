@@ -13,10 +13,12 @@ IROS 2016):
   zero otherwise), so on a smooth incline the step is ~0, while at the edge of a ledge the flat side's zero
   difference wins and the full ledge height is reported.
 
-A cell is **lethal** when any feature exceeds its limit, when it is unknown (``unknown_is_lethal``), or when it
-lies inside a known object footprint (crates, vehicles, people, ... pinned by the drone). Lethal cells are then
-inflated by the robot radius (the robot centre must stay that far away), and a soft cost band beyond that keeps
-the route away from edges when there is room. The traversal cost of a free cell is::
+A cell is **lethal** when any feature exceeds its limit, when it is unknown (``unknown_is_lethal``), when it lies
+inside a known object footprint (crates, vehicles, people, ... pinned by the drone), or when the caller marks it as
+an obstacle (``obstacles``: e.g. the cells where the drone's camera saw something standing on the terrain,
+:func:`drone_lab.teaming.inputs.surface_obstacles`). Lethal cells are then inflated by the robot radius (the robot
+centre must stay that far away), and a soft cost band beyond that keeps the route away from edges when there is
+room. The traversal cost of a free cell is::
 
     1 + w_slope (slope/max_slope)^2 + w_step (step/max_step)^2 + w_roughness (roughness/max_roughness)^2
       + w_inflation (1 - (clearance - robot_radius) / inflation_buffer)^2      (inside the buffer only)
@@ -153,10 +155,12 @@ class TraversabilityMap:
     """Lethal because of the terrain (slope, step, roughness) or unknown (when unknown is lethal)."""
     lethal_objects: np.ndarray
     """Inside a known object footprint."""
+    lethal_obstacles: np.ndarray
+    """Marked as an obstacle by the caller (``obstacles`` of :func:`compute_traversability`; all False without)."""
     lethal: np.ndarray
-    """Final obstacle mask: terrain or objects, inflated by the robot radius."""
+    """Final obstacle mask: terrain, objects or obstacles, inflated by the robot radius."""
     clearance: np.ndarray
-    """Distance from the cell centre to the nearest terrain/object-lethal cell centre [m] (inf if none)."""
+    """Distance from the cell centre to the nearest terrain/object/obstacle-lethal cell centre [m] (inf if none)."""
     cost: np.ndarray
     """Traversal cost per metre (>= 1), ``inf`` where lethal."""
     footprints: list[Footprint] = field(default_factory=list)
@@ -251,6 +255,7 @@ class TraversabilityMap:
             "lethal_roughness_fraction": round(float(np.mean(self.roughness > c.max_roughness_m)), 4),
             "unknown_fraction": round(float(np.mean(self.unknown)), 4),
             "object_fraction": round(float(np.mean(self.lethal_objects)), 4),
+            "surface_obstacle_fraction": round(float(np.mean(self.lethal_obstacles)), 4),
             "num_footprints": len(self.footprints),
         }
 
@@ -472,8 +477,9 @@ def compute_traversability(
     grid: GridSpec,
     cfg: TraversabilityCfg | None = None,
     footprints: Iterable[Footprint] = (),
+    obstacles: np.ndarray | None = None,
 ) -> TraversabilityMap:
-    """Slope / step / roughness costs, unknown cells and object footprints -> inflated cost map.
+    """Slope / step / roughness costs, unknown cells, object footprints and obstacle cells -> inflated cost map.
 
     Args:
         elevation: ``(ny, nx)`` heights [m], NaN where unknown.
@@ -481,11 +487,23 @@ def compute_traversability(
         cfg: Limits and weights (default: :class:`TraversabilityCfg`).
         footprints: Known obstacles (:class:`Footprint`), e.g. from
             :func:`drone_lab.teaming.inputs.footprints_from_pins`.
+        obstacles: Extra no-go cells, a boolean ``(ny, nx)`` mask (e.g. what the drone's camera saw standing on
+            the terrain, :func:`drone_lab.teaming.inputs.surface_obstacles`); inflated by the robot radius like the
+            terrain and the footprints. ``None``: no extra cells.
     """
     cfg = cfg or TraversabilityCfg()
     z = np.asarray(elevation, dtype=float)
     if z.shape != grid.shape:
         raise ValueError(f"elevation shape {z.shape} does not match the grid {grid.shape}")
+    if obstacles is None:
+        lethal_obstacles = np.zeros(grid.shape, dtype=bool)
+    else:
+        lethal_obstacles = np.asarray(obstacles)
+        if lethal_obstacles.dtype != bool or lethal_obstacles.shape != grid.shape:
+            raise ValueError(
+                f"obstacles must be a boolean mask of the grid's shape {grid.shape}, got "
+                f"{lethal_obstacles.dtype} {lethal_obstacles.shape}"
+            )
     res = grid.resolution
     z, _ = fill_small_holes(z, cfg.fill_holes_iterations, cfg.fill_holes_min_neighbors)
     gradient, rough, fit_valid = plane_fit_gradient(z, res, cfg.footprint_radius_m, cfg.min_valid_fraction)
@@ -502,7 +520,7 @@ def compute_traversability(
     lethal_terrain = bad | (unknown if cfg.unknown_is_lethal else np.zeros_like(bad))
     footprints = list(footprints)
     lethal_objects = rasterize_footprints(grid, footprints)
-    core = lethal_terrain | lethal_objects
+    core = lethal_terrain | lethal_objects | lethal_obstacles
     clearance = ndimage.distance_transform_edt(~core) * res if core.any() else np.full(z.shape, np.inf)
     lethal = core | (clearance < cfg.robot_radius_m)
 
@@ -528,6 +546,7 @@ def compute_traversability(
         unknown=unknown,
         lethal_terrain=lethal_terrain,
         lethal_objects=lethal_objects,
+        lethal_obstacles=lethal_obstacles,
         lethal=lethal,
         clearance=clearance,
         cost=cost,

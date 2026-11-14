@@ -40,6 +40,7 @@ MODULES = (
     "test_teaming_planner",
     "test_teaming_follower",
     "test_teaming_inputs",
+    "test_teaming_obstacles",
     "test_teaming_task",
 )
 
