@@ -1,5 +1,6 @@
 # Light dependencies of the CPU checks (scripts/check.sh), pinned to the versions CI was set up with.
-# Isaac Lab, PyTorch and Ultralytics are not installed: the tests that need them skip.
+# Isaac Lab and Ultralytics are not installed: the tests that need them skip. The workflow installs PyTorch (CPU
+# build) in a step of its own, for the tests that need only PyTorch.
 numpy==2.5.4
 scipy==1.18.1
 matplotlib==3.11.2
