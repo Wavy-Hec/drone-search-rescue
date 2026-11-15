@@ -236,6 +236,7 @@ import numpy as np
 from drone_lab.teaming.inputs import (
     DEFAULT_FOOTPRINT_RADII,
     Pin,
+    carry_to_grid,
     extend_with_apron,
     footprints_from_pins,
     ground_truth_elevation,
@@ -243,7 +244,6 @@ from drone_lab.teaming.inputs import (
     load_elevation,
     load_pins,
     load_surface,
-    mask_on_grid,
     on_map,
     pins_from_data,
     select_goal_pin,
@@ -388,16 +388,14 @@ def load_map_and_pins() -> dict:
     known = 100 * np.mean(np.isfinite(z))
     log(f"map: {source}, {grid.nx} x {grid.ny} cells of {grid.resolution} m, {known:.1f} % known")
 
-    # what stands on the terrain, pinned or not: the camera's surface map against the terrain map (drone_gcs reports)
-    obstacles = None
+    # what stands on the terrain, pinned or not: the camera's surface map of a drone_gcs report
+    surface = None
     if a.report and a.no_surface_obstacles:
         log("--no_surface_obstacles: obstacles come from the pins only")
     elif a.report:
         surface = load_surface(a.report, grid)
         if surface is None:
             log("the report has no surface map (maps/surface_max.npy): obstacles come from the pins only")
-        else:
-            obstacles = surface_obstacles(z, surface, a.obstacle_height)
 
     # the dressed site: what the simulator spawns, the robot's start and the truth to check the drone's pins against
     site_pins: list[Pin] = []
@@ -436,8 +434,8 @@ def load_map_and_pins() -> dict:
         # knows only where the drone happened to scan it (drone_gcs)
         old_grid, old_extent, start_was_on_map = grid, grid.extent, on_map(grid, start)
         z, grid, apron = extend_with_apron(z, grid, *survey_site_bounds())
-        if obstacles is not None:
-            obstacles = mask_on_grid(obstacles, old_grid, grid)  # the map's cells keep their place in the world
+        if surface is not None:
+            surface = carry_to_grid(surface, old_grid, grid, np.nan)  # the map's cells keep their place in the world
         apron_cells = int(apron.sum())
         if apron_cells:
             log(
@@ -451,6 +449,10 @@ def load_map_and_pins() -> dict:
             f"WARNING: the start {requested_start.round(2).tolist()} is outside the map {grid.extent}: moved "
             f"{np.linalg.norm(start - requested_start):.1f} m onto the map edge, to {start.round(2).tolist()}"
         )
+
+    # The surface map against the terrain map, once the apron has its height: the camera sees more of the border
+    # than the mapping rays reach, and what stands there (a tree next to the landing pad) is an obstacle too.
+    obstacles = None if surface is None else surface_obstacles(z, surface, a.obstacle_height)
 
     if drone_pins:
         # the detector does not tell lying from standing; the height of its pin above the ground does
@@ -485,13 +487,20 @@ def load_map_and_pins() -> dict:
     }
 
 
+def surface_obstacle_counts(tmap: TraversabilityMap) -> tuple[int, int]:
+    """Cells the surface map marks as obstacles, and how many of them were open ground without it: closed neither
+    by the terrain limits (a wall is in the surface map too) nor by a pin's footprint."""
+    marked = tmap.lethal_obstacles
+    added = marked & ~tmap.lethal_terrain & ~tmap.lethal_objects
+    return int(marked.sum()), int(added.sum())
+
+
 def log_surface_obstacles(tmap: TraversabilityMap) -> None:
-    """Say how many cells the report's surface map made no-go areas."""
-    unpinned = int((tmap.lethal_obstacles & ~tmap.lethal_objects).sum())
+    """Say how many cells the report's surface map made no-go areas, and how many of them it alone closed."""
+    marked, added = surface_obstacle_counts(tmap)
     log(
-        f"surface map: {int(tmap.lethal_obstacles.sum())} cells with something standing more than "
-        f"{args_cli.obstacle_height:g} m above the terrain map are no-go areas, {unpinned} of them outside every "
-        f"pin's footprint"
+        f"surface map: {marked} cells with something standing more than {args_cli.obstacle_height:g} m above the "
+        f"terrain map are no-go areas; {added} of them were open ground for the terrain limits and the pins"
     )
 
 
@@ -573,7 +582,8 @@ def build_plan(run_dir: Path, profile: RobotProfile) -> dict:
         "pins_source": pins_source,
         "grid": grid.to_dict(),
         "apron_cells": apron_cells,
-        "surface_obstacle_cells": int(tmap.lethal_obstacles.sum()),
+        "surface_obstacle_cells": surface_obstacle_counts(tmap)[0],
+        "surface_obstacle_cells_added": surface_obstacle_counts(tmap)[1],
         "start_requested_xy": [float(v) for v in requested_start],
         "start_xy": [float(v) for v in start],
         "person_xy": [float(goal_pin.x), float(goal_pin.y)],
@@ -738,7 +748,8 @@ def build_tour(run_dir: Path, profile: RobotProfile) -> int:
         "pins_source": site["pins_source"],
         "grid": grid.to_dict(),
         "apron_cells": site["apron_cells"],
-        "surface_obstacle_cells": int(tmap.lethal_obstacles.sum()),
+        "surface_obstacle_cells": surface_obstacle_counts(tmap)[0],
+        "surface_obstacle_cells_added": surface_obstacle_counts(tmap)[1],
         "start_requested_xy": [float(v) for v in site["requested_start"]],
         "start_xy": [float(v) for v in start],
         "sar_seed": None if a.plain_terrain else a.sar_seed,

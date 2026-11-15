@@ -17,7 +17,8 @@ Obstacles the detector did not pin: the elevation map is the bare terrain (in Is
 only the terrain mesh), so a tree or a missed crate is not on it. A ``drone_gcs`` report can also hold a surface map
 built from the camera's depth (``maps/surface_max.npy``, :func:`load_surface`): where it lies well above the
 elevation map something stands on the terrain (:func:`surface_obstacles`), and the planner keeps off those cells.
-:func:`mask_on_grid` carries that mask onto the grid :func:`extend_with_apron` returns.
+:func:`carry_to_grid` puts the surface map on the grid :func:`extend_with_apron` returns, so the comparison can be
+made after the apron got its height: the camera sees more of the border than the mapping rays reach.
 
 Pins (``load_pins``): the ``drone_gcs`` ``detections.json`` (``{"objects": [{"class", "x", "y", "z",
 "confirmed", ...}]}``), a ``{"pins": [...]}`` / ``{"detections": [...]}`` dict, or a plain list. Each pin needs a
@@ -49,6 +50,7 @@ if TYPE_CHECKING:
 __all__ = [
     "DEFAULT_FOOTPRINT_RADII",
     "Pin",
+    "carry_to_grid",
     "extend_with_apron",
     "footprints_from_pins",
     "ground_truth_elevation",
@@ -56,7 +58,6 @@ __all__ = [
     "load_elevation",
     "load_pins",
     "load_surface",
-    "mask_on_grid",
     "on_map",
     "pins_from_data",
     "select_goal_pin",
@@ -485,18 +486,19 @@ def surface_obstacles(elevation: np.ndarray, surface: np.ndarray, min_height_m: 
     return known & (surface - elevation > min_height_m)
 
 
-def mask_on_grid(mask: np.ndarray, grid: GridSpec, new_grid: GridSpec) -> np.ndarray:
-    """Carry a cell mask from ``grid`` to a grid that contains it, e.g. the one :func:`extend_with_apron` returns.
+def carry_to_grid(values: np.ndarray, grid: GridSpec, new_grid: GridSpec, fill: float | bool) -> np.ndarray:
+    """Carry a per-cell array from ``grid`` to a grid that contains it, e.g. the one :func:`extend_with_apron` returns.
 
     ``new_grid`` must have the same cell size and the same cell edges as ``grid`` (it grew by whole cells), so
-    every cell of ``mask`` keeps its place in the world; the cells outside ``grid`` are False.
+    every value keeps its place in the world; the cells outside ``grid`` get ``fill`` (NaN for a height map, False
+    for a mask).
 
     Returns:
-        Boolean mask with the shape of ``new_grid``.
+        Array with the shape of ``new_grid`` and the dtype of ``values``.
     """
-    mask = np.asarray(mask, dtype=bool)
-    if mask.shape != grid.shape:
-        raise ValueError(f"mask shape {mask.shape} does not match the grid {grid.shape}")
+    values = np.asarray(values)
+    if values.shape != grid.shape:
+        raise ValueError(f"array shape {values.shape} does not match the grid {grid.shape}")
     res = grid.resolution
     west = round((grid.x_min - new_grid.x_min) / res)
     south = round((grid.y_min - new_grid.y_min) / res)
@@ -508,6 +510,6 @@ def mask_on_grid(mask: np.ndarray, grid: GridSpec, new_grid: GridSpec) -> np.nda
     contained = west >= 0 and south >= 0 and west + grid.nx <= new_grid.nx and south + grid.ny <= new_grid.ny
     if not (same_lattice and contained):
         raise ValueError(f"{new_grid} does not contain the cells of {grid}")
-    out = np.zeros(new_grid.shape, dtype=bool)
-    out[south : south + grid.ny, west : west + grid.nx] = mask
+    out = np.full(new_grid.shape, fill, dtype=values.dtype)
+    out[south : south + grid.ny, west : west + grid.nx] = values
     return out

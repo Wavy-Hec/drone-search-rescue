@@ -3,10 +3,10 @@
 * the obstacle mask: both maps known and the surface more than the threshold above the terrain;
 * the traversability takes the mask as no-go cells and inflates them by the robot radius: a route goes around a box
   that no pin marks, and straight through it without the mask;
-* the mask keeps its place in the world when the map grows by the site's apron;
+* a map keeps its place in the world when the grid grows by the site's apron;
 * the surface map of a report folder (present, absent, wrong shape);
-* ``scripts/rescue_finale.py --plan_only`` on a drone_gcs report with a surface map (needs env_isaaclab; skipped
-  elsewhere).
+* ``scripts/rescue_finale.py --plan_only`` on drone_gcs reports with a surface map, also for what stands on the
+  border, where the mapping rays measured nothing (needs env_isaaclab; skipped elsewhere).
 
 numpy + scipy only otherwise (``python tests/test_teaming_obstacles.py`` or under pytest).
 """
@@ -135,19 +135,27 @@ def test_route_goes_around_a_box_the_detector_did_not_pin():
     assert _distance_to_box(around.path_xy, *edges).min() >= 0.45 - math.sqrt(2.0) * g.resolution
 
 
-def test_mask_keeps_its_place_on_a_grown_grid():
+def test_values_keep_their_place_on_a_grown_grid():
     from drone_lab.mapping import GridSpec
-    from drone_lab.teaming.inputs import extend_with_apron, mask_on_grid
+    from drone_lab.teaming.inputs import carry_to_grid, extend_with_apron
 
     # by hand: two more columns in the west, one more row in the south, one column east, two rows north
     g = GridSpec(1.0, 2.0, 0.5, 4, 3)
     mask = np.zeros(g.shape, dtype=bool)
     mask[0, 0] = mask[1, 2] = mask[2, 3] = True
-    out = mask_on_grid(mask, g, GridSpec(0.0, 1.5, 0.5, 7, 6))
+    out = carry_to_grid(mask, g, GridSpec(0.0, 1.5, 0.5, 7, 6), False)
     expected = np.zeros((6, 7), dtype=bool)
     expected[1, 2] = expected[2, 4] = expected[3, 5] = True
     assert out.dtype == bool and np.array_equal(out, expected)
-    assert np.array_equal(mask_on_grid(mask, g, g), mask)  # the same grid: unchanged
+    assert np.array_equal(carry_to_grid(mask, g, g, False), mask)  # the same grid: unchanged
+
+    # a height map: its values at their cells, NaN (nothing known) on the cells the grid gained
+    heights = np.arange(12, dtype=np.float32).reshape(3, 4)
+    heights[1, 1] = np.nan
+    out = carry_to_grid(heights, g, GridSpec(0.0, 1.5, 0.5, 7, 6), np.nan)
+    assert out.dtype == np.float32 and out.shape == (6, 7)
+    assert np.array_equal(out[1:4, 2:6], heights, equal_nan=True)
+    assert np.isnan(out).sum() == 42 - 12 + 1  # every new cell, and the one that was unknown already
 
     # a survey map grown by the site's apron: every marked cell stays at its world position, nothing is added
     grid = GridSpec(-20.125, -20.125, 0.25, 161, 161)
@@ -155,7 +163,7 @@ def test_mask_keeps_its_place_on_a_grown_grid():
     mask[0, 0] = mask[-1, -1] = True  # the map's corners
     _, new, _ = extend_with_apron(np.zeros(grid.shape), grid, (-20.0, 20.0, -20.0, 20.0), (-26.0, 26.0, -26.0, 26.0))
     assert new.shape == (209, 209)
-    out = mask_on_grid(mask, grid, new)
+    out = carry_to_grid(mask, grid, new, False)
 
     def marked(m, grd):
         xs, ys = grd.cell_centers()  # multiples of 0.125 m: exact in floating point
@@ -166,11 +174,19 @@ def test_mask_keeps_its_place_on_a_grown_grid():
     assert marked(out, new) == marked(mask, grid)
 
     # only a grid with the same cells that contains the map will do
-    assert _raises_value_error(mask_on_grid, mask[:, :-1], grid, new)  # not the mask of that grid
-    assert _raises_value_error(mask_on_grid, mask, grid, GridSpec(-26.125, -26.125, 0.5, 105, 105))  # other cells
-    assert _raises_value_error(mask_on_grid, mask, grid, GridSpec(-26.0, -26.125, 0.25, 209, 209))  # half a cell off
-    assert _raises_value_error(mask_on_grid, mask, grid, GridSpec(-20.125, -20.125, 0.25, 160, 161))  # too small
-    assert _raises_value_error(mask_on_grid, mask, grid, GridSpec(-19.125, -26.125, 0.25, 209, 209))  # cuts the west
+    assert _raises_value_error(carry_to_grid, mask[:, :-1], grid, new, False)  # not an array of that grid
+    assert _raises_value_error(
+        carry_to_grid, mask, grid, GridSpec(-26.125, -26.125, 0.5, 105, 105), False
+    )  # other cells
+    assert _raises_value_error(
+        carry_to_grid, mask, grid, GridSpec(-26.0, -26.125, 0.25, 209, 209), False
+    )  # half a cell
+    assert _raises_value_error(
+        carry_to_grid, mask, grid, GridSpec(-20.125, -20.125, 0.25, 160, 161), False
+    )  # too small
+    assert _raises_value_error(
+        carry_to_grid, mask, grid, GridSpec(-19.125, -26.125, 0.25, 209, 209), False
+    )  # cuts west
 
 
 def test_load_surface_from_a_report_folder():
@@ -218,8 +234,8 @@ BOX = (-19.125, -16.875, -19.125, -16.875)
 def _flat_mission_report(tmp: Path) -> Path:
     """A drone_gcs mission report of a flat site: the landing pad and one person 20 m east of it are pinned. The
     surface map also shows a 2.25 m x 2.25 m box, 1 m tall, on the straight line between them (81 cells, not
-    pinned), a 0.3 m tall object off the route (4 cells), cells the camera did not see, and something tall on
-    terrain the drone did not map."""
+    pinned), a 0.3 m tall object off the route (4 cells), the pinned person (4 cells, 0.3 m), cells the camera did
+    not see, and something tall on terrain the drone did not map."""
     from drone_lab.mapping import GridSpec
     from drone_lab.paths import Area
 
@@ -230,6 +246,7 @@ def _flat_mission_report(tmp: Path) -> Path:
     surface = np.zeros(grid.shape, dtype=np.float32)
     surface[4:13, 4:13] = 1.0
     surface[40:42, 40:42] = 0.3
+    surface[8:10, 68:70] = 0.3  # the person at (-3, -18): inside the pin's footprint
     surface[100:110, 100:110] = np.nan
     surface[120:125, 120:125] = 2.0
     report = tmp / "mission"
@@ -285,9 +302,11 @@ def test_rescue_finale_cli_plans_around_what_the_surface_map_shows():
         assert plan["plan"]["success"] and plan["start_xy"] == [-23.0, -18.0] and plan["goal_pin"]["id"] == "2"
         # the box and the low object, counted on the map grown by the apron (209 x 209 cells)
         assert plan["apron_cells"] > 0 and plan["grid"]["nx"] == 209
-        assert plan["surface_obstacle_cells"] == 81 + 4
-        assert plan["traversability"]["surface_obstacle_fraction"] == round(85 / 209**2, 4)
-        assert "surface map: 85 cells" in r.stdout and "85 of them outside every pin's footprint" in r.stdout
+        assert plan["surface_obstacle_cells"] == 81 + 4 + 4
+        assert plan["traversability"]["surface_obstacle_fraction"] == round(89 / 209**2, 4)
+        # the person's cells were closed by the pin already: the surface map adds the box and the low object
+        assert plan["surface_obstacle_cells_added"] == 81 + 4
+        assert "surface map: 89 cells" in r.stdout and "; 85 of them were open ground" in r.stdout
         path = np.array(plan["path_xy"])
         # every cell of the route is at least the robot radius from every cell of the box (centre to centre; the
         # box is a full square of cells, so its nearest cell is the nearest one in x and in y)
@@ -303,6 +322,7 @@ def test_rescue_finale_cli_plans_around_what_the_surface_map_shows():
         assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
         assert "--no_surface_obstacles: obstacles come from the pins only" in r.stdout
         assert pins_only["plan"]["success"] and pins_only["surface_obstacle_cells"] == 0
+        assert pins_only["surface_obstacle_cells_added"] == 0
         assert pins_only["traversability"]["surface_obstacle_fraction"] == 0.0
         through = np.array(pins_only["path_xy"])
         assert (_distance_to_box(through, *BOX) == 0.0).sum() >= 10  # straight through the box
@@ -311,7 +331,8 @@ def test_rescue_finale_cli_plans_around_what_the_surface_map_shows():
         # a higher threshold leaves the 0.3 m object out
         r, tall = _cli(tmp / "tall", "--report", str(report), "--obstacle_height", "0.5")
         assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
-        assert tall["surface_obstacle_cells"] == 81 and "more than 0.5 m above" in r.stdout
+        assert tall["surface_obstacle_cells"] == 81 and tall["surface_obstacle_cells_added"] == 81
+        assert "more than 0.5 m above" in r.stdout
 
         # an older report (no surface map): one line in the log, the plan of the pins alone
         (report / "maps" / "surface_max.npy").unlink()
@@ -319,6 +340,63 @@ def test_rescue_finale_cli_plans_around_what_the_surface_map_shows():
         assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
         assert r.stdout.count("the report has no surface map") == 1 and "surface map: " not in r.stdout
         assert old["surface_obstacle_cells"] == 0 and old["path_xy"] == pins_only["path_xy"]
+
+
+TREE = (-24.125, -21.875, -11.125, -8.875)
+"""Edges (x0, x1, y0, y1) of the tree on the border in the synthetic station report [m]: 9 x 9 cells."""
+
+
+def _station_report_with_a_tree_on_the_border(tmp: Path) -> Path:
+    """A drone_gcs mission report on the station's own grid (the 40 m area with its 6 m border): the mapping rays
+    measured the flat survey area only, the camera also saw the border. The landing pad and a person 16 m north of
+    it, both on the border, are pinned; a tree nobody pinned stands on the border between them."""
+    from drone_lab.mapping import GridSpec
+
+    grid = GridSpec(-26.125, -26.125, 0.25, 209, 209)  # cell centres at -26, -25.75, ... 26
+    xs, ys = grid.cell_centers()
+    in_area = (np.abs(xs[None, :]) <= 20.0) & (np.abs(ys[:, None]) <= 20.0)
+    z = np.where(in_area, 0.0, np.nan).astype(np.float32)  # the border has no ray hits
+    surface = np.zeros(grid.shape, dtype=np.float32)  # the camera saw the ground everywhere
+    surface[60:69, 8:17] = 3.0  # the tree: cell centres -24 .. -22 in x, -11 .. -9 in y
+    report = tmp / "station"
+    (report / "maps").mkdir(parents=True)
+    np.save(report / "maps" / "elevation_mean.npy", z)
+    np.save(report / "maps" / "surface_max.npy", surface)
+    (report / "maps" / "grid.json").write_text(json.dumps({"elevation_grid": grid.to_dict(), "area": [-20, 20]}))
+    pins = [
+        {"id": 1, "class": "landing_pad", "x": -23.0, "y": -18.0, "confirmed": True},
+        {"id": 2, "class": "person", "x": -23.0, "y": -2.0, "confirmed": True},
+    ]
+    (report / "detections.json").write_text(json.dumps({"objects": pins}))
+    return report
+
+
+def test_rescue_finale_cli_sees_what_stands_on_the_border():
+    """The route from the landing pad runs along the border, which the mapping rays did not measure: the planner
+    gives it the apron's height, and what the camera saw standing there is an obstacle all the same."""
+    require("isaaclab")
+    require("trimesh")
+    from drone_lab.teaming.robots import ROBOTS
+
+    radius = ROBOTS["custom"].traversability.robot_radius_m
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        report = _station_report_with_a_tree_on_the_border(tmp)
+
+        r, plan = _cli(tmp / "surface", "--report", str(report))
+        assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
+        assert plan["plan"]["success"] and plan["start_xy"] == [-23.0, -18.0] and plan["goal_pin"]["id"] == "2"
+        assert plan["apron_cells"] > 0 and plan["grid"]["nx"] == 209  # the border got its height; no cell was added
+        assert plan["surface_obstacle_cells"] == 81 and plan["surface_obstacle_cells_added"] == 81
+        path = np.array(plan["path_xy"])
+        assert _distance_to_box(path, *TREE).min() >= radius - math.sqrt(2.0) * 0.25
+        assert np.abs(path[:, 0] + 23.0).max() > 1.125 + radius  # beside the tree and its clearance
+
+        r, pins_only = _cli(tmp / "pins_only", "--report", str(report), "--no_surface_obstacles")
+        assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
+        assert pins_only["surface_obstacle_cells"] == 0
+        through = np.array(pins_only["path_xy"])
+        assert (_distance_to_box(through, *TREE) == 0.0).sum() >= 10  # straight through the tree
 
 
 if __name__ == "__main__":
