@@ -31,8 +31,8 @@ MAGENTA = OBJECT_CLASSES["person"]["color"]  # what the colour-blob detector cal
 RED = OBJECT_CLASSES["car"]["color"]
 
 
-def load_script():
-    spec = importlib.util.spec_from_file_location("eval_external", ROOT / "scripts" / "eval_external.py")
+def load_script(name: str = "eval_external"):
+    spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / f"{name}.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -475,6 +475,51 @@ class TestScript(unittest.TestCase):
                 with self.assertRaises(SystemExit) as cm:
                     self.script.main(argv, make_detector=never)
                 self.assertEqual(cm.exception.code, 2)
+
+
+class TestVisDroneLabels(unittest.TestCase):
+    """scripts/visdrone_to_yolo.py: VisDrone annotations -> YOLO labels that read_yolo_labels reads back."""
+
+    def setUp(self):
+        self.tmp = Path(short_tmpdir("visdrone"))
+        self.addCleanup(rmtree, self.tmp)
+        self.script = load_script("visdrone_to_yolo")
+        src = self.tmp / "VisDrone2019-DET-val"
+        (src / "images").mkdir(parents=True)
+        (src / "annotations").mkdir()
+        cv2.imwrite(str(src / "images" / "a.jpg"), np.full((100, 200, 3), 90, np.uint8))  # 200 x 100 px
+        cv2.imwrite(str(src / "images" / "b.jpg"), np.full((50, 80, 3), 90, np.uint8))  # no annotation file
+        (src / "annotations" / "a.txt").write_text(
+            "10,20,30,40,1,1,0,0\n"  # pedestrian -> class 0
+            "50,10,20,20,0,0,0,0\n"  # ignored region (score 0) -> left out
+            "100,50,40,20,1,4,0,1\n"  # car -> class 3
+            "0,0,10,10,1,2,0,0\n"  # people -> class 1
+        )
+        self.src = src
+
+    def test_the_labels_by_hand_and_back_to_pixels(self):
+        out = self.tmp / "labels"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.script.main(["--src", str(self.src), "--out", str(out)]), 0)
+        lines = (out / "a.txt").read_text().splitlines()
+        self.assertEqual(
+            lines,
+            [
+                "0 0.125000 0.400000 0.150000 0.400000",  # centre (25, 40) of 200 x 100, size 30 x 40
+                "3 0.600000 0.600000 0.200000 0.200000",
+                "1 0.025000 0.050000 0.050000 0.100000",
+            ],
+        )
+        self.assertEqual((out / "b.txt").read_text(), "")  # an image without annotations has no labels
+        people = read_yolo_labels(out / "a.txt", 200, 100, {0, 1})  # the people only, as eval_external reads them
+        np.testing.assert_allclose(people, [[10, 20, 40, 60], [0, 0, 10, 10]], atol=1e-6)
+
+    def test_a_folder_without_annotations_is_refused(self):
+        (self.src / "annotations" / "a.txt").unlink()
+        (self.src / "annotations").rmdir()
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as cm:
+            self.script.main(["--src", str(self.src), "--out", str(self.tmp / "labels")])
+        self.assertEqual(cm.exception.code, 2)
 
 
 if __name__ == "__main__":

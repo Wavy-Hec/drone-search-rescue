@@ -589,6 +589,10 @@ python scripts/eval_external.py --images ~/data/aerial/images/val --labels ~/dat
 * `external_eval.json` and `external_eval.md` in `--out` (default `runs/<time>_external_eval`): images, people
   labelled, found, missed, false alarms, precision, recall, and the recall per size of the label (longer side
   below 16, 16-32, 32-64, 64-128 and from 128 px, in the resized image). `--limit N` scores the first N images.
+* VisDrone (real drone photos, for research use; Ultralytics hosts the validation set as
+  `VisDrone2019-DET-val.zip` in its assets releases): `scripts/visdrone_to_yolo.py --src <VisDrone2019-DET-val>
+  --out <labels>` writes the YOLO labels by Ultralytics' rule (ignored regions left out, class = category - 1, so
+  0 pedestrian and 1 people), then `--person-ids 0,1`.
 
 ## Tests
 
@@ -611,7 +615,7 @@ DRONE_GCS_SKIP_E2E=1 ./run_tests.sh # without the end-to-end run
 | Sensor noise (`test_noise.py`) | Parsing and validation of `--noise`. One shared navigation error per time step, the drift with its set spread and correlation time, the white part, depth noise and dropout, scan height noise, the camera lag; ground truth and other messages untouched; the same seed gives the same noise, every drone has its own stream. Through the app: a constant bias moves the pins by that bias, all levels 0 change nothing, a noisy replay is repeatable. `noise_sweep.py`: runs and tables, mean and spread by hand, a failed run left out, bad arguments |
 | Benchmark table (`test_aggregate_runs.py`) | Wilson intervals against known values; the rows and the aggregate of several runs against hand-computed numbers; one run has zero spread; the three files; no usable run is an error |
 | Corrupted copies (`test_corruptions.py`) | Every preset keeps shape and dtype and is deterministic; noise std, blur direction, low-light gain, JPEG loss and haze contrast as set; occlusion hides the asked fraction with ground from outside the boxes; in the altitude mosaics every label lands where its object does. `degrade_dataset.py` writes one dataset per preset that `eval_detector.py` reads; `eval_robustness.py` counts on the clean split and a copy (the 2 tests that need torch and Ultralytics skip without them) |
-| Real images (`test_external_eval.py`) | YOLO label reading, tile origins that cover every pixel, IoU and intersection over the smaller box by hand, a person found by two tiles kept once and whole, what one tile kept apart stays apart, one-to-one matching, size buckets, counts at full and half size, and the command line |
+| Real images (`test_external_eval.py`) | YOLO label reading, tile origins that cover every pixel, IoU and intersection over the smaller box by hand, a person found by two tiles kept once and whole, what one tile kept apart stays apart, one-to-one matching, size buckets, counts at full and half size, the command line, and the VisDrone label conversion |
 | Fake world | Rays and depth lie on the height field |
 | Detectors | The blob detector finds every object. The worker keeps the newest frame. Default weights: `$DRONE_GCS_WEIGHTS`, else the fine-tuned model if present, else COCO. YOLO wrapper: 2 CPU inferences on Ultralytics' `bus.jpg`; class filters validated (typos raise) and matched after `--class-map` |
 | Dataset tools | `seg_to_yolo` on synthetic segmentation gives exact labels, keeps cut-off boxes, paints over tiny ones. Split capture folders stay the splits, and the full box of a cut-off object decides whether it stays. Block split gives train data and ~15 % val from 8 to 2000 frames. `train_detector --dry-run`. `eval_detector` counts found, missed and false alarms from the station detector's boxes, and the people it finds in each frame |
@@ -729,6 +733,7 @@ drone_gcs/        protocol.py link.py geometry.py isaac_bridge.py   <- sender si
                   sim/fake_world.py sim/flight.py                   <- stand-in simulator
 scripts/          gcs.py  fake_drone.py  compose_video.py  seg_to_yolo.py  train_detector.py  eval_detector.py
                   noise_sweep.py  aggregate_runs.py  degrade_dataset.py  eval_robustness.py  eval_external.py
+                  visdrone_to_yolo.py
 tests/            unittest suite (./run_tests.sh)
 PROTOCOL.md       message types, fields, units, frames, Isaac Lab conversions
 models/           weights written by train_detector.py (not in git; the demo's detector is a release asset)
