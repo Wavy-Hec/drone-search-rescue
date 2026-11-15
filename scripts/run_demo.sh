@@ -45,6 +45,7 @@ if ((FINALE)) && [[ -n $TERRAIN_SEED ]]; then
   exit 2
 fi
 
+[[ -n $POLICY && $POLICY != /* ]] && POLICY=$PWD/$POLICY # the mission runs in sim/: a relative path would move
 POLICY=${POLICY:-$ROOT/downloads/arl-robot-1_policy.pt}
 WEIGHTS=$ROOT/downloads/drone_sar_yolo26n.pt
 QUAD_POLICY=$ROOT/quadruped/checkpoints_2x/height_scanner_model_rslrl5.pt
@@ -55,7 +56,11 @@ if [[ -z ${CONDA_SH:-} ]]; then
   done
 fi
 
-# in_env ENV DIR CMD...: run CMD in DIR inside the conda env ENV (a fresh bash, so the two envs never mix)
+# A fresh bash that activates the conda env $2 in the folder $3 and becomes the command after them, so the two envs
+# never mix: bash -c "$IN_ENV" _ CONDA_SH ENV DIR CMD...
+IN_ENV='source "$1" && conda activate "$2" && cd "$3" && shift 3 && exec "$@"'
+
+# in_env ENV DIR CMD...: run CMD in DIR inside the conda env ENV
 in_env() {
   local env=$1 dir=$2
   shift 2
@@ -65,7 +70,7 @@ in_env() {
     printf '(cd %q && conda activate %q && %s)\n' "$dir" "$env" "${cmd% }"
     return 0
   fi
-  bash -c 'source "$1" && conda activate "$2" && cd "$3" && shift 3 && exec "$@"' _ "$CONDA_SH" "$env" "$dir" "$@"
+  bash -c "$IN_ENV" _ "$CONDA_SH" "$env" "$dir" "$@"
 }
 
 if ((!DRY)); then
@@ -91,7 +96,10 @@ echo "== 1/3 ground station ($GCS_ENV): waits for the drone, writes gcs/runs/$NA
 if ((DRY)); then
   in_env "$GCS_ENV" "$ROOT/gcs" "${gcs_cmd[@]}"
 else
-  in_env "$GCS_ENV" "$ROOT/gcs" "${gcs_cmd[@]}" &
+  # started here, not through in_env (a function in the background runs in a subshell of its own), so that $! is the
+  # process that becomes the ground station: the trap then stops it if the mission fails, and no ground station is
+  # left listening on the socket for the next run
+  bash -c "$IN_ENV" _ "$CONDA_SH" "$GCS_ENV" "$ROOT/gcs" "${gcs_cmd[@]}" &
   gcs_pid=$!
   trap 'kill "$gcs_pid" 2>/dev/null || true' EXIT
 fi

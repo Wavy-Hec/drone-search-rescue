@@ -143,6 +143,10 @@ def main(argv: list[str] | None = None) -> int:
         p.error("--seeds must be whole numbers, e.g. 0,1,2")
     if not values or not seeds:
         p.error("--values and --seeds need at least one entry each")
+    for flag, items in (("--values", values), ("--seeds", seeds)):
+        twice = sorted({str(v) for v in items if items.count(v) > 1})
+        if twice:  # its second run would go to <name>_2 and the table would read the first one twice
+            p.error(f"{flag}: {', '.join(twice)} listed twice")
     stamp = f"{datetime.now():%Y%m%d_%H%M%S}"
     out_dir = Path(a.out).expanduser() if a.out else PROJECT_ROOT / "runs" / f"{stamp}_sweep_{a.param}"
     rows = []

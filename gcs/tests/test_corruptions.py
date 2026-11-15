@@ -4,6 +4,7 @@
 import contextlib
 import importlib.util
 import io
+import shutil
 import unittest
 from pathlib import Path
 
@@ -236,6 +237,24 @@ class TestDegradeDataset(unittest.TestCase):
             self.dd.degrade(self.data, "val", again, ["noise"])
         with self.assertRaises(ValueError):
             self.dd.parse_presets("noise,fog")
+
+    def test_a_copy_of_another_split_names_it_train_and_val_too(self):
+        # the Ultralytics validator needs both keys, whatever the split
+        test = self.tmp / "with_test"
+        shutil.copytree(self.tmp / "src", test)
+        for sub in ("images", "labels"):
+            (test / sub / "val").rename(test / sub / "test")
+        data = test / "data.yaml"
+        data.write_text(data.read_text().replace(f"path: {(self.tmp / 'src').resolve()}", f"path: {test.resolve()}")
+                        .replace("val: images/val", "test: images/test"))  # fmt: skip
+        self.dd.degrade(data, "test", self.tmp / "out_test", ["blur"])
+        folder = (self.tmp / "out_test" / "blur").resolve()
+        expected = {"train": "images/test", "val": "images/test", "test": "images/test"}
+        self.assertEqual(self.dd.read_data_yaml(folder / "data.yaml"), (folder, expected, NAMES))
+        if has_ultralytics():
+            from ultralytics.data.utils import check_det_dataset
+
+            self.assertEqual(Path(check_det_dataset(str(folder / "data.yaml"))["test"]), folder / "images" / "test")
 
     def test_data_yaml_is_read_by_eval_detector(self):
         if not has_ultralytics():

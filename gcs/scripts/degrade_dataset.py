@@ -5,8 +5,8 @@ For every preset of :data:`drone_gcs.corruptions.PRESETS` (default: all of them)
 ``OUT/<preset>/images/<split>/*.png``, ``OUT/<preset>/labels/<split>/*.txt`` and ``OUT/<preset>/data.yaml`` (the
 class names of the source, ``path`` = that folder, ``<split>: images/<split>``), so that
 ``scripts/eval_detector.py --data OUT/<preset>/data.yaml --splits <split>`` scores it like the source split. The
-Ultralytics validator refuses a data.yaml without a ``train`` key, so ``train`` points at the corrupted split too:
-the copies are for testing, not for training.
+Ultralytics validator refuses a data.yaml without both a ``train`` and a ``val`` key, so both point at the
+corrupted split too: the copies are for testing, not for training.
 
 The noise, blur, dark, jpeg and haze presets change the pixels only, and the occlusion presets hide part of
 every labelled object; their labels are those of the source frame. The altitude presets tile consecutive groups
@@ -108,10 +108,11 @@ def degrade(data: Path, split: str, out: Path, presets: list[str], seed: int = 0
                 write_frame(dest, split, f"{group[0][0]}_to_{group[-1][0]}", rgb, tiled_labels)
                 n_labels += len(tiled_labels)
         names_yaml = "".join(f"  {i}: {c}\n" for i, c in sorted(names.items()))
-        train = "" if split == "train" else f"train: images/{split}\n"  # only because Ultralytics requires one
+        # train and val as well, only because the Ultralytics validator requires both: all of them name this split
+        split_lines = "".join(f"{key}: images/{split}\n" for key in dict.fromkeys(("train", "val", split)))
         (dest / "data.yaml").write_text(
             f"# written by drone_gcs degrade_dataset: {name} ({preset.about}), from {split} of {data}\n"
-            f"path: {dest.resolve()}\n{train}{split}: images/{split}\nnames:\n{names_yaml}"
+            f"path: {dest.resolve()}\n{split_lines}names:\n{names_yaml}"
         )
         stats[name] = {"frames": written, "labels": n_labels, "dropped_frames": dropped}
     return stats

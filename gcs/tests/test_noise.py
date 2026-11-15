@@ -618,6 +618,9 @@ class TestSweepTable(unittest.TestCase):
             "unknown noise setting 'gps'": [*base, "--param", "pos", "--values", "0", "--fixed", "gps=1"],
             "--seeds must be whole numbers": [*base, "--param", "pos", "--values", "0", "--seeds", "a"],
             "no such file": ["--replay", str(self.tmp / "missing.dgcrec"), "--param", "pos", "--values", "0"],
+            # a run listed twice would read the first one's results again
+            "--values: 0.5 listed twice": [*base, "--param", "pos", "--values", "0,0.5,0.5"],
+            "--seeds: 0 listed twice": [*base, "--param", "pos", "--values", "0", "--seeds", "0,1,0"],
         }
         with mock.patch.object(SWEEP.subprocess, "run", side_effect=AssertionError("a station was started")):
             for message, args in refused.items():

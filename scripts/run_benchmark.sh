@@ -37,16 +37,23 @@ expand_list() {
   IFS=, read -ra parts <<<"$1"
   for part in "${parts[@]}"; do
     if [[ $part =~ ^([0-9]+)-([0-9]+)$ ]]; then
-      lo=${BASH_REMATCH[1]} hi=${BASH_REMATCH[2]}
+      lo=$((10#${BASH_REMATCH[1]})) hi=$((10#${BASH_REMATCH[2]})) # base 10: 08 is eight, not an octal error
       ((lo <= hi)) || { echo "bad range '$part'" >&2; return 1; }
       for ((i = lo; i <= hi; i++)); do out+=("$i"); done
     elif [[ $part =~ ^[0-9]+$ ]]; then
-      out+=("$part")
+      out+=("$((10#$part))")
     else
       echo "bad seed '$part' (use e.g. 0-9 or 0,3,7)" >&2
       return 1
     fi
   done
+  # a seed twice would run its mission twice into <name>_2, and the table would read the first run twice
+  local twice
+  twice=$(printf '%s\n' "${out[@]}" | sort -n | uniq -d)
+  if [[ -n $twice ]]; then
+    echo "seed listed twice: ${twice//$'\n'/ }" >&2
+    return 1
+  fi
   echo "${out[*]}"
 }
 
