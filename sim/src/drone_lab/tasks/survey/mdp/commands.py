@@ -34,8 +34,9 @@ class SurveyCarrotCommand(CommandTerm):
     * :attr:`ref_pos_w`, :attr:`ref_vel_w`, :attr:`lookahead_w` -- the carrot as the moving reference of a
       trajectory-tracking policy: its position (num_envs, 3), its velocity over the last step (num_envs, 3) [m/s]
       and the points it reaches after :attr:`SurveyCarrotCommandCfg.lookahead_times` (num_envs, L, 3), world frame.
-    * :attr:`speed` -- carrot speed that ramps towards the configured one at
-      :attr:`SurveyCarrotCommandCfg.max_accel` (num_envs,) [m/s]; not used without ``max_accel``.
+    * :attr:`speed` -- with :attr:`SurveyCarrotCommandCfg.max_accel`, the speed the carrot moved at in the last
+      step (num_envs,) [m/s], from which the next step may speed up by at most ``max_accel * dt``; not used
+      without ``max_accel``.
     * :attr:`path_start_w` -- first path point, where the drone is reset (num_envs, 3).
     * :attr:`s`, :attr:`progress`, :attr:`segment_index` -- carrot arclength [m], fraction of the path, and
       index of the dense path segment it is on.
@@ -198,10 +199,9 @@ class SurveyCarrotCommand(CommandTerm):
         pos = self.robot.data.root_pos_w.torch
         speed = self.cfg.speed
         if self.cfg.max_accel is not None:
-            # the carrot's own speed moves towards the configured one by at most max_accel * dt per step
+            # move towards the configured speed by at most max_accel * dt from the speed of the last step
             dv = self.cfg.max_accel * dt
-            self.speed += torch.clamp(self.cfg.speed - self.speed, -dv, dv)
-            speed = self.speed
+            speed = self.speed + torch.clamp(self.cfg.speed - self.speed, -dv, dv)
         s, carrot, gate = advance_carrot(
             self.s,
             self.path_points,
@@ -217,6 +217,9 @@ class SurveyCarrotCommand(CommandTerm):
             self.path_points, self.path_arclength, self.s, s, dt, self.cfg.lookahead_times
         )
         self.time_since_done += self.done.float() * dt
+        if self.cfg.max_accel is not None:
+            # the speed it really moved at: the lead gate may have held it back, and the ramp starts from there
+            self.speed[:] = (s - self.s) / dt
         self.s[:] = s
         self.carrot_w[:] = carrot
         self.ref_vel_w[:] = ref_vel

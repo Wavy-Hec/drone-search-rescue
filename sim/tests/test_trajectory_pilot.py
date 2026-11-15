@@ -297,6 +297,26 @@ def test_max_accel_ramps_the_carrot_speed():
     assert abs(float(term.s) - (1.95 + 1.02 + 0.24)) < 1e-4
 
 
+def test_after_waiting_for_the_drone_the_carrot_speeds_up_by_max_accel():
+    torch = require("torch")
+
+    term, env, robot = _command(speed=1.5, max_accel=1.0, max_lead=1.5, slow_lead=1.0)
+    behind = torch.tensor([[0.2, 0.0, 0.0]])
+    speeds = []
+    for step in range(90):
+        if step < 30 or step >= 50:  # the drone flies 0.2 m behind the carrot ...
+            robot.data.root_pos_w.torch = term.carrot_w - behind
+        # ... except for 2 s in between, when it hovers and the carrot has to wait for it
+        term.compute(env.step_dt)
+        speeds.append(float(term.ref_vel_w[0, 0]))
+    assert max(speeds[45:50]) < 0.05  # the carrot waited
+    assert abs(float(term.speed) - speeds[-1]) < 1e-5  # what the ramp starts from: the speed it moved at
+    # it never speeds up by more than max_accel * dt = 0.1 m/s from one step to the next, also after the wait
+    rises = [b - a for a, b in zip(speeds[:-1], speeds[1:], strict=True)]
+    assert max(rises) <= 0.1 + 1e-5, max(rises)
+    assert abs(speeds[-1] - 1.5) < 1e-3  # and it is back at its configured speed
+
+
 def test_reset_restarts_the_speed_and_the_reference_of_that_env_only():
     torch = require("torch")
 

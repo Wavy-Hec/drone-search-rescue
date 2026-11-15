@@ -10,8 +10,9 @@ pilot was trained on, ``DroneLab-TrackTrajectory-ARL-Robot-1-v0``
   command term provides ``ref_pos_w``, ``ref_vel_w`` and ``lookahead_w``. Observation noise is off.
 * Actions, thruster model and timing are the survey task's, which are the training task's (both configs subclass
   the built-in ``NoObstacleEnvCfg``).
-* Carrot: its speed changes by at most 1 m/s^2, so the reference velocity has no jumps along a line, and it may
-  lead the drone by up to 1.5 m (training ends an episode at 2.5 m and clips the observed error at 2 m).
+* Carrot: it speeds up by at most 1 m/s^2, also after waiting for the drone, so the reference velocity does not
+  jump up along a line (it slows down faster only when the drone falls behind), and it may lead the drone by up
+  to 1.5 m (training ends an episode at 2.5 m and clips the observed error at 2 m).
 
 Scene, events, rewards and terminations are the survey task's.
 """
@@ -57,7 +58,7 @@ def configure_trajectory_carrot(carrot: SurveyCarrotCommandCfg) -> None:
     """Carrot settings for a trajectory-tracking pilot.
 
     The policy trained with position errors of up to 2.5 m before termination and an observation clip of 2 m, so
-    the carrot may lead by 1.5 m (it starts slowing down at 1.0 m), and its speed changes by at most 1 m/s^2.
+    the carrot may lead by 1.5 m (it starts slowing down at 1.0 m), and it speeds up by at most 1 m/s^2.
     """
     carrot.max_accel = 1.0
     carrot.max_lead = 1.5

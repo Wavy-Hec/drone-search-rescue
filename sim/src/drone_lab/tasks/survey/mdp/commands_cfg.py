@@ -63,7 +63,9 @@ class SurveyCarrotCommandCfg(CommandTermCfg):
     """Drone-carrot distance [m] where the carrot starts slowing down (it stops at :attr:`max_lead`)."""
 
     max_accel: float | None = None
-    """Limit on how fast the carrot's speed may change [m/s^2]. None: the speed jumps to :attr:`speed` at once."""
+    """How fast the carrot may speed up, and slow down towards a lower :attr:`speed` [m/s^2]: every step it moves at
+    most ``max_accel * dt`` faster than in the step before, also after waiting for the drone. The lead gate can still
+    slow it down faster when the drone falls behind. None: the speed jumps to :attr:`speed` at once."""
 
     lookahead_times: tuple[float, ...] = (0.5, 1.0)
     """Look-ahead times [s] of the reference points a trajectory-tracking policy observes."""
