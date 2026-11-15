@@ -7,8 +7,14 @@ from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPp
 
 @configclass
 class TrackTrajectoryPPORunnerCfg(RslRlOnPolicyRunnerCfg):
-    """PPO with the built-in drone task's network size and hyper-parameters, plus observation normalization
-    (the 26-D observation mixes metres, metres per second and quaternions)."""
+    """PPO with the network size of the built-in drone task (Isaac Lab 3.0.0,
+    ``TrackPositionNoObstaclesEnvPPORunnerCfg``) and most of its hyper-parameters. Four values differ:
+
+    * observation normalization is on (the 26-D observation mixes metres, metres per second and quaternions);
+    * ``entropy_coef`` is 0.002 instead of 0.001;
+    * ``max_iterations`` is 2000 instead of 1500;
+    * ``save_interval`` is 100 instead of 50.
+    """
 
     num_steps_per_env = 24
     max_iterations = 2000

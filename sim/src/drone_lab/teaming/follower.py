@@ -14,7 +14,8 @@ Per step, given the robot pose ``(x, y, yaw)``:
    ``kappa = 2 sin(alpha) / L``.
 3. **Speed:** cruise speed, reduced when the target is off to the side (``cos(alpha)``), on tight arcs (so the
    yaw rate ``v * kappa`` stays within its limit), and near the goal (``goal_slowdown_m``). When ``|alpha|`` is
-   larger than ``turn_in_place_rad`` the robot turns on the spot first.
+   larger than ``turn_in_place_rad`` the robot turns on the spot first, until ``|alpha|`` is down to
+   ``turn_exit_rad``.
 4. **Lateral:** an optional small sideways velocity pulls the robot back onto the path (``lateral_gain``).
 5. **Goal:** within ``goal_tolerance_m`` of the last point the command becomes zero (stand still) and
    :attr:`FollowerOutput.done` is set; it stays done.

@@ -91,7 +91,7 @@ partition of its own, so the detector and the photo map get exactly the frames t
 | Camera footprint | 9.9 m across the flight line x 7.4 m along it (640 x 480 px, f = 480 px) |
 | Line spacing | 5 m, 8 lines: the camera swaths overlap by 49 %; over the highest hill (camera 3.9 m above it) the swath is still 5.2 m wide, so the photo map has no gaps. The 5 m ray grid of the mapping scanner tiles the area exactly, on the 0.25 m map lattice |
 | Speed | carrot 1.5 m/s, flown about 1.25 m/s. Frames every 0.1 s are 0.13 m apart (98 % forward overlap): each point stays in view about 6 s per pass |
-| Path | 428 m: climb 7 m, transit 3 m, survey 375 m, return 36 m, descent and touchdown 7.5 m; about 6 minutes of flight |
+| Path | 428 m: climb 7 m, transit 3 m, survey 375 m, return 36 m, descent and touchdown 7 m; about 6 minutes of flight |
 | Take-off and landing | the drone starts hovering 0.5 m over the pad; at the end the carrot sinks to 5 cm over the pad, lower than the drone's body allows, and at the first contact the motors stop |
 
 **What goes over the link** every 0.1 s step: TELEMETRY (pose, velocity, waypoint, carrot, mission phase), SCAN
@@ -156,7 +156,7 @@ The recorded finale on the live mission's report (one robot, `--goal_pin 32 --vi
 in 24.3 s, walked 16.5 m of the 16.5 m route without a fall and stopped 1.74 m from the drone's pin (1.69 m from the
 person's real centre). With 8 robots at once on the same route: 8/8 in 24.0-24.4 s, no fall.
 
-| Map and pins | Person | 32 robots at once, no second tries | Planned route | Falls |
+| Map and pins | Person | 32 robots at once | Planned route | Falls |
 |---|---|---|---|---|
 | the recorded live mission's report (`--report <ground-station run> --goal_pin 32`) | pin #32, in the recovery position in the crater (person_08) | 32/32 reached, 23.9-24.7 s | 16.5 m | 0 |
 | terrain + site ground truth (default without a report) | person_08 in the crater | 32/32, 23.5-24.1 s | 16.1 m | 0 |
@@ -166,7 +166,8 @@ person's real centre). With 8 robots at once on the same route: 8/8 in 24.0-24.4
 | the drone's survey map `runs/lawnmower_v1` + the site's pins | person_08, from the crater's north rim | 32/32, 32.4-33.1 s | 22.8 m | 1 |
 
 On the plain survey map the route comes down the crater's north wall, where one robot of the 32 tipped over 0.1 s
-after arriving.
+after arriving. No robot fell before reaching the person, so none needed the respawn after a fall (`--retries`,
+default 2).
 
 **Which person.** The pins do not say how a person lies, sits or stands; the height of a pin above the mapped ground
 tells a person on the ground from one on their feet (on the demo site 0.1-0.5 m for people lying or sitting,
@@ -260,15 +261,16 @@ frames of 7 held-out sites; the stock COCO model finds 31 and 107. The same reci
 the yellow dots are its mapping rays hitting the ground. Frame from `survey_map.py --video --camera chase --show_rays`.*
 
 1. **The pilot is a reinforcement-learning policy** trained on Isaac Lab's built-in task
-   `IsaacContrib-TrackPositionNoObstacles-ARL-Robot-1`. That policy learned one thing: fly from up to 1 m away to a
-   target point and hover there. It reads 17 numbers per step: where it is relative to the target (3), its
-   orientation quaternion (4), body velocity (3), body rotation rate (3) and its previous action (4). It outputs
-   four rotor thrusts.
+   `IsaacContrib-TrackPositionNoObstacles-ARL-Robot-1`. That policy learned one thing: fly to a target point from a
+   start up to 1 m away along each axis (a +-1 m box around the target) and hover there. It reads 17 numbers per
+   step: where it is relative to the target (3), its orientation quaternion (4), body velocity (3), body rotation
+   rate (3) and its previous action (4). It outputs four rotor thrusts.
 2. **A "carrot" turns that hover skill into path following.** The survey task
    `DroneLab-Survey-ARL-Robot-1-v0` keeps exactly the same 17 inputs, but the "target" is a carrot that slides
    along the survey path at the requested speed. The carrot never gets more than 1 m ahead of the drone (it slows
-   down and waits), and the observed offset is clamped to the +-1 m box the policy saw in training. So the same
-   trained network flies the whole survey unchanged.
+   down and waits). The observed offset is clamped too: an offset longer than 1 m is shortened to 1 m in the same
+   direction, which keeps it inside the +-1 m box the policy saw in training. (A per-axis clamp to that box comes
+   second; after the 1 m limit it changes nothing.) So the same trained network flies the whole survey unchanged.
 3. **The survey area** is built with Isaac Lab's terrain generator: 16 tiles of 10 m (hills, rough ground,
    pyramids, a pit, waves, stepped blocks, stairs), heights from about -1.4 m to 3.5 m, inside a flat 6 m border.
    It is seeded and fully deterministic, so the CPU preview shows exactly what the simulator builds.
@@ -284,8 +286,9 @@ the yellow dots are its mapping rays hitting the ground. Frame from `survey_map.
 
 ### Survey results
 
-Flown over the bare terrain with the built-in tracking policy after 1300 training iterations (the release asset
-`arl-robot-1_policy.pt`) on Isaac Sim PhysX, RTX 5080.
+Flown over the bare terrain with the built-in tracking policy after 1300 training iterations, on Isaac Sim PhysX,
+RTX 5080. The training command below runs 1500 iterations. The repository does not record which run, or which
+checkpoint, became the release asset `arl-robot-1_policy.pt`.
 
 ![Elevation map and flight path of the full survey](docs/images/isaac_map_with_trajectory.png)
 
@@ -298,10 +301,10 @@ Flown over the bare terrain with the built-in tracking policy after 1300 trainin
 * **Map error** sits on the edges of steps and walls (a 0.25 m cell across a 2 m wall is ambiguous). The 88 % of
   the cells with no step inside are mapped to about 1 cm. The drone never came closer than 4.7 m to the ground.
 * **How the policy follows the carrot:** about 0.75 s behind it (0.75 m at 1 m/s). It never saw a moving target in
-  training and only saw offsets up to 1 m, so it tops out near 1.3 m/s however fast the carrot goes (commanded
-  1.5 / 2 / 3 m/s gives 1.16 / 1.23 / 1.31 m/s). `--speed 1.5` is the sweet spot: 14 % faster, smoother, same map.
-  On +x legs (flying nose first) it flies about 0.2 m high with a small speed ripple every 2 s; on -x legs it stays
-  within 1 cm. Training `DroneLab-TrackTrajectory-ARL-Robot-1-v0` on moving targets is the real fix.
+  training and only saw offsets up to 1 m per axis, so it tops out near 1.3 m/s however fast the carrot goes
+  (commanded 1.5 / 2 / 3 m/s gives 1.16 / 1.23 / 1.31 m/s). `--speed 1.5` is the sweet spot: 14 % faster, smoother,
+  same map. On +x legs (flying nose first) it flies about 0.2 m high with a small speed ripple every 2 s; on -x
+  legs it stays within 1 cm. Training `DroneLab-TrackTrajectory-ARL-Robot-1-v0` on moving targets is the real fix.
 * **Simulation speed** (sim time / wall time, RTX 5080): about 5-8x real time without video (2.6 GB of GPU
   memory), 2.3x with the headless video camera (4.9 GB), 1.6-2x with the live window (`--viz kit`, 5.1 GB). Video
   and window runs also need 13-16 GB of RAM while Kit starts. A large training job on the same GPU slows a survey
