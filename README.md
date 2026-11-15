@@ -73,7 +73,8 @@ flowchart LR
 
 The whole system step by step, with the code behind every number (the reinforcement-learning observations, actions
 and rewards, the YOLO training, the ground station, the planner, the quadruped) and the experiments run on a CPU:
-**[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)**.
+**[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)**. A study version for an Obsidian vault, which also covers taking
+the system to a real drone and robot with SLAM: [docs/notes/drone-sar-how-it-works.md](docs/notes/drone-sar-how-it-works.md).
 
 ## Results
 
