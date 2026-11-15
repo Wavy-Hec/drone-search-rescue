@@ -30,7 +30,7 @@ site live and pins every person it finds, and a four-legged robot walks over the
 
 <p align="center">
   <img src="docs/media/flight.gif" height="280"
-       alt="Isaac Sim chase view: the drone flies a survey line over the gravel yard, its mapping rays glowing on the ground, past the forklift and the people around it">
+       alt="Isaac Sim chase view: the drone leaves its landing pad and flies over the rubble yard, its mapping rays on the ground, past the forklift and the people around it">
   <img src="docs/media/detection.gif" height="280"
        alt="The drone camera in the ground station: the fine-tuned detector boxes people, the forklift and barrels, each with its map coordinates">
   <br>
