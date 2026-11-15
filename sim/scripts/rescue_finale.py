@@ -180,6 +180,12 @@ plan_g.add_argument(
     "them), in the order with the lowest total cost. Writes tour.png, tour.json and tour_legs.sh (one command per "
     "leg) and stops (CPU only, like --plan_only).",
 )
+plan_g.add_argument(
+    "--tour_footprints",
+    action="store_true",
+    help="Give every person the pose-sized footprint of a goal, as --tour does: the commands of tour_legs.sh pass it, "
+    "so each leg is planned on the map of the tour.",
+)
 walk_g = parser.add_argument_group("walk")
 walk_g.add_argument("--task", type=str, default=None, help="Rescue task id (default: the robot's).")
 walk_g.add_argument(
@@ -533,8 +539,10 @@ def build_plan(run_dir: Path, profile: RobotProfile) -> dict:
 
     tcfg = traversability_cfg(profile)
     t0 = time.time()
+    people = [p for p in pins if p.label == "person"]  # a tour gives all of them a goal's footprint
     for goal_pin in candidates:
-        tmap = compute_traversability(z, grid, tcfg, footprints=goal_footprints(pins, [goal_pin]), obstacles=obstacles)
+        sized = people if a.tour_footprints else [goal_pin]
+        tmap = compute_traversability(z, grid, tcfg, footprints=goal_footprints(pins, sized), obstacles=obstacles)
         plan: PlanResult = plan_path(tmap, start, goal_pin.xy, max_goal_snap_m=a.max_goal_snap)
         if plan.success:
             break
@@ -654,7 +662,7 @@ def leg_commands(run_dir: Path, tour: TourResult, people: list[Pin]) -> list[str
     for k, (leg, person) in enumerate(zip(tour.legs, people, strict=True), start=1):
         x, y = leg.start_xy
         words = ["python", str(Path(__file__).resolve()), "--start", f"{x:.3f}", f"{y:.3f}"]
-        words += ["--goal_pin", str(person.id), "--out", f"{run_dir}_leg{k}", *leg_options()]
+        words += ["--goal_pin", str(person.id), "--tour_footprints", "--out", f"{run_dir}_leg{k}", *leg_options()]
         commands.append(shlex.join(words) + ' "$@"')
     return commands
 
@@ -771,8 +779,9 @@ def build_tour(run_dir: Path, profile: RobotProfile) -> int:
     lines = [
         "#!/usr/bin/env bash",
         f"# The legs of the tour in {run_dir}, to walk one after another in the simulator.",
-        "# Each command plans its own leg again, from the tour's stop to the next person. Options given to this",
-        "# script go to every leg, e.g.: bash tour_legs.sh --video",
+        "# Each command plans its own leg again, from the tour's stop to the next person, with the tour's footprints",
+        "# (--tour_footprints), so it finds the leg of tour.png. Options given to this script go to every leg, e.g.:",
+        "# bash tour_legs.sh --video",
         *leg_commands(run_dir, tour, visited),
     ]
     (run_dir / "tour_legs.sh").write_text("\n".join(lines) + "\n")

@@ -465,7 +465,8 @@ def test_rescue_finale_cli_tour_on_the_ground_truth():
         nearest = [p.id for p in people if p.id not in tour["unreachable"]][:3]
         assert sorted(tour["order"]) == sorted(nearest) and len(tour["legs"]) == 3
         _check_tour_files(out, tour, [-23.0, -18.0], 0.7)
-        assert all(len(words) == 10 for words in _leg_commands(out))  # no option of this run to hand on
+        # no option of this run to hand on: the start, the person, the tour's footprints, the output, "$@"
+        assert all(len(words) == 11 and "--tour_footprints" in words for words in _leg_commands(out))
         assert " leg  person" in r.stdout and r.stdout.count("\n   ") >= 3  # the table of legs
         assert "tour.json and tour_legs.sh" in r.stdout
 
@@ -548,8 +549,18 @@ def test_rescue_finale_cli_tour_on_a_drone_gcs_report():
             np.clip(np.abs(first[:, 1] + 18.0) - 1.125, 0.0, None),
         )
         assert to_box.min() >= radius - math.sqrt(2.0) * 0.25 and np.abs(first[:, 1] + 18.0).max() > 1.125 + radius
-        # the legs hand this run's map on
+        # the legs hand this run's map on, and each leg command plans exactly the route of its leg in the tour
         assert all(_option(words, "--report") == [str(report)] for words in _leg_commands(tmp / "all"))
+        for leg, words in zip(tour["legs"], _leg_commands(tmp / "all"), strict=True):
+            assert words[-1] == "$@" and "--tour_footprints" in words
+            command = [sys.executable, *words[1:-1], "--plan_only"]
+            done = subprocess.run(
+                command, capture_output=True, text=True, timeout=300, env=dict(os.environ, CUDA_VISIBLE_DEVICES="")
+            )
+            assert done.returncode == 0, done.stdout[-2000:] + done.stderr[-2000:]
+            plan = json.loads((Path(_option(words, "--out")[0]) / "plan.json").read_text())
+            assert plan["goal_pin"]["id"] == leg["pin"]["id"], leg["leg"]
+            np.testing.assert_allclose(plan["path_xy"], leg["path_xy"], atol=1e-6, err_msg=f"leg {leg['leg']}")
 
         # person 5 is the third nearest pin, but nobody can get there: the third stop is the farther person 7
         options = ("--no_surface_obstacles", "--max_slope", "20")
