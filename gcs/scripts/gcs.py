@@ -15,6 +15,7 @@ Examples::
     python scripts/gcs.py --addr tcp://127.0.0.1:47800     # TCP instead of the default UNIX socket
     python scripts/gcs.py --record                         # also save the link stream to <run>/link.dgcrec
     python scripts/gcs.py --replay runs/demo/link.dgcrec --headless   # process a saved stream again, no simulator
+    python scripts/gcs.py --replay runs/demo/link.dgcrec --headless --noise pos=0.5,att=1   # ... with sensor noise
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from drone_gcs.app import AppConfig, GCSApp, parse_size  # noqa: E402
 from drone_gcs.detector import COCO_WEIGHTS, MODELS_DIR, SAR_WEIGHTS  # noqa: E402
 from drone_gcs.link import default_address  # noqa: E402
+from drone_gcs.noise import KEYS, parse_noise  # noqa: E402
 from drone_gcs.state import GCSConfig  # noqa: E402
 
 
@@ -125,10 +127,24 @@ def main(argv=None) -> int:
         metavar="X",
         help="0 (default): as fast as possible with every frame processed; 1: real time; N: N times faster",
     )
+    p.add_argument(
+        "--noise",
+        default=None,
+        metavar="SPEC",
+        help="add sensor noise to the messages as they arrive, e.g. 'pos=0.5,att=1,depth=0.02,seed=1' "
+        f"(keys: {', '.join(KEYS)}; see drone_gcs/noise.py). Meant for --replay experiments (one recorded mission "
+        "at many noise levels, scripts/noise_sweep.py), but it also works on the live link",
+    )
     p.add_argument("-v", "--verbose", action="store_true")
     a = p.parse_args(argv)
     if a.replay_speed < 0:
         p.error("--replay-speed must be 0 or more")
+    noise = None
+    if a.noise is not None:
+        try:
+            noise = parse_noise(a.noise)
+        except ValueError as e:
+            p.error(f"--noise: {e}")
     logging.basicConfig(
         level=logging.DEBUG if a.verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
@@ -162,6 +178,7 @@ def main(argv=None) -> int:
         record=a.record,
         replay=Path(a.replay) if a.replay else None,
         replay_speed=a.replay_speed,
+        noise=noise,
         gcs=GCSConfig(
             photo_mode=a.photo_mode,
             depth_elevation=a.depth_elevation,

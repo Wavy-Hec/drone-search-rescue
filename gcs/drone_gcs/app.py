@@ -20,6 +20,7 @@ import numpy as np
 from .dashboard import LAYERS, STATS, Dashboard
 from .detector import DetectorWorker, detections_from_boxes, make_detector
 from .link import Receiver
+from .noise import NoiseCfg, NoiseInjector
 from .protocol import CAMERA, MISSION, Message, ProtocolError
 from .recording import read_recording
 from .report import format_summary, write_report
@@ -61,6 +62,7 @@ class AppConfig:
     record: str | None = None  # save the link stream to this file ("" = link.dgcrec in the run folder)
     replay: Path | None = None  # process this saved link stream instead of listening on the link
     replay_speed: float = 0.0  # 0 = as fast as possible, no frame skipped; 1 = real time; N = N times faster
+    noise: NoiseCfg | None = None  # sensor noise added to the messages as they arrive (None = off)
     gcs: GCSConfig = field(default_factory=GCSConfig)
 
 
@@ -264,6 +266,7 @@ class GCSApp:
         else:
             self.receiver = Receiver(cfg.addr, record=self.record_path)
         self.lossless = self.replay is not None and cfg.replay_speed <= 0  # replay every message, skip no frame
+        self.noise = NoiseInjector(cfg.noise) if cfg.noise is not None else None
         self.worker: DetectorWorker | None = None
         self.detector_desc = "detector off"
         self.window: str | None = None
@@ -406,7 +409,9 @@ class GCSApp:
 
     def handle_message(self, msg: Message) -> None:
         """Apply one link message (archiving the current mission when a new one starts) and send camera frames
-        to the detector."""
+        to the detector. With ``cfg.noise`` the message first gets its sensor noise."""
+        if self.noise is not None:
+            msg = self.noise.apply(msg)
         st = self.state
         if (
             msg.type == MISSION
@@ -481,6 +486,8 @@ class GCSApp:
             log.info("listening on %s  (run dir %s)", self.receiver.address_str, self.run_dir)
         if self.record_path is not None:
             log.info("recording the link to %s", self.record_path)
+        if self.noise is not None:
+            self.state.event(f"sensor noise on the incoming messages: {self.cfg.noise.spec() or 'all levels 0'}")
         try:
             self._init_detector()
         except Exception as e:  # noqa: BLE001
@@ -592,6 +599,7 @@ class GCSApp:
                             if self.replay is not None
                             else None
                         ),
+                        "noise": self.cfg.noise.to_dict() if self.cfg.noise is not None else None,
                         "screenshots": self.shots,
                         "archived_missions": [p.name for p in self.reports],
                     }
