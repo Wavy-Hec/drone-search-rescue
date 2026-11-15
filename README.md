@@ -71,11 +71,6 @@ flowchart LR
   object footprints, what the camera saw standing on the ground, the robot's size), plans with A*, and steers the
   robot's velocity commands by pure pursuit.
 
-The whole system step by step, with the code behind every number (the reinforcement-learning observations, actions
-and rewards, the YOLO training, the ground station, the planner, the quadruped) and the experiments run on a CPU:
-**[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)**. A study version for an Obsidian vault, which also covers taking
-the system to a real drone and robot with SLAM: [docs/notes/drone-sar-how-it-works.md](docs/notes/drone-sar-how-it-works.md).
-
 ## Results
 
 | | Result |
@@ -152,10 +147,8 @@ CI also installs the CPU build of PyTorch, so the tests of the carrot and of the
 
 ## Experiments
 
-Tools to go beyond the one demo mission, in the order you would run them. Those that need only a CPU were run on
-the stand-in drone, on real drone photos and on the site's ground truth: the results are in
-[docs/HOW_IT_WORKS.md, section 12](docs/HOW_IT_WORKS.md#12-experiments-run-on-the-cpu). None has been run in Isaac Sim
-yet. From the repository root; `gcs/` tools in the conda env `vision`, `sim/` tools in `env_isaaclab`:
+Tools to go beyond the one demo mission, in the order you would run them. None has been run in Isaac Sim yet. From
+the repository root; `gcs/` tools in the conda env `vision`, `sim/` tools in `env_isaaclab`:
 
 ```bash
 # 1. Benchmark: the mission on many sites and terrains, one headless run each, then one table with the rate of
@@ -212,8 +205,7 @@ quadruped/    quadruped_lab: the custom quadruped's walking tasks, ported to Isa
 scripts/      check.sh (lint and CPU tests), download_assets.sh, run_demo.sh (one mission, optionally the finale),
               run_benchmark.sh (the mission over many site and terrain seeds, then the benchmark table),
               make_gif.sh (the README GIFs from the mission videos)
-docs/         HOW_IT_WORKS.md (the walk-through), experiments/ (figures and tables of the CPU experiments and the
-              script that makes them), media/ (the GIFs of this README)
+docs/media/   the GIFs of this README
 ```
 
 The three projects started as separate repositories; their histories are kept here commit by commit. Each has its
