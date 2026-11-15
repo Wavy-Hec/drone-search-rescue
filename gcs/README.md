@@ -449,7 +449,7 @@ camera's instance segmentation, so nothing was labelled by hand:
 
 | Split | Sites (scenario seeds) | Frames | Objects (people) | Views |
 |---|---|---|---|---|
-| train | 36 (1000-1035) | 1620 | 5048 (1321) | 5-12 m above the ground, up to 15° off nadir, any heading; 2 in 3 aimed at an object |
+| train | 36 (1000-1035) | 1620 | 5048 (1321) | 5-12 m above the ground, up to 15° off nadir, any heading; each aimed at an object with probability 0.65 |
 | val | 7 others (2000-2006) | 315 | 968 (256) | the same, with layouts never seen in training |
 | test | the demo mission's site (seed 0) | 183 | 173 (54) | every 2.5 m along the survey path, at the mission's height and light |
 
@@ -659,8 +659,8 @@ missed, the responder walking outside the survey area.*
   forklift (28 cm) are off because the centre of their box in the image is not the centre of their footprint.
   The fine-tuned detector's pins are as accurate as the perfect boxes.
 * The map height error compares the ray-hit elevation map with the true terrain (GT_TERRAIN) over the survey
-  area. A 0.25 m cell across a block wall or a stair edge is ambiguous by nature; where the true height changes
-  by less than 10 cm from cell to cell (31 % of the area) the map is within 4 mm RMSE.
+  area. A 0.25 m cell across a block wall or a stair edge is ambiguous by nature; on the cells whose true height
+  is within 10 cm of all eight neighbours (31 % of the area) the map is within 4 mm RMSE.
 * The tracker keeps a separate pin per object: same class within 1.5 m for people, 0.8 m for crates, barrels and
   cones (they stand in piles), 1 m for pallets, 3 m for the forklift.
 * A headless run with the same fine-tuned detector found the same 40 objects, again without a false alarm, and
