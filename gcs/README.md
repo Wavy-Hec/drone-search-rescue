@@ -536,7 +536,9 @@ rendered with `gen_yolo_dataset.py --people_style tpose`).
 ### Harder tests: corrupted frames and real aerial images
 
 mAP50 0.995 on simulator frames leaves nothing to compare. Two tools score the detector where it should find less.
-Neither has been run on the fine-tuned weights yet, so there are no results here: run them on your trained weights.
+The real-image test has been run with the fine-tuned and the stock COCO weights on the VisDrone validation photos
+(results in [docs/HOW_IT_WORKS.md, section 12](../docs/HOW_IT_WORKS.md#12-experiments-run-on-the-cpu)); the
+corrupted copies need the simulator dataset and have not been run yet.
 
 **Corrupted copies of a split.** `scripts/degrade_dataset.py` writes corrupted copies of one labelled split, one
 dataset per preset in `DIR/<preset>/` (`images/<split>/*.png`, `labels/<split>/*.txt`, `data.yaml`), and
