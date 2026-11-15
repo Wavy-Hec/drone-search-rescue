@@ -20,9 +20,10 @@ camera that keeps the drone and its scan in view, with the mapping rays' hits gl
 running on to the horizon (:mod:`drone_lab.sar.chase_view`). Only that camera sees these extras; the drone's own
 camera renders the site alone.
 
-Outputs in ``runs/<out>/`` (default ``runs/sar_mission_seed<seed>``): ``mission.json`` (plan, outcome, loop rates,
-link and GPU statistics), ``trajectory.csv``, ``ground_truth.json`` and, with ``--video``, ``mission.mp4`` plus
-``mission_frames.csv`` (the sim time of every frame, for drone_gcs ``scripts/compose_video.py``).
+Outputs in ``runs/<out>/`` (default ``runs/sar_mission_seed<seed>``, or ``runs/sar_mission_seed<seed>_terrain<N>``
+with ``--terrain_seed N``): ``mission.json`` (plan, outcome, loop rates, link and GPU statistics), ``trajectory.csv``,
+``ground_truth.json`` and, with ``--video``, ``mission.mp4`` plus ``mission_frames.csv`` (the sim time of every
+frame, for drone_gcs ``scripts/compose_video.py``).
 
 Examples (env_isaaclab, from the project root)::
 
@@ -160,10 +161,16 @@ VIEWER_CAMERA = "/OmniverseKit_Persp"
 """Camera prim of the Kit viewport; the video recorder renders the same prim."""
 
 
-def run_dir_for(out: str | None, seed: int) -> Path:
+def terrain_tag(terrain_seed: int | None) -> str:
+    """``""`` on the standard terrain, else ``"_terrain<N>"``: in the default run folder and the mission's name, so a
+    mission on another terrain does not overwrite the standard-terrain run of the same site seed."""
+    return "" if terrain_seed is None else f"_terrain{terrain_seed}"
+
+
+def run_dir_for(out: str | None, seed: int, terrain_seed: int | None = None) -> Path:
     if out and ("/" in out or out.startswith("~")):
         return Path(out).expanduser().resolve()
-    return PROJECT_ROOT / "runs" / (out or f"sar_mission_seed{seed}")
+    return PROJECT_ROOT / "runs" / (out or f"sar_mission_seed{seed}{terrain_tag(terrain_seed)}")
 
 
 def gpu_memory_mib(pid: int | None = None) -> int | None:
@@ -400,8 +407,8 @@ def announce(stream, mission: Mission) -> None:
         resolution=0.25,
         planned_path=plan.waypoints,
         survey_altitude=plan.flight_z,
-        mission_id=f"sar-seed{args_cli.seed}-{datetime.now():%Y%m%d-%H%M%S}",
-        name=f"sar_seed{args_cli.seed}",
+        mission_id=f"sar-seed{args_cli.seed}{terrain_tag(args_cli.terrain_seed)}-{datetime.now():%Y%m%d-%H%M%S}",
+        name=f"sar_seed{args_cli.seed}{terrain_tag(args_cli.terrain_seed)}",
         ground_z=plan.home[2],
         z_range=mission.terrain_z,
         home=list(plan.home),
@@ -583,7 +590,7 @@ def main() -> None:
         f"narrowest swath {g['min_swath_m']:.1f} m, forward overlap {g['forward_overlap_pct']:.0f} %"
     )
     configure(env_cfg, plan)
-    run_dir = run_dir_for(args_cli.out, args_cli.seed)
+    run_dir = run_dir_for(args_cli.out, args_cli.seed, args_cli.terrain_seed)
     run_dir.mkdir(parents=True, exist_ok=True)
 
     sender = None
