@@ -88,7 +88,7 @@ def write_report(
     records = []
     for ob in tracker.objects:
         r = ob.to_dict()
-        r["confirmed"] = ob.hits >= tracker.min_hits
+        r["confirmed"] = tracker.is_confirmed(ob)
         records.append(r)
     confirmed = [r for r in records if r["confirmed"]]
     evaluation = None
@@ -102,7 +102,7 @@ def write_report(
             r["err_z_m"] = round(m["err_z"], 4)
     det_cols = [
         "id", "class", "x", "y", "z", "confidence", "confidence_max", "hits", "first_seen", "last_seen",
-        "spread_m", "confirmed", "gt_id", "err_xy_m", "err_z_m", "drone_id",
+        "spread_m", "views", "detection_rate", "confirmed", "gt_id", "err_xy_m", "err_z_m", "drone_id",
     ]  # fmt: skip
     with open(run_dir / "detections.csv", "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=det_cols, extrasaction="ignore")
@@ -197,6 +197,7 @@ def write_report(
             "merge_radius_m": tracker.merge_radius,
             "merge_radius_by_class_m": tracker.class_radius,
             "min_hits": tracker.min_hits,
+            "min_rate": tracker.min_rate,
         },
         "evaluation": None
         if evaluation is None

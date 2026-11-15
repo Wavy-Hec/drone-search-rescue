@@ -20,6 +20,10 @@ log = logging.getLogger("drone_gcs.state")
 MISSION_SCOPED = frozenset({TELEMETRY, SCAN, CAMERA, END})
 """Message types the Sender stamps with the current ``mission_id``."""
 
+OCCLUSION_MARGIN = 1.0
+"""A tracked object is hidden in a frame when the depth at its pixel is more than this much shorter than its
+own distance [m]: something stands above it, such as a tree crown."""
+
 
 @dataclass
 class GCSConfig:
@@ -41,6 +45,7 @@ class GCSConfig:
         }
     )
     min_hits: int = 2  # tracker: detections needed to confirm an object
+    min_rate: float = 0.0  # tracker: ... in at least this fraction of the frames that had it in view (0 = off)
     det_ref: str = "auto"  # geolocation reference pixel: auto | center | bottom
     edge_margin: float = 3.0  # boxes this close to the image border are partial views: shown, not mapped [px]
     depth_min_range: float = 0.5  # depth closer than this is the drone itself (legs, props): not mapped [m]
@@ -159,7 +164,7 @@ class GCSState:
         self.elevation: ElevationMap | None = None
         self.mosaic: Orthomosaic | None = None
         self.geolocator: Geolocator | None = None
-        self.tracker = ObjectTracker(self.cfg.merge_radius, self.cfg.min_hits, self.cfg.class_radius)
+        self.tracker = ObjectTracker(self.cfg.merge_radius, self.cfg.min_hits, self.cfg.class_radius, self.cfg.min_rate)
         self.planned_path: np.ndarray | None = None
         self.ground_z = 0.0
         self.z_range: tuple | None = None
@@ -470,11 +475,41 @@ class GCSState:
                         "drone_id": frame.drone_id,
                     }
                 )
-        self.tracker.update(batch)
+        in_view = self.objects_in_view(frame)
+        touched = self.tracker.update(batch)
+        self.tracker.count_views(in_view | {ob.id for ob in touched})
         frame.detections = out
         frame.det_ms = ms
         self.drone(frame.drone_id).det_frame = frame
         return out
+
+    def objects_in_view(self, frame: CameraFrame) -> set[int]:
+        """Ids of the tracked objects that ``frame`` should show: in front of the camera, with the expected box
+        (the size of the object's last box around its projected position) at least ``cfg.edge_margin`` inside
+        the image, and not hidden. A box at the border is a partial view that is not mapped, so it does not
+        count as a missed detection either."""
+        objects = self.tracker.objects
+        if not objects:
+            return set()
+        cam = frame.cam
+        W, H = cam.width, cam.height
+        m = self.cfg.edge_margin
+        u, v, z = cam.project([ob.pos for ob in objects])
+        ids = set()
+        for i, ob in enumerate(objects):
+            if z[i] <= 0:
+                continue
+            xc, yc = float(u[i]) + 0.5, float(v[i]) + 0.5  # pixel-index -> continuous coordinates, like the boxes
+            x1, y1, x2, y2 = ob.last_box if ob.last_box is not None else (0.0, 0.0, 0.0, 0.0)
+            hw, hh = 0.5 * (x2 - x1), 0.5 * (y2 - y1)
+            if xc - hw < m or yc - hh < m or xc + hw > W - m or yc + hh > H - m:
+                continue
+            if frame.depth is not None:
+                d = float(frame.depth[min(int(yc), H - 1), min(int(xc), W - 1)])
+                if 0 < d < z[i] - OCCLUSION_MARGIN:  # invalid depth (0, negative, NaN, inf) hides nothing
+                    continue
+            ids.add(ob.id)
+        return ids
 
     # ------------------------------------------------------------------ derived values
     def ground_level(self) -> float:

@@ -8,7 +8,8 @@
   a weighted mean.
 * :class:`Geolocator` - detection box -> pixel -> ray -> world XYZ (depth, else ray / elevation-map
   intersection).
-* :class:`ObjectTracker` - merges repeated detections of the same object (same class within a radius).
+* :class:`ObjectTracker` - merges repeated detections of the same object (same class within a radius) and
+  counts the frames that had each object in view.
 * :func:`evaluate_detections` - precision / recall / localisation error against ground truth.
 * :func:`terrain_error` - height error of the elevation map against the true terrain.
 
@@ -18,6 +19,7 @@ Map arrays have shape ``(ny, nx)``: row ``iy`` is the y index (south first), col
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -487,13 +489,19 @@ class TrackedObject:
     wsum: float
     drone_id: int = 0
     last_box: tuple | None = None
-    spread: float = 0.0  # RMS distance of the detections from the mean [m]
-    _sq: float = field(default=0.0, repr=False)
+    spread: float = 0.0  # confidence-weighted RMS horizontal distance of the detections from the mean [m]
+    views: int = 0  # camera frames that had the object in view (detected or not)
+    _sq: float = field(default=0.0, repr=False)  # confidence-weighted sum of those squared distances [m^2]
 
     @property
     def conf(self) -> float:
         """Mean confidence of the detections."""
         return self.conf_sum / max(1, self.hits)
+
+    @property
+    def detection_rate(self) -> float:
+        """Fraction of the frames with the object in view that detected it (1 while no view is counted)."""
+        return self.hits / max(self.views, self.hits, 1)
 
     def to_dict(self) -> dict:
         """JSON record (``detections.json``; the matched ground truth is added by the report)."""
@@ -509,6 +517,8 @@ class TrackedObject:
             "first_seen": round(self.first_seen, 3),
             "last_seen": round(self.last_seen, 3),
             "spread_m": round(self.spread, 3),
+            "views": self.views,
+            "detection_rate": round(self.detection_rate, 3),
             "drone_id": self.drone_id,
         }
 
@@ -517,12 +527,16 @@ class ObjectTracker:
     """Associates geolocated detections with objects: same class, horizontal distance <= ``merge_radius``.
 
     Each frame is associated greedily one-to-one (nearest first), so two objects seen in the same frame are
-    never merged. Objects with ``hits >= min_hits`` are *confirmed*.
+    never merged. Objects with ``hits >= min_hits`` are *confirmed*; with ``min_rate`` above 0 they must also
+    have been detected in at least that fraction of the frames that had them in view (:meth:`count_views`).
     """
 
-    def __init__(self, merge_radius: float = 2.0, min_hits: int = 2, class_radius: dict | None = None):
+    def __init__(
+        self, merge_radius: float = 2.0, min_hits: int = 2, class_radius: dict | None = None, min_rate: float = 0.0
+    ):
         self.merge_radius = float(merge_radius)
         self.min_hits = int(min_hits)
+        self.min_rate = float(min_rate)
         self.class_radius = dict(class_radius or {})
         self.objects: list[TrackedObject] = []
         self._next_id = 1
@@ -534,7 +548,7 @@ class ObjectTracker:
 
     def update(self, detections: list[dict]) -> list[TrackedObject]:
         """``detections``: dicts with ``cls``, ``xyz`` (3,), ``conf`` and optionally ``t``, ``box``, ``drone_id``.
-        Returns the objects touched by this update."""
+        Returns the objects touched by this update (the same object twice when two of them were merged)."""
         dets = [d for d in detections if d.get("xyz") is not None and np.all(np.isfinite(d["xyz"]))]
         if not dets:
             return []
@@ -566,7 +580,8 @@ class ObjectTracker:
             if i in assign:
                 ob = self.objects[assign[i]]
                 new_pos = (ob.pos * ob.wsum + xyz * w) / (ob.wsum + w)
-                ob._sq += w * float(np.sum((xyz[:2] - new_pos[:2]) ** 2))
+                # exact update of the weighted sum of squared distances from the mean when the mean moves
+                ob._sq += w * float(np.dot(xyz[:2] - ob.pos[:2], xyz[:2] - new_pos[:2]))
                 ob.pos = new_pos
                 ob.wsum += w
                 ob.hits += 1
@@ -592,11 +607,12 @@ class ObjectTracker:
                 self._next_id += 1
                 self.objects.append(ob)
             touched.append(ob)
-        self._merge_close()
+        self._merge_close(touched)
         return touched
 
-    def _merge_close(self) -> None:
-        """Merge objects of the same class that drifted within the merge radius of each other."""
+    def _merge_close(self, touched: list[TrackedObject]) -> None:
+        """Merge objects of the same class that drifted within half the merge radius of each other. In
+        ``touched`` an object that was merged away is replaced by the object that took it in."""
         merged = True
         while merged:
             merged = False
@@ -606,21 +622,41 @@ class ObjectTracker:
                     if oa.cls != ob.cls or np.hypot(*(oa.pos[:2] - ob.pos[:2])) > 0.5 * self.radius(oa.cls):
                         continue
                     w = oa.wsum + ob.wsum
+                    # squared distances from the common mean = those from the two means + the gap between them
+                    gap = float(np.sum((oa.pos[:2] - ob.pos[:2]) ** 2))
+                    oa._sq += ob._sq + oa.wsum * ob.wsum / w * gap
+                    oa.spread = math.sqrt(oa._sq / w)
                     oa.pos = (oa.pos * oa.wsum + ob.pos * ob.wsum) / w
                     oa.wsum, oa.hits = w, oa.hits + ob.hits
                     oa.conf_sum += ob.conf_sum
                     oa.conf_max = max(oa.conf_max, ob.conf_max)
                     oa.first_seen = min(oa.first_seen, ob.first_seen)
                     oa.last_seen = max(oa.last_seen, ob.last_seen)
+                    oa.views = max(oa.views, ob.views)  # both were in view in the same frames
                     del self.objects[b]
+                    touched[:] = [oa if t is ob else t for t in touched]
                     merged = True
                     break
                 if merged:
                     break
 
+    def count_views(self, ids: Iterable[int]) -> None:
+        """Count one camera frame that had the objects with these ids in view. Call it once per frame, after
+        :meth:`update`, with the objects expected in the image and those the update touched. Two boxes of one
+        frame on the same object give two hits for one view, so the views are kept at least at the hits."""
+        ids = set(ids)
+        for ob in self.objects:
+            if ob.id in ids:
+                ob.views = max(ob.views + 1, ob.hits)
+
+    def is_confirmed(self, ob: TrackedObject) -> bool:
+        """Seen at least ``min_hits`` times and, with ``min_rate`` above 0, in at least that fraction of the
+        frames that had it in view."""
+        return ob.hits >= self.min_hits and (self.min_rate <= 0 or ob.detection_rate >= self.min_rate)
+
     def confirmed(self) -> list[TrackedObject]:
-        """Objects seen at least ``min_hits`` times."""
-        return [o for o in self.objects if o.hits >= self.min_hits]
+        """The confirmed objects (:meth:`is_confirmed`)."""
+        return [o for o in self.objects if self.is_confirmed(o)]
 
 
 # ---------------------------------------------------------------------------------------------------- metrics

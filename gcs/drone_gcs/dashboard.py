@@ -528,7 +528,7 @@ class MapRenderer:
         for ob in sorted(state.tracker.objects, key=lambda o: o.id):
             c = view.pt(ob.pos[0], ob.pos[1])
             col = class_color(ob.cls)
-            if ob.hits >= state.tracker.min_hits:
+            if state.tracker.is_confirmed(ob):
                 cv2.circle(img, c, 8, (0, 0, 0), -1, aa)
                 cv2.circle(img, c, 6, col, -1, aa)
                 cv2.circle(img, c, 8, PAL["white"], 1, aa)
@@ -909,13 +909,14 @@ class Dashboard:
         row_h = 17
         max_rows = max(0, (h - (ty - y) - 4) // row_h)
         # confirmed before tentative, people first
-        objs = sorted(state.tracker.objects, key=lambda o: (o.hits < state.tracker.min_hits, o.cls != "person", o.id))
+        tracker = state.tracker
+        objs = sorted(tracker.objects, key=lambda o: (not tracker.is_confirmed(o), o.cls != "person", o.id))
         more = 0
         if len(objs) > max_rows:
             more = len(objs) - (max_rows - 1)
             objs = objs[: max_rows - 1]
         for i, ob in enumerate(objs):
-            ok = ob.hits >= state.tracker.min_hits
+            ok = tracker.is_confirmed(ob)
             col = PAL["fg"] if ok else PAL["dim"]
             if i % 2 == 0:
                 cv2.rectangle(img, (x + 4, ty - 2), (x + w - 4, ty + row_h - 2), PAL["panel2"], -1)

@@ -80,6 +80,14 @@ def main(argv=None) -> int:
     )
     p.add_argument("--min-hits", type=int, default=2, help="detections needed to confirm an object")
     p.add_argument(
+        "--min-rate",
+        type=float,
+        default=0.0,
+        metavar="X",
+        help="a pin also needs to be detected in at least this fraction of the frames that had it in view "
+        "(default 0 = off)",
+    )
+    p.add_argument(
         "--det-ref", choices=("auto", "center", "bottom"), default="auto", help="geolocation reference pixel"
     )
     p.add_argument(
@@ -139,6 +147,8 @@ def main(argv=None) -> int:
     a = p.parse_args(argv)
     if a.replay_speed < 0:
         p.error("--replay-speed must be 0 or more")
+    if not 0 <= a.min_rate <= 1:
+        p.error("--min-rate must be between 0 and 1")
     noise = None
     if a.noise is not None:
         try:
@@ -184,6 +194,7 @@ def main(argv=None) -> int:
             depth_elevation=a.depth_elevation,
             merge_radius=a.merge_radius,
             min_hits=a.min_hits,
+            min_rate=a.min_rate,
             det_ref=a.det_ref,
             edge_margin=a.edge_margin,
             depth_min_range=a.depth_min,
