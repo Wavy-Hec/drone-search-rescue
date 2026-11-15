@@ -98,7 +98,8 @@ local, or as world coordinates with `world=True`.
 
 ## Messages
 
-Required fields are **bold**. Message types not in this table are ignored by the GCS.
+Required fields are **bold**. The GCS does not act on message types that are not in this table, but it counts
+them (`summary.json` → `messages.errors_unknown_type`).
 
 ### HELLO
 Sent automatically by `Sender` as the first frame of every connection.
@@ -127,14 +128,14 @@ is ignored; a different id starts a new mission). END from any drone ends the mi
 | **`mission_id`** | str | unique per mission (Sender generates one if not given) |
 | `name` | str | display name |
 | `planned_path` (buffer) | float64 (N, 3) m, world | planned waypoints / path polyline. `wp_index` refers to these rows |
-| `survey_altitude` | m, world z | planned survey height (display only) |
+| `survey_altitude` | m, world z | planned survey height. `Sender` uses it as the z of a 2-column `planned_path`; the GCS only copies it into `summary.json` (`mission.survey_altitude`) |
 | `ground_z` | m | nominal ground height, used before the map knows the ground (AGL, rays without depth) |
 | `z_range` | [zmin, zmax] m | fixed colour scale for the elevation layer. If absent, the GCS uses a robust automatic range |
 | `padding` | m | map margin around `area` (default max(4 m, 15 % of the larger side)), rounded up to whole cells. Cell centres sit on `x_min + k·resolution` (same for y), so a ray grid of the same spacing hits cell centres, not cell edges, when the area bounds lie on that lattice (e.g. multiples of the resolution). Grids above 4 M cells get a coarser resolution (a whole multiple of the requested one) |
 | `photo_resolution` | m | orthomosaic cell size (default `resolution / 2`) |
-| `geo_origin` | `{lat, lon, alt}` | optional geodetic anchor of the world origin (carried through only) |
+| `geo_origin` | `{lat, lon, alt}` | optional geodetic anchor of the world origin. The GCS keeps it with the mission but does not use it or write it to the report |
 | `home` | [x, y, z] m, world | landing pad (top surface); drawn as "H" on the map |
-| others | | e.g. `pattern`, `spacing`, `speed`, `phases`, kept in the report |
+| others | | e.g. `pattern`, `spacing`, `speed`, `phases`: accepted and kept with the mission, but not used and not written to the report |
 
 ### Mission scope of data messages
 `Sender` adds the `mission_id` of the last MISSION it was given to every TELEMETRY, SCAN, CAMERA and END
@@ -189,7 +190,8 @@ The GCS keeps only the newest frames when it falls behind, as does the Sender (2
 
 ### GT_OBJECTS (latched, evaluation only)
 Ground truth for the report's precision / recall / localization error. The GCS never uses it for mapping or
-detection. The map shows it only when you press `g`.
+detection. The live map shows it when you press `g`, or from the start with `gcs.py --show-gt`; the report's
+map figures always show it.
 
 | field | type / unit | meaning |
 |---|---|---|

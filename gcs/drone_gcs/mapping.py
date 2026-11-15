@@ -516,8 +516,10 @@ class TrackedObject:
 class ObjectTracker:
     """Associates geolocated detections with objects: same class, horizontal distance <= ``merge_radius``.
 
-    Each frame is associated greedily one-to-one (nearest first), so two objects seen in the same frame are
-    never merged. Objects with ``hits >= min_hits`` are *confirmed*.
+    Each frame is associated greedily one-to-one (nearest first), so two detections of one frame never update the
+    same object. After every update, objects of the same class within half the merge radius of each other are
+    merged, also when they were seen in the same frame: two such detections of a new object become one object with
+    2 hits. Objects with ``hits >= min_hits`` are *confirmed*.
     """
 
     def __init__(self, merge_radius: float = 2.0, min_hits: int = 2, class_radius: dict | None = None):
@@ -596,7 +598,7 @@ class ObjectTracker:
         return touched
 
     def _merge_close(self) -> None:
-        """Merge objects of the same class that drifted within the merge radius of each other."""
+        """Merge objects of the same class that came within half the merge radius of each other."""
         merged = True
         while merged:
             merged = False

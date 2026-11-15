@@ -289,7 +289,7 @@ class _Item:
         self.jpeg_quality = jpeg_quality
         self.nbytes = sum(int(a.nbytes) for a in self.arrays.values()) + 256
         self.order = -1  # enqueue order (Sender)
-        self.ctx: dict = {}  # latched MISSION / GT_OBJECTS in force when this item was queued
+        self.ctx: dict = {}  # latched MISSION / GT_OBJECTS / GT_TERRAIN in force when this item was queued
 
 
 # ---------------------------------------------------------------------------------------------------- helpers
@@ -365,8 +365,8 @@ class Sender:
             default_limit=256,
             max_bytes=max_queue_bytes,
         )
-        # Latched state: {(MISSION | GT_OBJECTS, drone_id): item}. Replaced (never mutated) on every MISSION /
-        # GT_OBJECTS, so each queued item can keep a reference to the state it was sent under (item.ctx).
+        # Latched state: {(MISSION | GT_OBJECTS | GT_TERRAIN, drone_id): item}. Replaced (never mutated) on every
+        # latched message, so each queued item can keep a reference to the state it was sent under (item.ctx).
         self._ctx: dict[tuple[str, int], _Item] = {}
         self._mission_id: str | None = None  # stamped into data messages and END
         self._item_order = itertools.count()
@@ -716,8 +716,8 @@ class Sender:
         return False
 
     def _enqueue(self, item: _Item) -> bool:
-        """Everything goes through the one FIFO, in call order. MISSION / GT_OBJECTS also become the latched
-        state that is re-sent after a reconnect; other messages are stamped with the current ``mission_id``."""
+        """Everything goes through the one FIFO, in call order. MISSION / GT_OBJECTS / GT_TERRAIN also become the
+        latched state that is re-sent after a reconnect; other messages are stamped with the current ``mission_id``."""
         if self._closed:
             return False
         with self._lock:  # ctx snapshot and queue position must agree (send_* may be called from several threads)
@@ -812,9 +812,9 @@ class Sender:
             self.drone_id,
         )
         self._write(hello)
-        # A new GCS knows nothing yet: tell it the MISSION / GT_OBJECTS that the next queued message was sent
-        # under (not necessarily the newest ones: older data may still be queued). A latched item that is itself
-        # at the head of the queue is sent from the queue, in order.
+        # A new GCS knows nothing yet: tell it the MISSION / GT_OBJECTS / GT_TERRAIN that the next queued message
+        # was sent under (not necessarily the newest ones: older data may still be queued). A latched item that is
+        # itself at the head of the queue is sent from the queue, in order.
         head = self._queue.peek()
         with self._lock:
             ctx = head.ctx if head is not None else self._ctx
@@ -850,7 +850,7 @@ class Sender:
             except OSError as e:
                 self.last_error = f"send: {e}"
                 if item is not None and item.type in CONTROL_TYPES:
-                    self._queue.push_front(item)  # MISSION / GT_OBJECTS / END must not be lost
+                    self._queue.push_front(item)  # MISSION / GT_OBJECTS / GT_TERRAIN / END must not be lost
                 self._disconnect()
                 self._stop.wait(self._reconnect_min)  # no busy loop if the GCS accepts and drops at once
             except Exception as e:  # noqa: BLE001
