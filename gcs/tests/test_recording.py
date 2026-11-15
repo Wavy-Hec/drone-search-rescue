@@ -308,6 +308,15 @@ class TestReceiverRecording(unittest.TestCase):
     def tearDown(self):
         rmtree(self.tmp)
 
+    def test_a_station_that_cannot_listen_leaves_an_old_recording_alone(self):
+        Path(self.path).write_bytes(b"an earlier recording")
+        with Receiver(self.addr):  # a station is listening there already
+            second = Receiver(self.addr, record=self.path)
+            with self.assertRaises(RuntimeError):
+                second.start()
+        self.assertEqual(Path(self.path).read_bytes(), b"an earlier recording")
+        self.assertIsNone(second.recorder)
+
     def test_recorded_sequence_equals_the_drained_sequence(self):
         drained = []
         with Receiver(self.addr, record=self.path) as rx:
@@ -516,6 +525,26 @@ class TestReplayThroughApp(unittest.TestCase):
             np.testing.assert_array_equal(
                 np.load(slow.run_dir / "maps" / name), np.load(fast.run_dir / "maps" / name), err_msg=name
             )
+
+    def test_lossless_replay_reads_every_mission_however_slow_the_station(self):
+        parts = [Path(self.tmp) / f"part{k}.dgcrec" for k in range(2)]
+        for part in parts:
+            make_small_recording(part, n_camera=3)
+        both = Path(self.tmp) / "two_missions.dgcrec"
+        both.write_bytes(parts[0].read_bytes() + parts[1].read_bytes()[len(MAGIC) :])  # mission A, then B
+        render = app_module.Dashboard.render
+
+        def slow_render(dashboard, *args, **kwargs):  # slower than a frame at 50 fps: every round runs behind
+            time.sleep(0.03)
+            return render(dashboard, *args, **kwargs)
+
+        with mock.patch.object(app_module.Dashboard, "render", slow_render):
+            app, summary = self.replay("two_missions", both, fps=50.0)
+        self.assertEqual(app.quit_reason, "mission end (complete)")
+        self.assertEqual(len(app.reports), 1)  # mission A archived and B reported: the whole recording was read
+        ids = [m.fields["mission_id"] for m in read_recording(both) if m.type == P.MISSION]
+        self.assertEqual(summary["mission"]["mission_id"], ids[1])
+        self.assertEqual(app.worker.n_done, 6)
 
     def test_lossless_replay_does_not_wait_while_input_is_left(self):
         naps = []

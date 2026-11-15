@@ -490,15 +490,21 @@ class GCSState:
 
     def objects_in_view(self, frame: CameraFrame) -> set[int]:
         """Ids of the tracked objects that ``frame`` should show: in front of the camera, with the expected box
-        (the size of the object's last box around its projected position) at least ``cfg.edge_margin`` inside
-        the image, and not hidden. A box at the border is a partial view that is not mapped, so it does not
-        count as a missed detection either."""
+        (the size of the object's last box, placed so that its reference pixel is the projected position) at least
+        ``cfg.edge_margin`` inside the image, and not hidden. A box at the border is a partial view that is not
+        mapped, so it does not count as a missed detection either."""
         objects = self.tracker.objects
-        if not objects:
+        if not objects or self.geolocator is None:
             return set()
         cam = frame.cam
         W, H = cam.width, cam.height
         m = self.cfg.edge_margin
+        # the reference pixel of the Geolocator (the same rule as Geolocator.locate): the box centre, or for an
+        # oblique view the bottom of the box (95 % of the way down), where the object stands on the ground
+        ref = self.geolocator.ref
+        if ref == "auto":
+            ref = "center" if cam.nadir_angle_deg() <= self.geolocator.nadir_threshold_deg else "bottom"
+        above, below = (0.5, 0.5) if ref == "center" else (0.95, 0.05)  # fractions of the box height
         u, v, z = cam.project([ob.pos for ob in objects])
         ids = set()
         for i, ob in enumerate(objects):
@@ -506,8 +512,8 @@ class GCSState:
                 continue
             xc, yc = float(u[i]) + 0.5, float(v[i]) + 0.5  # pixel-index -> continuous coordinates, like the boxes
             x1, y1, x2, y2 = ob.last_box if ob.last_box is not None else (0.0, 0.0, 0.0, 0.0)
-            hw, hh = 0.5 * (x2 - x1), 0.5 * (y2 - y1)
-            if xc - hw < m or yc - hh < m or xc + hw > W - m or yc + hh > H - m:
+            hw, h = 0.5 * (x2 - x1), y2 - y1
+            if xc - hw < m or yc - above * h < m or xc + hw > W - m or yc + below * h > H - m:
                 continue
             if frame.depth is not None:
                 d = float(frame.depth[min(int(yc), H - 1), min(int(xc), W - 1)])

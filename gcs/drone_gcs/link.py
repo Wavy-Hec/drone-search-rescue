@@ -907,10 +907,6 @@ class Receiver:
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> Receiver:
         """Listen on the address (replacing a stale socket file; a live GCS there is an error); returns self."""
-        if self._record is not None:
-            from .recording import LinkRecorder  # noqa: PLC0415  (only a recording station needs that module)
-
-            self.recorder = LinkRecorder(self._record)
         if self._family == socket.AF_UNIX:
             path = self._sockaddr
             if os.path.exists(path):
@@ -936,6 +932,14 @@ class Receiver:
         s.listen(self._backlog)
         s.settimeout(0.25)
         self._listener = s
+        if self._record is not None:  # only now: a station that cannot listen must not overwrite an old recording
+            from .recording import LinkRecorder  # noqa: PLC0415  (only a recording station needs that module)
+
+            try:
+                self.recorder = LinkRecorder(self._record)
+            except OSError:
+                self.close()  # release the address again
+                raise
         t = threading.Thread(target=self._accept_loop, name="drone_gcs-accept", daemon=True)
         t.start()
         self._threads.append(t)

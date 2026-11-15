@@ -537,7 +537,11 @@ class GCSApp:
                 if self.cfg.auto_layer_cycle and now - last_cycle >= self.cfg.auto_layer_cycle:
                     last_cycle = now
                     self.ui["layer"] = LAYERS[(LAYERS.index(self.ui["layer"]) + 1) % len(LAYERS)]
-                if st.ended and self.cfg.exit_on_end and time.time() - (st.end_wall or 0) >= self.cfg.linger:
+                # a lossless replay reads its recording to the end: whether a later mission in it is processed must
+                # not depend on how fast the detector and the dashboard are
+                read_all = not self.lossless or self.replay.finished
+                lingered = time.time() - (st.end_wall or 0) >= self.cfg.linger
+                if st.ended and self.cfg.exit_on_end and read_all and lingered:
                     self.quit_reason = f"mission end ({st.end_reason})"
                 if self.replay is not None and self.replay.finished and not st.ended and self.cfg.exit_on_end:
                     self.quit_reason = "end of recording"  # the recording stops before its mission's END

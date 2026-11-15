@@ -322,6 +322,22 @@ class TestViewsOfAFrame(unittest.TestCase):
         self.assertEqual(len(self.st.tracker.objects), 1)
         self.assertEqual((self.ob.hits, self.ob.views, self.ob.detection_rate), (3, 3, 1.0))
 
+    def test_the_expected_box_follows_the_reference_pixel(self):
+        # det_ref "bottom" (oblique views): the pin is the bottom of its box, 95 % of the way down (v = 129 here)
+        st = new_state(det_ref="bottom")
+        frame = frame_at(0.0, 0.0)
+        st.apply_detections(frame, [box_of(frame)], 0.0)  # the box spans v = 110..130
+        ob = st.tracker.objects[0]
+        np.testing.assert_allclose(ob.pos, [-0.9, 0.0, 0.0], atol=1e-6)
+        self.assertEqual(st.objects_in_view(frame), {ob.id})
+        # from x = -10.9 the box would span v = 1..21: across the 3 px margin at the top, so not a view (a box
+        # centred on the pin, v = 10..30, would wrongly count it)
+        self.assertEqual(st.objects_in_view(frame_at(-10.9, 0.0)), set())
+        # from x = 10.5 it spans v = 215..235, inside the image (one centred on the pin, 224..244, would not be)
+        self.assertEqual(st.objects_in_view(frame_at(10.5, 0.0)), {ob.id})
+        # "auto" uses the centre for a camera looking straight down: the default rule, as above
+        self.assertEqual(new_state().objects_in_view(frame), set())  # (and no pins yet)
+
     def test_every_object_is_judged_on_its_own(self):
         frame = frame_at(0.0, 0.0)
         self.look(frame, [box_of(frame, 5.0, 5.0)])  # a second person, both in view
