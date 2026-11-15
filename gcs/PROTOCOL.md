@@ -134,6 +134,8 @@ is ignored; a different id starts a new mission). END from any drone ends the mi
 | `photo_resolution` | m | orthomosaic cell size (default `resolution / 2`) |
 | `geo_origin` | `{lat, lon, alt}` | optional geodetic anchor of the world origin (carried through only) |
 | `home` | [x, y, z] m, world | landing pad (top surface); drawn as "H" on the map |
+| `seed` | int | site seed of the mission (`sar_mission.py --seed`): it places the people and the objects |
+| `terrain_seed` | int or null | seed of the terrain generator (`sar_mission.py --terrain_seed`); null or absent = the standard terrain. The report copies both seeds to `summary.json` → `mission` |
 | others | | e.g. `pattern`, `spacing`, `speed`, `phases`, kept in the report |
 
 ### Mission scope of data messages
@@ -247,3 +249,9 @@ End of the mission. A headless GCS (or one started with `--exit-on-end`) writes 
 * `flush()` (and `send_end(flush_timeout=...)`) return once everything queued, including the message being
   written, has gone out, or after the timeout.
 * The Receiver keeps the newest 3 CAMERA frames if the GCS loop falls behind (`dropped` in the HUD link cell).
+
+## Recordings
+
+`gcs.py --record` saves every frame that decodes, exactly as received (prefix, header, payload), before the
+Receiver's queue can drop a camera frame; `gcs.py --replay` reads such a file instead of the socket. The file is not
+part of the link: its layout (`drone_gcs/recording.py`) is in the [README](README.md#record-and-replay).

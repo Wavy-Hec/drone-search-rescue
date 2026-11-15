@@ -75,10 +75,13 @@ other, `--crf` trades size for quality (the default 28 gives about 660 MB for th
 * Without windows (record only; both sides exit at the end and the report is written right away):
   `python scripts/gcs.py --headless` and `python scripts/sar_mission.py --checkpoint ...` (headless is the
   default there).
-* `sar_mission.py --max_time 90` flies the first 90 s only; `--seed 3` another site; `--video` records the
+* `sar_mission.py --max_time 90` flies the first 90 s only; `--seed 3` another site; `--terrain_seed 3`
+  another terrain under it (MISSION carries the seed, and `summary.json` records both); `--video` records the
   Isaac Sim view to `sim/runs/<out>/mission.mp4`; `--gt_boxes` adds the simulator's own object boxes to
   every frame, and `gcs.py --detector gt` maps those instead of running YOLO (a check of the geometry with
   perfect detections).
+* `gcs.py --record` also saves the link stream to `runs/<name>/link.dgcrec`, so the mission can be processed
+  again later without the simulator (`--replay`, see [Record and replay](#record-and-replay)).
 * The link carries 2.15 MB per camera frame (640 × 480 RGB + depth, raw), about 22 MB per second of flight;
   that is 20-45 MB/s on the UNIX socket depending on how fast the simulation runs. `--jpeg` sends the images
   as JPEG instead.
@@ -109,10 +112,14 @@ other, `--crf` trades size for quality (the default 28 gives about 660 MB for th
   Frames, units and conventions are in [PROTOCOL.md](PROTOCOL.md).
 * **Mapping** (`drone_gcs/mapping.py`, numpy only):
   * elevation map: per-cell count, mean, min, max, std and coverage mask
+  * surface map: a second height map on the same grid from the camera's depth points, the terrain and what
+    stands on it (in Isaac Sim the mapping rays hit only the terrain mesh, so crates, vehicles, trees and people
+    are not on the elevation map). About 2 ms per camera frame; `--no-surface-map` switches it off
   * orthomosaic: camera pixels back-projected with depth, or with the elevation map when there is no depth
   * detection geolocation: box → pixel → ray → depth or map intersection
   * tracker: same class within a radius means the same object (2 m; person 1.5 m, vehicle 3 m, crates, barrels
-    and cones 0.8 m, pallets 1 m), with confidence, hits, first/last seen
+    and cones 0.8 m, pallets 1 m), with confidence, hits, first/last seen, spread, and the views: the camera
+    frames whose image should show the object, detected or not (see [Pins](#pins-views-and-detection-rate))
   * evaluation against ground truth: precision / recall / pin error, map height error
 * **Detector** (`drone_gcs/detector.py`):
   * Ultralytics YOLO on the CPU; `--weights`, else `$DRONE_GCS_WEIGHTS`, else the fine-tuned
@@ -244,10 +251,12 @@ Or call the `Sender` methods directly with numpy arrays, CPU or GPU torch tensor
 | `demo.mp4` | written by `scripts/compose_video.py`: the simulator's view and the dashboard side by side, in step |
 | `final_map_elevation.png`, `final_map_photo.png`, `coverage.png` | final maps, each with the flown trajectory, planned path, detections and (if known) ground truth |
 | `maps/` | raw arrays: `elevation_{mean,max,min}.npy`, `hit_count.npy`, `photo_rgb.png`, `photo_filled.npy`, `grid.json`. Arrays are (ny, nx), row 0 = south |
-| `detections.csv` / `.json` | objects: class, x, y, z (world / local ENU, m), confidence (mean, max), hits, first/last seen, spread, confirmed. Also the matched ground-truth id and error when GT_OBJECTS was sent |
+| `maps/surface_{max,mean,count}.npy` | the surface map from the camera depth on the elevation grid: highest and mean depth point per cell [m] (NaN where the camera saw nothing) and depth points per cell. Written when the frames had depth and `--no-surface-map` was not given; the rescue planner compares `surface_max.npy` with the elevation map |
+| `detections.csv` / `.json` | objects: class, x, y, z (world / local ENU, m), confidence (mean, max), hits, first/last seen, spread (confidence-weighted RMS horizontal distance of the detections from the pin [m]), views (frames that should show it), detection_rate (hits / views), confirmed. Also the matched ground-truth id and error when GT_OBJECTS was sent |
+| `link.dgcrec` | with `--record`: every frame of the link as received, for `--replay` ([Record and replay](#record-and-replay)) |
 | `trajectory.csv` | t, position, quaternion (wxyz), velocity, waypoint index, carrot, AGL |
 | `coverage_timeline.csv` | scan and photo coverage vs sim time |
-| `summary.json` | `scorecard` (people found x / y in the survey area and, apart, the people outside it, false alarms, pin error, map height error, coverage, flight time, closest approach), area, path length, speeds, detection counts, precision / recall / localization error per class, map error vs the true terrain (all cells and away from steps), the drone's END statistics, link and detector statistics |
+| `summary.json` | `scorecard` (people found x / y in the survey area and, apart, the people outside it, false alarms, pin error, map height error, coverage, flight time, closest approach), area, path length, speeds, detection counts, precision / recall / localization error per class, map error vs the true terrain (all cells and away from steps), the drone's END statistics, link and detector statistics. `mission.seed` and `mission.terrain_seed` (from MISSION; null for the standard terrain), `coverage.surface_cells`, `detections.min_rate`, and in `gcs`: `recording`, `replay` and `noise` (null when not used) |
 | `screenshots/` | `s` key or `--screenshot-at` |
 
 `runs/` is git-ignored. Final maps of the 40 × 40 m fake survey (`runs/demo_headless`, copied to `docs/images/`):
@@ -255,6 +264,121 @@ Or call the `Sender` methods directly with numpy arrays, CPU or GPU torch tensor
 | elevation | orthomosaic | coverage |
 |---|---|---|
 | ![elevation](docs/images/final_map_elevation.png) | ![photo](docs/images/final_map_photo.png) | ![coverage](docs/images/coverage.png) |
+
+## Record, replay and sensor noise
+
+Every experiment on the ground-station side (detector, tracker or map settings, sensor noise) used to need a new
+six-minute flight in Isaac Sim. Record the link once, then process it as often as needed on the CPU.
+
+### Record and replay
+
+```bash
+# once, with the mission flying (sar_mission.py in sim/)
+python scripts/gcs.py --name flight --weights ../downloads/drone_sar_yolo26n.pt --exit-on-end --record
+# then as often as needed, no simulator: the same report again, or with other settings
+python scripts/gcs.py --replay runs/flight/link.dgcrec --weights ../downloads/drone_sar_yolo26n.pt --headless \
+    --no-video --linger 0 --name flight_r1
+python scripts/gcs.py --replay runs/flight/link.dgcrec --weights ../downloads/drone_sar_yolo26n.pt --headless \
+    --min-rate 0.2 --name flight_r2
+```
+
+* `--record` writes `runs/<name>/link.dgcrec`; `--record PATH` picks the file, and a PATH ending in `.gz` is
+  gzip-compressed (level 1). `--record` and `--replay` together are refused.
+* `--replay FILE` reads such a file instead of the live link (no `--addr`, no simulator) and writes a new run
+  folder with the usual report. All detector, tracker, map and dashboard options apply.
+* `--replay-speed X`: 0 (the default) goes as fast as the station can and skips nothing: after every camera frame
+  it waits for the detector and applies its result before it reads on, so the same recording and settings give the
+  same report on a slow or a fast computer. 1 paces the replay like the live link by the recorded receive times, N
+  goes N times faster; above 0 the station behaves as on a live link, so a slow detector skips frames.
+* What is recorded: every frame that decoded, exactly as received, HELLO, MISSION and the ground truth included. It
+  is written before the station's inbound queue can drop camera frames, so the recording is complete even where the
+  live station fell behind; frames the simulator side dropped before sending are not in it.
+* End of a replay: with an END in the recording, the usual mission end after `--linger` seconds (`--linger 0` for
+  batch runs); a lossless replay first reads the recording to its end, so a later mission in the same file is
+  processed however slow the detector and the dashboard are. Without an END (the station was stopped mid-mission),
+  quit reason "end of recording" when headless or with `--exit-on-end`. A file cut off mid-frame replays up to its
+  last complete frame, with one warning; a file that is not a recording is an error (exit code 2). If the disk fills
+  up while recording, the recording stops with an error in the log and the mission and its report go on.
+* `summary.json` → `gcs.recording` (the file name) and `gcs.replay` (`{"file", "speed"}`); during a replay the link
+  counts are the replayed messages.
+
+File format (`drone_gcs/recording.py`): the 8 bytes `b"DGCREC1\n"`, then one record per frame in arrival order: the
+station's receive time (`time.time()`, little-endian float64), the connection id (uint32) and the frame unchanged
+(16-byte prefix, header, payload; [PROTOCOL.md](PROTOCOL.md)). `drone_gcs.recording.read_recording(path)` yields
+the messages with `recv_time` in seconds since the first record.
+
+Checked on the fake drone (24 x 24 m area, 72 s of flight, 2527 frames, blob detector): a lossless replay takes about
+12 s on the CPU and gives the same maps and pins, bit for bit, as the live run; two replays give identical
+detections, maps, trajectory and coverage timeline (`summary.json` differs only in its time stamps and timings). A
+live station whose detector skipped frames can end with other pins than its lossless replay; the maps are the same.
+Raw camera frames make the file large: that 72 s flight is 782 MB, 214 MB as `.gz`. The Isaac Sim mission sends
+8.1 GB over the link (see [Results](#results)), so expect a recording of about that size; `.gz` or
+`sar_mission.py --jpeg` (JPEG colour images; the depth stays raw) make it smaller. No Isaac Sim mission has been
+recorded and replayed yet, and no replay has run the trained detector yet.
+
+### Sensor noise
+
+In the simulator the drone's pose, the depth image and the ray hits are exact, so the 4 cm pin error only shows that
+the geometry is consistent. `--noise SPEC` adds errors to TELEMETRY, SCAN and CAMERA as they arrive; the ground truth
+(GT_OBJECTS, GT_TERRAIN, `gt_boxes`) is never changed, and without `--noise` nothing is. It works on the live link
+too, but is meant for replays: one recorded mission at many noise levels.
+
+```bash
+python scripts/gcs.py --replay runs/flight/link.dgcrec --headless --noise pos=0.5,att=1,depth=0.02,seed=1
+python scripts/noise_sweep.py --replay runs/flight/link.dgcrec --param pos --values 0,0.1,0.25,0.5,1,2 \
+    --fixed att=0.5,depth=0.01 --seeds 0,1,2 -- --weights ../downloads/drone_sar_yolo26n.pt
+```
+
+| Key | Meaning (all 0 = off by default) |
+|---|---|
+| `pos` | slowly drifting position error, std per axis [m] |
+| `pos_white` | position error drawn anew every time step, std per axis [m] |
+| `att` | slowly drifting roll / pitch / yaw error, std [deg] |
+| `att_white` | attitude error per time step, std [deg] |
+| `tau` | correlation time of the drifting errors [s], default 30 |
+| `depth` | depth error per pixel, std as a fraction of the depth |
+| `dropout` | fraction of the depth pixels lost (set to inf), 0 to 1 |
+| `scan` | height error per ray hit, std [m] |
+| `lag` | the camera frame is paired with the pose this many seconds later [s] |
+| `seed` | noise seed, default 0 |
+
+* One navigation error per drone and time step, shared by the TELEMETRY, SCAN and CAMERA messages with the same `t`:
+  the drone has one state estimate. Its drifting part is a first-order Gauss-Markov process (after `dt` it keeps
+  `exp(-dt / tau)` of its value), the white part is new every step.
+* The position error moves the telemetry position, the scan points and the camera position; the attitude error
+  turns the telemetry and camera orientations (the scanner is gimballed, so its points only shift). `lag` moves the
+  camera by velocity x lag and, when the telemetry carries `ang_vel`, turns it by angular velocity x lag.
+* Deterministic for a seed and a recording. Depth and scan noise draw from a stream of their own, so switching them
+  on does not change the navigation error of a seed. An unknown key or a bad value is an error that lists the keys.
+* `summary.json` → `gcs.noise` holds the ten settings; the event log starts with the noise line.
+
+`noise_sweep.py` runs `gcs.py --replay FILE --headless --no-video --noise ... --linger 0` once per value of `--param`
+and per seed in `--seeds`, one at a time (`--fixed` holds the other settings; arguments after `--` go to `gcs.py`,
+e.g. `--weights FILE` or `--detector gt` for a mission flown with `--gt_boxes`). It writes one run folder per value
+and seed (`<param>_<value>_s<seed>`), `sweep.csv` (one row per run) and `sweep.md` (one row per value: mean ± sample
+standard deviation over the seeds of the people found, false alarms, pin error, people pin error and map height
+error away from steps) into `--out` (default `runs/<time>_sweep_<param>`), and prints the table. A failed run is
+reported, left out of the means, and makes the script exit with 1; an `--out` that already holds runs of the sweep
+is refused, and so is a value or a seed listed twice. Values below 0 need the `=` form (`--values=-0.05,0`). The
+sweep has only been run on the fake drone's recordings; the pin error against noise level of the Isaac Sim mission
+is still to be measured.
+
+## Several missions in one table
+
+One mission on one site says little about how often people are found. `scripts/aggregate_runs.py` reads the
+`summary.json` of many runs (other site seeds, other terrain seeds; `../scripts/run_benchmark.sh` flies them) and
+writes `benchmark.csv` (one row per run: seeds, END reason, people found, false alarms, objects, pin and map errors,
+coverage, flight time, closest approach), `benchmark.json` and `benchmark.md` into `--out` (default: a folder
+`benchmark` next to the first run), and prints the tables:
+
+```bash
+python scripts/aggregate_runs.py runs/bench_s* --out runs/bench_benchmark
+```
+
+For the people found it pools the counts over all missions with a 95 % Wilson score interval; it treats every
+person as an independent trial, while the people of one site share a flight, so read it next to the mean and the
+standard deviation over the missions. The false alarms and the pin and map errors come with their spread over the
+missions. No benchmark has been flown yet.
 
 ## Detection and fine-tuning on simulator images
 
@@ -286,6 +410,25 @@ Or call the `Sender` methods directly with numpy arrays, CPU or GPU torch tensor
   image's mean colour, so the detector is not taught that a visible object is background (`--no-mask-dropped`
   keeps the pixels). A capture without `train/` and `val/` folders is split in blocks of consecutive frames
   (no near-duplicate leakage; val stays near 15 %).
+
+### Pins: views and detection rate
+
+A pin is confirmed after `--min-hits` detections (default 2). An object stays in the image for 60 frames or more
+per pass (10 frames per second, a 9.9 x 7.4 m footprint at about 1.2 m/s), so two detections say little on their
+own: every pin also counts its **views**, the camera frames whose image should show it, detected or not. A frame
+counts as a view when the pin projects in front of the camera, a box the size of its last one, placed with its
+reference pixel on that point (the centre, or near the bottom edge in oblique views, as the geolocation uses), lies
+at least `--edge-margin` inside the image (a box at the border is a partial view that is not mapped, so it is not a
+miss either), and the depth at its pixel is not more than 1 m nearer than the pin (a tree crown above it hides it).
+`--min-rate X` also asks for a detection in at least that fraction of the views; the default 0 keeps the hits-only
+rule. `detections.csv` and `.json` list the views and the rate of every pin (`summary.json` the `min_rate`), and the
+dashboard draws a pin below the rate as tentative.
+
+The **spread** of a pin is the confidence-weighted RMS horizontal distance of its detections from the pin. It used
+to be biased low (about 30 % after two sightings, 18 % after five, 7 % after twenty) and lost the second pin's
+detections when two pins merged; both now use the exact formulas (checked against brute force in the tests). No
+value for `--min-rate` has been tried on an Isaac Sim mission yet: replay a recorded mission with a few values to
+choose one.
 
 ### Fine-tuned detector for the search-and-rescue site
 
@@ -390,10 +533,67 @@ station's detector and the precision-recall curves of val and test, and the figu
 adds another model's scores on the same frames, as for the T-pose model in the table (the same recipe on frames
 rendered with `gen_yolo_dataset.py --people_style tpose`).
 
+### Harder tests: corrupted frames and real aerial images
+
+mAP50 0.995 on simulator frames leaves nothing to compare. Two tools score the detector where it should find less.
+Neither has been run on the fine-tuned weights yet, so there are no results here: run them on your trained weights.
+
+**Corrupted copies of a split.** `scripts/degrade_dataset.py` writes corrupted copies of one labelled split, one
+dataset per preset in `DIR/<preset>/` (`images/<split>/*.png`, `labels/<split>/*.txt`, `data.yaml`), and
+`scripts/eval_robustness.py` makes those copies and runs the ground station's own detector on the clean split and on
+every copy:
+
+```bash
+python scripts/eval_robustness.py --data ../datasets/drone_sar_yolo_v2/yolo/data.yaml \
+    --weights models/drone_sar_yolo26n.pt --split val            # all presets; --presets dark,blur,altitude2
+python scripts/degrade_dataset.py --data ../datasets/drone_sar_yolo_v2/yolo/data.yaml --split val \
+    --out ../datasets/drone_sar_degraded --seed 1                # the copies alone, another seed
+python scripts/eval_detector.py --data ../datasets/drone_sar_degraded/dark/data.yaml --splits val \
+    --weights models/drone_sar_yolo26n.pt --coco "$YOLO26N" --out-dir runs/eval_dark   # mAP of one copy
+```
+
+| Preset (`drone_gcs/corruptions.py`) | What it does |
+|---|---|
+| `noise` | Gaussian sensor noise, std 15 grey levels |
+| `blur` | horizontal motion blur over 11 px |
+| `dark` | a quarter of the light (gain 0.25), then noise of std 6 |
+| `jpeg` | JPEG at quality 15 |
+| `haze` | halfway to a light grey, half the contrast |
+| `occlude30`, `occlude60` | 30 / 60 % of every labelled object hidden under a strip of ground copied from elsewhere in the frame; the labels stay |
+| `altitude2`, `altitude3` | 2 x 2 or 3 x 3 consecutive frames shrunk into one frame of the same size: the objects are 2 or 3 times smaller, as from 2 or 3 times the height; the labels move to match, a last incomplete group is left out |
+
+`eval_robustness.py` counts the people and all objects found, missed and the false alarms with the rule of
+`eval_detector.py` (IoU above 0.45, one to one, highest confidence first) at `--conf` (0.25), and writes
+`robustness.json` (with the counts per class), `robustness.csv` and `robustness.md` into `--out` (default
+`runs/<time>_robustness`). Its copies use seed 0; `degrade_dataset.py --seed` makes others. The copies are for
+testing only: their `data.yaml` also has `train` and `val` keys pointing at the corrupted split, because the
+Ultralytics validator needs both. An existing preset folder is never overwritten.
+
+**Real aerial images.** `scripts/eval_external.py` scores the detector on any labelled set of real aerial images in
+YOLO format (a public drone dataset, for example), for the people only:
+
+```bash
+python scripts/eval_external.py --images ~/data/aerial/images/val --labels ~/data/aerial/labels/val \
+    --person-ids 0,1 --weights models/drone_sar_yolo26n.pt --scale 2
+```
+
+* `--person-ids`: the class ids of people in the labels (a dataset may have more than one); other labels are
+  ignored, and an image without a label file has no people.
+* `--scale`: every image is resized first so that people are as large as in the mission camera (1.54 cm per
+  pixel): the dataset's cm per pixel over 1.54, e.g. 3.08 / 1.54 = 2.
+* The resized image is cut into 640 x 480 tiles that overlap by `--overlap` (0.2), the detector runs on every tile,
+  and a person that two tiles both found is kept once: boxes of one class from different tiles merge into their
+  union when the smaller lies at least half inside the larger, so a person cut by one tile's border is not counted
+  again as a false alarm. `--no-tile` gives the whole image to the detector instead.
+* Person boxes are matched to the labels one to one, most confident first, at IoU `--iou` (0.45).
+* `external_eval.json` and `external_eval.md` in `--out` (default `runs/<time>_external_eval`): images, people
+  labelled, found, missed, false alarms, precision, recall, and the recall per size of the label (longer side
+  below 16, 16-32, 32-64, 64-128 and from 128 px, in the resized image). `--limit N` scores the first N images.
+
 ## Tests
 
 ```bash
-./run_tests.sh                      # all tests, ~25 s, CPU only (activates 'vision' itself)
+./run_tests.sh                      # all tests, CPU only, 1-2 min (activates 'vision' itself)
 DRONE_GCS_SKIP_E2E=1 ./run_tests.sh # without the end-to-end run
 ```
 
@@ -405,6 +605,13 @@ DRONE_GCS_SKIP_E2E=1 ./run_tests.sh # without the end-to-end run
 | Mapping | Running statistics vs brute force. Cell centres on the area lattice for any area size and padding. Grid cap for huge missions. Orthomosaic from depth and from the map, self-occlusion depth ignored. Geolocation by depth, map and plane. Tracker merging. Precision and recall. Map height error, all cells and away from steps |
 | Isaac adapter | Only one env row leaves the GPU. Each capture is sent once (`camera.frame`). Async-rendering capture pose. `world=True` origin handling, terrain truth included |
 | App | Arrow keys neither quit nor take screenshots. Data / END of another mission ignored; a new mission clears an old END. Rollover keeps ground truth and drops the old mission's late detections. Every drone gets detection. Boxes sent by the simulator (`--detector gt`) land on the map. Short link label. Video keeps real time through stalls and logs the sim time of every frame. `compose_video` pairs each simulator frame with the newest dashboard frame not ahead of it, and joins the two videos in step |
+| Surface map (`test_surface_map.py`) | Depth points of a box on flat ground raise the surface map and leave the elevation map at the ground. Frames without depth add nothing; `--no-surface-map` and a new mission give an empty map; `--depth-elevation` still feeds the elevation map. The `surface_*.npy` files (only with depth points), and the site and terrain seeds in `summary.json` |
+| Pins (`test_tracker_views.py`) | The spread against brute force, with and without merges. Views: a pin in the image counts, one outside it, behind the camera, at the border or hidden under nearer depth does not; invalid depth hides nothing; a hit always counts as a view, views never fall below the hits, a merge keeps the larger count. `--min-rate` drops the rarely detected pins, in the report and on the dashboard; out-of-range values are refused |
+| Record and replay (`test_recording.py`) | The file format, gzip, writers in several threads, a recording cut off mid-frame, a file that is not a recording, a full disk. The Receiver records every frame that decodes, also those its queue drops. Lossless replay through the app skips no frame and is repeatable; paced replay; a recording without END; the command line (`--record` with `--replay` refused) |
+| Sensor noise (`test_noise.py`) | Parsing and validation of `--noise`. One shared navigation error per time step, the drift with its set spread and correlation time, the white part, depth noise and dropout, scan height noise, the camera lag; ground truth and other messages untouched; the same seed gives the same noise, every drone has its own stream. Through the app: a constant bias moves the pins by that bias, all levels 0 change nothing, a noisy replay is repeatable. `noise_sweep.py`: runs and tables, mean and spread by hand, a failed run left out, bad arguments |
+| Benchmark table (`test_aggregate_runs.py`) | Wilson intervals against known values; the rows and the aggregate of several runs against hand-computed numbers; one run has zero spread; the three files; no usable run is an error |
+| Corrupted copies (`test_corruptions.py`) | Every preset keeps shape and dtype and is deterministic; noise std, blur direction, low-light gain, JPEG loss and haze contrast as set; occlusion hides the asked fraction with ground from outside the boxes; in the altitude mosaics every label lands where its object does. `degrade_dataset.py` writes one dataset per preset that `eval_detector.py` reads; `eval_robustness.py` counts on the clean split and a copy (the 2 tests that need torch and Ultralytics skip without them) |
+| Real images (`test_external_eval.py`) | YOLO label reading, tile origins that cover every pixel, IoU and intersection over the smaller box by hand, a person found by two tiles kept once and whole, what one tile kept apart stays apart, one-to-one matching, size buckets, counts at full and half size, and the command line |
 | Fake world | Rays and depth lie on the height field |
 | Detectors | The blob detector finds every object. The worker keeps the newest frame. Default weights: `$DRONE_GCS_WEIGHTS`, else the fine-tuned model if present, else COCO. YOLO wrapper: 2 CPU inferences on Ultralytics' `bus.jpg`; class filters validated (typos raise) and matched after `--class-map` |
 | Dataset tools | `seg_to_yolo` on synthetic segmentation gives exact labels, keeps cut-off boxes, paints over tiny ones. Split capture folders stay the splits, and the full box of a cut-off object decides whether it stays. Block split gives train data and ~15 % val from 8 to 2000 frames. `train_detector --dry-run`. `eval_detector` counts found, missed and false alarms from the station detector's boxes, and the people it finds in each frame |
@@ -485,6 +692,9 @@ lattice on one side only.
 
 * The elevation map is 2.5D (one height per cell: no overhangs). The mean is the right statistic for terrain.
   Use `e` (max) to see roofs and canopy edges.
+* The surface map holds the camera's depth points binned on the elevation grid (no dashboard layer; it is for the
+  report and the rescue planner). Unlike `--depth-elevation` it leaves the elevation map as the ray hits made it.
+  It has been checked on synthetic frames and the fake drone only; no Isaac Sim mission has written one yet.
 * The orthomosaic is a back-projection with a "most top-down view wins" rule, not a true orthophoto. With
   depth it is geometrically correct. Without depth it uses the elevation map, so cells not yet scanned use
   a ground plane.
@@ -514,8 +724,11 @@ only NumPy and is MIT, as its file headers say. Everything except `drone_gcs/det
 ```
 drone_gcs/        protocol.py link.py geometry.py isaac_bridge.py   <- sender side: stdlib + numpy only
                   mapping.py state.py detector.py dashboard.py text.py report.py app.py dataset.py
+                  recording.py noise.py                             <- link recording and replay, sensor noise
+                  corruptions.py external_eval.py                   <- detector tests: corrupted frames, real images
                   sim/fake_world.py sim/flight.py                   <- stand-in simulator
 scripts/          gcs.py  fake_drone.py  compose_video.py  seg_to_yolo.py  train_detector.py  eval_detector.py
+                  noise_sweep.py  aggregate_runs.py  degrade_dataset.py  eval_robustness.py  eval_external.py
 tests/            unittest suite (./run_tests.sh)
 PROTOCOL.md       message types, fields, units, frames, Isaac Lab conversions
 models/           weights written by train_detector.py (not in git; the demo's detector is a release asset)

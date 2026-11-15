@@ -10,8 +10,11 @@ drone elevation map ─┐
    (or ground truth) │   traversability.py           planner.py                  follower.py               Isaac Lab
 pins (people, props) ┴─► slope / step / roughness ─► cost-weighted 8-conn. A* ─► pure pursuit ─────────► locomotion
                          + object footprints          start/goal snapping         (vx, vy, yaw rate)        policy
-                         + robot-radius inflation     shortcuts + smoothing       clipped to the policy's   (unchanged)
-                         + cross-slope cost           = route                     command ranges
+                         + what the camera saw        shortcuts + smoothing       clipped to the policy's   (unchanged)
+                           standing on the terrain    = route                     command ranges
+                           (surface map)              (tour.py: one route past
+                         + robot-radius inflation      several people)
+                         + cross-slope cost
                          = cost map (inf = no-go)
 ```
 
@@ -42,6 +45,17 @@ python scripts/rescue_finale.py --sar_seed 3 --video --out site3
 
 # the Go2 fallback (Newton, the backend its policy was trained on), with your own Go2 rough-terrain checkpoint
 python scripts/rescue_finale.py --robot go2 --checkpoint <model_*.pt> --video --out finale_go2
+
+# what the drone's camera saw standing on the terrain, pinned or not (a report with maps/surface_max.npy):
+# compare the two plan.png
+python scripts/rescue_finale.py --report ../gcs/runs/<mission> --plan_only --out with_surface
+python scripts/rescue_finale.py --report ../gcs/runs/<mission> --plan_only --no_surface_obstacles --out pins_only
+
+# one route past several people (CPU only): all reachable ones, the 4 nearest, or on the drone's map and pins
+CUDA_VISIBLE_DEVICES= python scripts/rescue_finale.py --tour --out tour
+CUDA_VISIBLE_DEVICES= python scripts/rescue_finale.py --tour 4 --out tour4
+CUDA_VISIBLE_DEVICES= python scripts/rescue_finale.py --report ../gcs/runs/<mission> --tour --out tour_drone
+bash runs/tour/tour_legs.sh --video     # walk the legs one after another; options go to every leg (runs/tour_leg<k>/)
 ```
 
 Outputs in `runs/<out>/`: `plan.png` (elevation + traversability cost with the route), `plan.json` (route, pins,
@@ -50,7 +64,16 @@ settings, and for a drone report which real person the goal pin marks), `travers
 speed, distance to the goal), `summary.json` / `summary.txt` (success, time, planned and walked length, falls,
 stop distance, clearance; with several robots the success rate and every robot's result) and, with `--video`,
 `rescue.mp4`: a title card with the plan, the follow-cam walk with a minimap and a HUD, and an end card with the
-result. `rescue_share.mp4` is the same video about 5x smaller (x264 crf 26) for a README or a chat.
+result. `rescue_share.mp4` is the same video about 5x smaller (x264 crf 26) for a README or a chat. `plan.json` also
+has `surface_obstacle_cells` (the cells the surface map marks, before the inflation; 0 without one) and
+`surface_obstacle_cells_added` (those of them that were open ground for the terrain limits and the pins), and its
+`traversability` the `surface_obstacle_fraction`; `plan.png` shows those cells as no-go on the cost panel.
+
+A tour (`--tour`) writes `tour.png` (the cost map with every leg, the stops numbered in visiting order), `tour.json`
+(the order as pin ids, the unreachable pins, the method, and per leg: pin, start, stop, distance from the stop to the
+person, length, cost, walking time and path; totals; the same surface-obstacle counts) and `tour_legs.sh` (one
+single-goal `rescue_finale.py --start X Y --goal_pin ID --tour_footprints` command per leg, with this run's map and
+robot options), and no `plan.*` or `traversability.npz`. The table of legs is printed too.
 
 **Inputs.** `--report` takes a `drone_gcs` mission report (`maps/elevation_mean.npy` + `maps/grid.json`, pins from
 `detections.json`, confirmed ones only) or a `drone_lab` survey run (`elevation_map.npy`; such a run has no pins, so
@@ -58,14 +81,31 @@ the site's ground truth gives them). Without a report the planner uses the groun
 simulator builds and the people and props of the dressed site (`--sar_seed`, default 0 = the mission's demo site),
 with their exact footprints. The simulator always spawns that site (`--plain_terrain`: the bare terrain with one
 person at the goal). With a report the goal pin is checked against the site's ground truth: the log, `plan.json` and
-the summary say which real person it marks and how far off the pin is.
+the summary say which real person it marks and how far off the pin is. The site is always that of the standard
+terrain: `rescue_finale.py` takes no terrain seed, so it cannot follow a mission flown with `sar_mission.py
+--terrain_seed` (and `../scripts/run_demo.sh` refuses `--finale` with `--terrain-seed`).
+
+**What the detector did not pin.** The drone's elevation map is the bare terrain: in Isaac Sim its mapping rays hit
+only the terrain mesh, so an object the detector missed, or a tree (trees are never labelled), did not exist for the
+planner. A `drone_gcs` report can also hold a surface map from the camera's depth (`maps/surface_max.npy`, the
+highest depth point per cell, NaN where the camera saw nothing, on the grid of `maps/elevation_mean.npy`). Every cell
+where both maps are known and the surface lies more than `--obstacle_height` (default 0.2 m) above the elevation map
+is a no-go area like a pin's footprint. `--no_surface_obstacles` plans on the pins alone; a report without the file
+(older reports, `drone_lab` survey runs), `--elevation` and the ground truth plan as before, and the log says so. The
+log line "surface map: N cells ...; M of them were open ground for the terrain limits and the pins" tells what the
+map added: a wall or a pinned crate is in the surface map too. On a stand-in report of the demo site (not a flown
+mission) it closes 248 of 1967 marked cells. No walk has used it yet, and the 0.2 m default has not been checked on
+a real report: if steep ground such as the crater walls gets marked, raise `--obstacle_height`. The person the robot
+walks to is in the surface map too; the goal still snaps to the nearest free cell next to them.
 
 **The landing pad and the apron.** The robot starts on the drone's landing pad, which sits on the flat 6 m border
 around the surveyed area. A `drone_lab` survey map does not cover that border, and a `drone_gcs` map knows only the
 parts the drone happened to scan. The planner fills in the border: every cell that lies entirely on it and has no
 measurement gets its height (z = 0, the top of the generator's flat border; a test checks it against the terrain
 mesh), the drone's cells stay as measured, and terrain the drone did not see stays unknown (no-go). `--no_apron`
-plans on the drone map alone (a start off the map then moves onto the map edge, with a warning).
+plans on the drone map alone (a start off the map then moves onto the map edge, with a warning). The surface map is
+carried onto the grown grid and compared once the border has its height: the camera sees more of the border than the
+mapping rays reach, and what stands there (a tree next to the route from the landing pad) is an obstacle too.
 
 ## The robots (`robots.py`)
 
@@ -150,13 +190,15 @@ reads that same collision mesh.
   a ledge sees the full ledge height.
 
 A cell is no-go when the slope, the step or the roughness exceeds the robot's limit, when nothing is known there
-(never seen by the drone), or when it lies inside a known object footprint (circles per class, or the exact outline
-from a ground-truth file). No-go cells are inflated by the robot radius, and a soft band beyond that keeps the route
-off edges when there is room. Free cells cost `1 + 6 (slope/max)^2 + 4 (step/max)^2 + 3 (roughness/max)^2 + band`
-per metre, so flat open ground costs 1 and the planner pays for every degree and every centimetre. With a cross-slope
-weight `w` (`w_cross_slope`; the custom quadruped: 6) a move also pays `w (cross_slope/max)^2` per metre, where
-`cross_slope` is the slope across its direction, from the gradient of the same plane fit: steep ground is then
-crossed along the fall line, and turns move to flatter ground.
+(never seen by the drone), when it lies inside a known object footprint (circles per class, or the exact outline
+from a ground-truth file), or when the surface map marks it (`compute_traversability(..., obstacles=mask)`, the mask
+of `inputs.surface_obstacles`; kept as `lethal_obstacles`). No-go cells are inflated by the robot radius, and a soft
+band beyond that keeps the route off edges when there is room. Free cells cost
+`1 + 6 (slope/max)^2 + 4 (step/max)^2 + 3 (roughness/max)^2 + band` per metre, so flat open ground costs 1 and the
+planner pays for every degree and every centimetre. With a cross-slope weight `w` (`w_cross_slope`; the custom
+quadruped: 6) a move also pays `w (cross_slope/max)^2` per metre, where `cross_slope` is the slope across its
+direction, from the gradient of the same plane fit: steep ground is then crossed along the fall line, and turns move
+to flatter ground.
 
 **Planner** (`planner.py`). 8-connected A* where a move costs its length times the mean cost of its two cells (plus
 their cross-slope cost in the move's direction), with an octile heuristic scaled by the cheapest cell (admissible,
@@ -167,6 +209,25 @@ The grid path is then shortcut by line of sight (never through a no-go cell, nev
 it replaces, by the same direction-dependent cost), its corners are rounded where that stays safe, and it is resampled
 every 0.1 m. Without `--goal` / `--goal_pin` the script tries the people 15-25 m from the start first, lying ones
 first, nearest to 20 m first, and takes the first one it can reach.
+
+**Tour** (`tour.py`, `--tour [N]`). One route from the start past the N reachable people nearest to it in a straight
+line (all of them without N, or with 0); a person is reachable when the robot can get within `--max_goal_snap`
+(2.5 m) of their centre, and the others are logged and listed as unreachable. Every person's stop is the one a
+single plan would choose, with the footprint a single plan gives its goal (the exact outline on the ground truth; for
+a drone pin a 1.2 m circle lying, 0.7 m standing). The cost between two stops is their A* cost on the map, cross-slope
+cost included, and the visiting order is the cheapest open route (start, every stop once, no return): exact
+(Held-Karp) up to 12 people, nearest neighbour improved by 2-opt above that, which is not always the best order;
+`tour.json` and the figure say which. Each leg is then planned with `plan_path`. The walking time is length / cruise
+speed (0.7 m/s for the custom quadruped), an estimate: the robots walked 0.51-0.68 m/s above. On the ground truth of
+the demo site (CPU, seconds) the tour visits 8 of the 11 people in 151.0 m, about 216 s: person_10, 02, 08, 09,
+03, 04, 05, 01; person_00, 06 and 07 cannot be reached within 2.5 m. Planning only: nothing new runs in the
+simulator, and the tour has not been walked. Each command of `tour_legs.sh` plans its leg again as a single-goal plan
+from the tour's stop. A single plan gives only its goal the pose-sized footprint and every other person the smaller
+0.6 m one; `--tour_footprints`, which the commands pass, gives every person the tour's footprint instead, so each
+leg plans the same path as in `tour.png` (a test checks this). Each leg is its own simulator run, with the robot
+spawned at the leg's start. In code:
+`plan_tour(tmap, start_xy, goals_xy, max_goal_snap_m=2.5)` returns a `TourResult` (order, legs, unreachable, method,
+length, cost), and `plots.plot_tour` draws it.
 
 **Follower** (`follower.py`). Pure pursuit: the closest point on the route is searched only around the previous
 progress (so a route that folds back is never skipped), the target is 0.8 m further along, and the robot steers on
@@ -212,3 +273,13 @@ cells unchanged, equal to the terrain mesh), both rescue tasks' parity with the 
 trained on (observations, actions, robot, sensors, command ranges, physics settings), the textured site terrain moved
 to a render-only mesh (in-memory USD stage), the robot profiles, and the CLI on the ground truth, a survey map and a
 drone_gcs mission report (start on the landing pad, drone pins only, the goal pin checked against the truth).
+
+`tests/test_teaming_obstacles.py`: the surface-obstacle mask, its inflation against brute force, a route around an
+unpinned box, the mask carried onto the grown grid, `load_surface` on a report folder, and plan mode on a synthetic
+ground-station report (with the surface map, `--no_surface_obstacles`, `--obstacle_height 0.5`, a report without
+the map; an object on the border the mapping rays did not reach is seen once the apron has its height).
+`tests/test_teaming_tour.py`: the order functions against brute force, tours on synthetic maps against
+Dijkstra and all permutations, a wall, unreachable people, connected legs and totals, 13 people (2-opt), the
+cross-slope cost, `plot_tour`, and the CLI on the ground truth and a synthetic report, where every command of
+`tour_legs.sh`, run in plan mode, plans the path of its tour leg. Both run with numpy, scipy
+and matplotlib; their CLI tests need Isaac Lab and skip without it. The plan mode was tested on synthetic reports only.

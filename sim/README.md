@@ -52,7 +52,9 @@ python scripts/compose_video.py --gcs runs/sar_live --sim ../sim/runs/sar_live
 python scripts/rescue_finale.py --report ../gcs/runs/sar_live --video --out finale_live
 ```
 
-`../scripts/run_demo.sh` runs the ground station and the mission in one go (`--finale` adds the walk). The
+`../scripts/run_demo.sh` runs the ground station and the mission in one go (`--finale` adds the walk;
+`--terrain-seed N`, `--record`, `--pilot trajectory --policy FILE` pass those choices on), and
+`../scripts/run_benchmark.sh` flies it on several site and terrain seeds, one headless run each. The
 [CPU tools](#cpu-tools-no-gpu-needed) (terrain preview, synthetic survey, tests) run without a GPU.
 
 ## The live mission
@@ -102,15 +104,29 @@ GT_OBJECTS (the site's ground truth) and GT_TERRAIN (the true terrain height). A
 approach to obstacles. The sender copies the data and returns at once (0.9 ms per step); a background thread
 writes it, and a slow or missing ground station only costs dropped frames, never a stalled simulation.
 
-Options: `--seed` (site), `--spacing`, `--altitude`, `--speed`, `--max_time` (sim seconds), `--video` and
+Options: `--seed` (site: the people and objects), `--terrain_seed N` (another terrain: the generator gets that seed
+and the site is dressed on the terrain it builds; default the standard terrain, generator seed 17), `--pilot
+hover|trajectory` (the policy type of `--checkpoint`, see [Fly the mission with a trajectory-tracking
+policy](#fly-the-mission-with-a-trajectory-tracking-policy)), `--spacing`, `--altitude`, `--speed`, `--climb_speed`
+(carrot speed of the take-off climb, default 1.0 m/s), `--descent_speed` (of the descent to the hover point above the
+pad, default 0.8 m/s; the touchdown stays at 0.3 m/s), `--max_time` (sim seconds), `--video` and
 `--view chase|overview` (records `runs/<out>/mission.mp4`, real time by default, and `mission_frames.csv`, the sim
 time of every frame), `--no_scan_rays`, `--window_pos X Y`, `--kit_ui`, `--markers` (the carrot and path
 markers; off by default because the drone camera sees the ones below it at take-off and landing, and the detector
 may pin them), `--gt_boxes` (adds the objects' boxes from the instance segmentation to every frame, for the ground
 station's `--detector gt`), `--jpeg`, `--camera_every N`, `--gcs <address>`, `--gcs_root <dir>` (the ground
 station's folder when it is not next to this one), `--no_gcs`. Without `--viz kit` it runs headless. Outputs in
-`runs/<out>/` (default `sar_mission_seed<seed>`): `mission.json` (plan, outcome, closest approach, loop and link
-timing, GPU memory), `trajectory.csv`, `ground_truth.json`.
+`runs/<out>/` (default `sar_mission_seed<seed>`, `sar_mission_seed<seed>_terrain<N>` with `--terrain_seed N`):
+`mission.json` (plan, outcome, closest approach, loop and link
+timing, GPU memory; `task`, `pilot` and `terrain_seed`, null for the standard terrain), `trajectory.csv`,
+`ground_truth.json`. MISSION carries `terrain_seed` next to `seed`, and the mission's name ends in `_terrain<N>`
+too.
+
+**Another terrain** (`--terrain_seed`): without it every site stands on the same terrain, and the site seed only
+moves the objects. A CPU test generates the sites of terrain seeds 1 and 3 and plans the flight over them; no
+mission has been flown on another terrain in Isaac Sim yet. The rescue finale cannot follow such a mission: it walks
+on the standard terrain only (`rescue_finale.py` takes no terrain seed, and `../scripts/run_demo.sh` refuses
+`--finale` with `--terrain-seed`).
 
 **Result** (seed 0, the commands of the quick start: both windows open, the chase view recorded, the ground station
 with the fine-tuned detector). The drone lands on its pad after 6 min 16 s and 428 m, 7 mm from its centre; over
@@ -188,16 +204,34 @@ move the textures to a render-only copy of the terrain mesh. The Unitree Go2 wit
 is a fallback (`--robot go2 --checkpoint <its model_*.pt>`, on Newton: that policy flips within about 2 s on PhysX);
 it reached the crater person 4/4.
 
+**What the detector did not pin.** The drone's elevation map is the bare terrain (in Isaac Sim the mapping rays hit
+only the terrain mesh), so a tree (trees are never labelled) or an object the detector missed did not exist for the
+planner. A ground-station report now also holds a surface map from the camera's depth; where it lies more than
+`--obstacle_height` (0.2 m) above the elevation map the cell is a no-go area, like a pin's footprint
+(`--no_surface_obstacles`: the pins alone; reports without the map plan as before). On a stand-in report of the demo
+site (not a flown mission) that closes 248 cells the terrain limits and the pins left open. The results above were
+planned without it, and no walk has used it yet.
+
+**Several people.** `--tour [N]` plans one route from the start past the N nearest reachable people (all of them
+without N), in the cheapest order, and writes `tour_legs.sh` to walk the legs one after another. Planning only: on
+the ground truth of the demo site it visits 8 of the 11 people in 151 m (3 cannot be reached within 2.5 m), about
+216 s at the 0.7 m/s cruise command; it has not been walked. Details: [the teaming
+README](src/drone_lab/teaming/README.md#how-it-works).
+
+The finale walks on the standard terrain: it cannot follow a mission flown with `sar_mission.py --terrain_seed`.
+
 ```bash
 CUDA_VISIBLE_DEVICES= python scripts/rescue_finale.py --plan_only --out rescue_plan    # CPU, seconds: plan only
 python scripts/rescue_finale.py --report ../gcs/runs/<mission> --goal_pin <id> --video --out finale_mission
 python scripts/rescue_finale.py --video --out finale_gt                  # without a report: the ground truth
 python scripts/rescue_finale.py --num_envs 32 --out finale_x32           # 32 robots at once: success rate, falls
+CUDA_VISIBLE_DEVICES= python scripts/rescue_finale.py --tour --out tour  # CPU: one route past every reachable person
+bash runs/tour/tour_legs.sh --video                                      # walk the tour's legs one after another
 ```
 
 Each run writes `runs/<out>/plan.png`, `walk.png`, `summary.txt` and, with `--video`, `rescue.mp4` (a title card
 with the plan, the follow-cam walk with a HUD and a minimap, an end card with the result) plus `rescue_share.mp4`
-(about 5x smaller, for sharing).
+(about 5x smaller, for sharing). A tour writes `tour.png`, `tour.json` and `tour_legs.sh` instead.
 
 ## The search-and-rescue site (`DroneLab-SAR-ARL-Robot-1-v0`)
 
@@ -271,7 +305,8 @@ the yellow dots are its mapping rays hitting the ground. Frame from `survey_map.
    trained network flies the whole survey unchanged.
 3. **The survey area** is built with Isaac Lab's terrain generator: 16 tiles of 10 m (hills, rough ground,
    pyramids, a pit, waves, stepped blocks, stairs), heights from about -1.4 m to 3.5 m, inside a flat 6 m border.
-   It is seeded and fully deterministic, so the CPU preview shows exactly what the simulator builds.
+   It is seeded and fully deterministic, so the CPU preview shows exactly what the simulator builds
+   (`sar_mission.py --terrain_seed N` flies the mission over another seed of the same generator).
 4. **Mapping:** a 5 m x 5 m grid of 441 vertical rays (0.25 m apart) hangs under the drone (gimballed: it stays
    level when the drone tilts). Every step the ray hits are binned into 0.25 m cells; each cell's height is the
    median of its hits. The survey lines run 2, 6, 10 ... m from the area edge, so the rows of rays fall on a
@@ -301,7 +336,8 @@ Flown over the bare terrain with the built-in tracking policy after 1300 trainin
   training and only saw offsets up to 1 m, so it tops out near 1.3 m/s however fast the carrot goes (commanded
   1.5 / 2 / 3 m/s gives 1.16 / 1.23 / 1.31 m/s). `--speed 1.5` is the sweet spot: 14 % faster, smoother, same map.
   On +x legs (flying nose first) it flies about 0.2 m high with a small speed ripple every 2 s; on -x legs it stays
-  within 1 cm. Training `DroneLab-TrackTrajectory-ARL-Robot-1-v0` on moving targets is the real fix.
+  within 1 cm. Training `DroneLab-TrackTrajectory-ARL-Robot-1-v0` on moving targets is the real fix; the mission
+  can fly such a policy ([`--pilot trajectory`](#fly-the-mission-with-a-trajectory-tracking-policy), not flown yet).
 * **Simulation speed** (sim time / wall time, RTX 5080): about 5-8x real time without video (2.6 GB of GPU
   memory), 2.3x with the headless video camera (4.9 GB), 1.6-2x with the live window (`--viz kit`, 5.1 GB). Video
   and window runs also need 13-16 GB of RAM while Kit starts. A large training job on the same GPU slows a survey
@@ -317,7 +353,7 @@ Flown over the bare terrain with the built-in tracking policy after 1300 trainin
 src/drone_lab/
   terrain.py        survey area (TerrainGeneratorCfg) + deterministic sub-terrain wrappers, CPU generation
   paths.py          lawnmower / spiral / figure-8 / custom waypoints, polyline geometry   (numpy only)
-  carrot.py         moving target: speed, lead limit, offset clamp                          (torch only)
+  carrot.py         moving target: speed, lead limit, offset clamp, reference velocity + look-ahead (torch only)
   mapping.py        elevation map, mesh ground truth, coverage and error metrics            (numpy only)
   survey_io.py      run directory format, trajectory log, summary                           (numpy only)
   plotting.py       all figures                                                              (matplotlib)
@@ -327,11 +363,14 @@ src/drone_lab/
   register.py       task-registration callback for the isaaclab CLI without pip install
   sar/              search-and-rescue site: assets, seeded scenario + ground truth, camera, spawner, labels,
                     mission plan, chase view (follow camera, scan rays, ground skirt)
-  teaming/          rescue finale: traversability, A* planner, pure-pursuit follower, inputs, robots, figures
+  teaming/          rescue finale: traversability, A* planner, tour, pure-pursuit follower, inputs (surface-map
+                    obstacles), robots, figures
   tasks/
     physics.py      physics preset (Isaac Sim PhysX)
     survey/         DroneLab-Survey-ARL-Robot-1-v0          (flies the built-in policy, not for training)
+                    DroneLab-Survey-Trajectory-ARL-Robot-1-v0 (flown by a trajectory-tracking policy)
     sar/            DroneLab-SAR-ARL-Robot-1-v0             (the survey over the dressed site, with the camera)
+                    DroneLab-SAR-Trajectory-ARL-Robot-1-v0  (the same, flown by a trajectory-tracking policy)
     rescue/         DroneLab-Rescue-CustomQuad-v0           (the custom quadruped walks a planned route; PhysX)
                     DroneLab-Rescue-Go2-v0                  (the Go2 fallback; Newton physics)
     track_trajectory/ DroneLab-TrackTrajectory-ARL-Robot-1-v0 (new RL task: follow moving references)
@@ -342,10 +381,12 @@ scripts/
   synthetic_survey.py CPU: full pipeline with a kinematic stand-in for the policy
   eval_trajectory.py  GPU: evaluate a trajectory-tracking policy (reference vs flown, RMSE)
   sar_preview.py    GPU: render the SAR site (overview, photo map, drone frames) and check its scale and labels
-  sar_mission.py    GPU: the search-and-rescue mission, streamed live to the ground station
+  sar_mission.py    GPU: the search-and-rescue mission, streamed live to the ground station (--pilot, --terrain_seed)
   gen_yolo_dataset.py GPU: render the detector dataset (RGB + instance segmentation over many seeded sites)
-  rescue_finale.py  rescue finale: plan on the drone's map (CPU), walk it with the quadruped (GPU), follow-cam video
-tests/              CPU tests (run_cpu_tests.py or pytest)
+  rescue_finale.py  rescue finale: plan on the drone's map (CPU), walk it with the quadruped (GPU), follow-cam video;
+                    --tour: one route past several people (CPU)
+tests/              CPU tests (run_cpu_tests.py or pytest; test_trajectory_pilot.py, test_teaming_obstacles.py and
+                    test_teaming_tour.py cover the trajectory pilot, the surface-map obstacles and the tour)
 docs/images/        Isaac Sim figures (isaac_*, sar_*, rescue_*) and CPU-pipeline previews (synthetic_*, area_preview)
 ```
 
@@ -436,6 +477,48 @@ python scripts/eval_trajectory.py --checkpoint ${TRUN}model_1999.pt --shape figu
 over time with the RMSE), `trajectory_eval.csv` and `eval_summary.json`; with `--video` also `trajectory.mp4`
 (chase camera with the reference and look-ahead markers; `--video_fps`, default 30 = 3x time-lapse).
 
+#### Fly the mission with a trajectory-tracking policy
+
+The hover pilot lags 0.75 s behind the carrot and tops out near 1.3 m/s (see Survey results). A policy trained on
+the task above observes a moving reference, so the survey carrot now also gives what it needs: its velocity (its
+displacement over the last 0.1 s step) and the two look-ahead points, which assume it keeps its speed along the path
+and stop at the path's end. Two tasks pair the training task's 26 observations (same terms, order and clips,
+observation noise off) with the survey carrot:
+
+| Task | What it is |
+|---|---|
+| `DroneLab-Survey-Trajectory-ARL-Robot-1-v0` | the bare survey, flown by a trajectory policy |
+| `DroneLab-SAR-Trajectory-ARL-Robot-1-v0` | the dressed site with the camera: the mission of `sar_mission.py --pilot trajectory` |
+
+For this pilot the carrot speeds up by at most 1 m/s² (`max_accel`): every step it moves at most 0.1 m/s faster
+than in the step before, also when it starts again after waiting for the drone, and it slows down to a lower phase
+speed at the same rate. Only the lead limit slows it faster, when the drone falls behind: it may lead the drone by
+up to 1.5 m (`max_lead`) and slows down from 1.0 m (`slow_lead`). The hover pilot keeps 1.0 m and 0.7 m with no
+ramp, and its task is unchanged. Hydra tokens change them on either task, e.g.
+`env.commands.survey_target.max_accel=2.0`.
+
+```bash
+# export the trained policy (as for the hover policy: the export comes first, a timeout is enough)
+timeout --signal=INT 600 isaaclab play --rl_library rsl_rl --task DroneLab-TrackTrajectory-ARL-Robot-1-v0 \
+    --num_envs 16 --checkpoint ${TRUN}model_1999.pt
+# the mission with that pilot; the ground station as in the quick start
+python scripts/sar_mission.py --checkpoint ${TRUN}exported/policy.pt --pilot trajectory --out sar_trajectory
+# or both sides in one go, from the repository root
+scripts/run_demo.sh --pilot trajectory --policy sim/${TRUN}exported/policy.pt
+# the bare survey task in the isaaclab CLI (pass the checkpoint path: --checkpoint latest does not find it)
+isaaclab play --task DroneLab-Survey-Trajectory-ARL-Robot-1-v0 --checkpoint ${TRUN}model_1999.pt --viz kit \
+    physics=isaacsim_physx
+```
+
+`--checkpoint` must be an exported policy of the matching kind: a hover policy does not load into the trajectory
+task, nor the reverse. Both tasks use the trajectory task's runner config (experiment `drone_lab_track_trajectory`).
+**Not flown yet:** the CPU tests cover the reference math, the configs and the carrot's command term in a stand-in
+environment, but no trajectory policy has flown the mission, so there are no tracking or speed numbers for it. The
+policy trained on height changes of at most 0.5 m and reference speeds of 0.3-1.5 m/s: the 1.0 m/s climb, the
+0.8 m/s descent and the default `--speed 1.5` are at or beyond that edge, so lower `--climb_speed`,
+`--descent_speed` or `--speed` if it struggles. The camera-overlap numbers the script prints assume the flown speed
+is `--speed` for this pilot (min(`--speed`, 1.25 m/s) for the hover pilot).
+
 ## Outputs of a survey (`runs/<name>/`)
 
 | File | Content |
@@ -458,6 +541,9 @@ CUDA_VISIBLE_DEVICES= python scripts/synthetic_survey.py --out synthetic_lawnmow
 CUDA_VISIBLE_DEVICES= python tests/run_cpu_tests.py                                 # every CPU test, ~1 min
 python -m pytest tests     # any Python with numpy, scipy, matplotlib and pytest: the tests that need torch skip
 ```
+
+CI installs the CPU build of PyTorch (2.11.0, the version Isaac Lab 3.0 pins), so the tests of the carrot and of
+the reference trajectories, the pilot's path-following logic, run there too; the tests that need Isaac Lab skip.
 
 ## Adapting the area and the path
 

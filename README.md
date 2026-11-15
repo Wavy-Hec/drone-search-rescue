@@ -68,7 +68,8 @@ flowchart LR
 - **Detector.** Trained on simulator images whose labels come from instance segmentation, so no box was drawn by
   hand. Detections are projected into the world with the depth image and merged over repeated sightings.
 - **Finale.** The planner turns the drone's map into a traversability cost (slope, step height, roughness,
-  object footprints, the robot's size), plans with A*, and steers the robot's velocity commands by pure pursuit.
+  object footprints, what the camera saw standing on the ground, the robot's size), plans with A*, and steers the
+  robot's velocity commands by pure pursuit.
 
 ## Results
 
@@ -142,15 +143,68 @@ python -m pip install -r .github/requirements-ci.txt
 scripts/check.sh
 ```
 
+CI also installs the CPU build of PyTorch, so the tests of the carrot and of the reference trajectories run there.
+
+## Experiments
+
+Tools to go beyond the one demo mission, in the order you would run them. None of them has been run in Isaac Sim
+or with the trained detector yet, so there are no results for them here. From the repository root; `gcs/` tools in
+the conda env `vision`, `sim/` tools in `env_isaaclab`:
+
+```bash
+# 1. Benchmark: the mission on many sites and terrains, one headless run each, then one table with the rate of
+#    people found (Wilson interval), false alarms, pin and map errors -> gcs/runs/bench_benchmark/benchmark.md
+scripts/run_benchmark.sh --seeds 0-9 --terrain-seeds 17,3,5
+
+# 2. Record one mission's link stream, then replay it at several levels of sensor noise, without the simulator
+scripts/run_demo.sh --headless --record --name flight
+python gcs/scripts/noise_sweep.py --replay gcs/runs/flight/link.dgcrec --param pos --values 0,0.25,0.5,1 \
+    --seeds 0,1,2 -- --weights downloads/drone_sar_yolo26n.pt
+
+# 3. The detector on corrupted copies of the val split (noise, blur, low light, haze, occlusion, a higher flight),
+#    and on labelled real aerial images in YOLO format (people only)
+python gcs/scripts/eval_robustness.py --data datasets/drone_sar_yolo_v2/yolo/data.yaml \
+    --weights downloads/drone_sar_yolo26n.pt
+python gcs/scripts/eval_external.py --images <dataset>/images/val --labels <dataset>/labels/val --person-ids 0 \
+    --weights downloads/drone_sar_yolo26n.pt --scale 2
+
+# 4. The mission flown by a trajectory-tracking policy: train and export it as in sim/README.md, then
+scripts/run_demo.sh --pilot trajectory --policy sim/logs/rsl_rl/drone_lab_track_trajectory/<run>/exported/policy.pt
+
+# 5. The rescue tour: one route past every person the robot can reach on the drone's map, then walk its legs
+(cd sim && CUDA_VISIBLE_DEVICES= python scripts/rescue_finale.py --report ../gcs/runs/flight --tour --out tour)
+(cd sim && bash runs/tour/tour_legs.sh --video)
+```
+
+- **Benchmark** ([`scripts/run_benchmark.sh`](scripts/run_benchmark.sh), `gcs/scripts/aggregate_runs.py`): every
+  site seed on every terrain seed; terrain seed 17 is the standard terrain. A mission that fails is reported and the
+  benchmark goes on; `--record` keeps each link stream, `--dry-run` prints the commands.
+- **Record and replay** (`gcs.py --record`, `--replay FILE`): a lossless replay of a recorded fake-drone flight of
+  2527 frames takes about 12 s on the CPU and gives the same maps and pins as the live run. `--noise SPEC` adds
+  navigation, depth and ray-hit errors and a camera lag to the messages as they arrive. Details:
+  [gcs/README.md](gcs/README.md#record-replay-and-sensor-noise).
+- **Detector** (`eval_robustness.py`, `degrade_dataset.py`, `eval_external.py`):
+  [gcs/README.md](gcs/README.md#harder-tests-corrupted-frames-and-real-aerial-images). `--scale` is the dataset's
+  cm per pixel over the mission camera's 1.54.
+- **Trajectory pilot** (`sar_mission.py --pilot trajectory`) and **another terrain** (`--terrain_seed N`):
+  [sim/README.md](sim/README.md#fly-the-mission-with-a-trajectory-tracking-policy). The rescue finale walks on the
+  standard terrain only, so `run_demo.sh` refuses `--finale` with `--terrain-seed`.
+- **Rescue planner** ([teaming README](sim/src/drone_lab/teaming/README.md)): it also keeps off what the camera's
+  surface map shows standing on the terrain, pinned or not (`--obstacle_height`, `--no_surface_obstacles`);
+  `--tour [N]` plans past the N nearest reachable people and writes `tour.png`, `tour.json` and `tour_legs.sh`.
+  Neither has been walked yet.
+
 ## Repository layout
 
 ```
 sim/          drone_lab: the Isaac Lab 3.0 project. Survey and search-and-rescue tasks, the disaster site,
               the live mission, the rescue finale (traversability, A*, pure pursuit)
 gcs/          drone_gcs: the ground-control station. Link and wire protocol, live mapping, detection,
-              dashboard, mission report, stand-in drone, dataset and training tools
+              dashboard, mission report, stand-in drone, dataset and training tools; link recording and replay,
+              sensor noise, benchmark table, detector robustness and real-image scoring
 quadruped/    quadruped_lab: the custom quadruped's walking tasks, ported to Isaac Lab 3.0
-scripts/      check.sh (lint and CPU tests), download_assets.sh, run_demo.sh
+scripts/      check.sh (lint and CPU tests), download_assets.sh, run_demo.sh (one mission, optionally the finale),
+              run_benchmark.sh (the mission over many site and terrain seeds, then the benchmark table)
 docs/media/   the GIFs of this README
 ```
 
