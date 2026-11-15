@@ -408,11 +408,11 @@ class TestCommandLine(unittest.TestCase):
 
     def test_defaults(self):
         cfg = self.config()
-        self.assertEqual(cfg.min_rate, 0.0)
+        self.assertEqual((cfg.min_rate, cfg.surface_map), (0.0, True))
 
-    def test_min_rate(self):
-        cfg = self.config("--min-rate", "0.4")
-        self.assertEqual(cfg.min_rate, 0.4)
+    def test_min_rate_and_no_surface_map(self):
+        cfg = self.config("--min-rate", "0.4", "--no-surface-map")
+        self.assertEqual((cfg.min_rate, cfg.surface_map), (0.4, False))
 
     def test_min_rate_outside_0_to_1_is_refused(self):
         for bad in ("1.5", "-0.1"):

@@ -32,6 +32,7 @@ class GCSConfig:
     photo_mode: str = "nadir"  # orthomosaic: nadir | latest | blend
     photo_subdiv: int = 2  # photo cells per elevation cell (per axis)
     depth_elevation: bool = False  # also feed back-projected depth pixels into the elevation map
+    surface_map: bool = True  # build a second height map from the camera depth: the terrain and what stands on it
     merge_radius: float = 2.0  # tracker: same class within this horizontal distance = same object [m]
     # per-class radius: piles of crates or barrels stand closer together than that, a forklift is larger
     class_radius: dict = field(
@@ -162,6 +163,7 @@ class GCSState:
         self.area_mask: np.ndarray | None = None
         self.area_mask_photo: np.ndarray | None = None
         self.elevation: ElevationMap | None = None
+        self.surface: ElevationMap | None = None  # heights from the camera depth (cfg.surface_map)
         self.mosaic: Orthomosaic | None = None
         self.geolocator: Geolocator | None = None
         self.tracker = ObjectTracker(self.cfg.merge_radius, self.cfg.min_hits, self.cfg.class_radius, self.cfg.min_rate)
@@ -254,6 +256,7 @@ class GCSState:
         self.area_mask = self.grid.area_mask(self.area)
         self.area_mask_photo = self.photo_grid.area_mask(self.area)
         self.elevation = ElevationMap(self.grid)
+        self.surface = ElevationMap(self.grid) if self.cfg.surface_map else None
         self.mosaic = Orthomosaic(self.photo_grid, self.cfg.photo_mode)
         self.geolocator = Geolocator(
             self.elevation, self.ground_z, self.cfg.det_ref, min_range=self.cfg.depth_min_range
@@ -433,6 +436,8 @@ class GCSState:
         n, P = self.mosaic.add_camera_frame(cam, rgb, depth, self.elevation, ground, min_range=self.cfg.depth_min_range)
         if self.cfg.depth_elevation and depth is not None and len(P):
             self.elevation.add_points(P, None, msg.t)
+        if self.surface is not None and depth is not None and len(P):
+            self.surface.add_points(P, None, msg.t)
         d = self.drone(msg.drone_id)
         frame = CameraFrame(
             msg.drone_id,

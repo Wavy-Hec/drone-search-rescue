@@ -72,6 +72,12 @@ def main(argv=None) -> int:
     )
     p.add_argument("--depth-elevation", action="store_true", help="also add camera depth points to the elevation map")
     p.add_argument(
+        "--no-surface-map",
+        action="store_true",
+        help="do not build the surface map (heights from the camera depth: the terrain and what stands on it; "
+        "maps/surface_*.npy in the report)",
+    )
+    p.add_argument(
         "--merge-radius",
         type=float,
         default=2.0,
@@ -192,6 +198,7 @@ def main(argv=None) -> int:
         gcs=GCSConfig(
             photo_mode=a.photo_mode,
             depth_elevation=a.depth_elevation,
+            surface_map=not a.no_surface_map,
             merge_radius=a.merge_radius,
             min_hits=a.min_hits,
             min_rate=a.min_rate,

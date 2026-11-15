@@ -1,4 +1,5 @@
-"""Mission report: final maps (PNG + raw arrays), detections, trajectory, coverage timeline and summary."""
+"""Mission report: final maps (PNG + raw arrays, with the surface map from the camera depth when there is one),
+detections, trajectory, coverage timeline and summary."""
 
 from __future__ import annotations
 
@@ -45,6 +46,7 @@ def write_report(
     files: list[str] = []
     name = (state.mission or {}).get("name", "survey")
     ce, cp = state.coverage()
+    surface_cells = int(state.surface.known.sum()) if state.surface is not None else 0
 
     # ---- maps
     if state.grid is not None:
@@ -68,6 +70,15 @@ def write_report(
         np.save(md / "elevation_max.npy", el.max())
         np.save(md / "elevation_min.npy", el.min())
         np.save(md / "hit_count.npy", el.count)
+        note = "npy arrays are (ny, nx), row 0 = southern edge (y_min); photo_rgb.png is north-up"
+        if surface_cells:
+            np.save(md / "surface_max.npy", state.surface.max())
+            np.save(md / "surface_mean.npy", state.surface.mean())
+            np.save(md / "surface_count.npy", state.surface.count)
+            note += (
+                "; surface_*.npy: heights from the camera depth (the terrain and what stands on it) on the "
+                "elevation grid, NaN where the camera saw nothing, surface_count = depth points per cell"
+            )
         cv2.imwrite(str(md / "photo_rgb.png"), np.ascontiguousarray(state.mosaic.rgb[::-1, :, ::-1]))
         np.save(md / "photo_filled.npy", state.mosaic.filled)
         (md / "grid.json").write_text(
@@ -76,7 +87,7 @@ def write_report(
                     "elevation_grid": state.grid.to_dict(),
                     "photo_grid": state.photo_grid.to_dict(),
                     "area": list(state.area),
-                    "note": "npy arrays are (ny, nx), row 0 = southern edge (y_min); photo_rgb.png is north-up",
+                    "note": note,
                 },
                 indent=2,
             )
@@ -162,6 +173,8 @@ def write_report(
         "mission": {
             "name": name,
             "mission_id": (state.mission or {}).get("mission_id"),
+            "seed": (state.mission or {}).get("seed"),
+            "terrain_seed": (state.mission or {}).get("terrain_seed"),
             "area": {"x_min": a[0], "x_max": a[1], "y_min": a[2], "y_max": a[3]} if a else None,
             "area_m2": (a[1] - a[0]) * (a[3] - a[2]) if a else None,
             "resolution_m": state.grid.resolution if state.grid else None,
@@ -188,6 +201,7 @@ def write_report(
             "photo_pct": round(100 * cp, 2),
             "ray_hits": state.elevation.n_points if state.elevation else 0,
             "camera_frames_mapped": state.mosaic.n_frames if state.mosaic else 0,
+            "surface_cells": surface_cells,
         },
         "detections": {
             "confirmed": len(confirmed),
