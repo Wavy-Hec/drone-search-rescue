@@ -346,11 +346,11 @@ def segment_cost(tmap: TraversabilityMap, a: np.ndarray, b: np.ndarray) -> float
 def shortcut_path(
     tmap: TraversabilityMap, xy: np.ndarray, *, tolerance: float = 0.02, max_shortcut_m: float = 8.0
 ) -> np.ndarray:
-    """Greedy line-of-sight shortcutting ("string pulling") that never raises the integrated cost.
+    """Greedy line-of-sight shortcutting ("string pulling") that raises the integrated cost by at most ``tolerance``.
 
     From each anchor the farthest later vertex is taken whose straight segment stays on free cells and costs at
-    most ``(1 + tolerance)`` times the stretch of the current path it replaces. Segments are capped at
-    ``max_shortcut_m`` to keep the check cheap and the path close to the planned corridor.
+    most ``(1 + tolerance)`` times the stretch of the current path it replaces (2 % more with the default).
+    Segments are capped at ``max_shortcut_m`` to keep the check cheap and the path close to the planned corridor.
     """
     xy = np.asarray(xy, dtype=float).reshape(-1, 2)
     if len(xy) <= 2:

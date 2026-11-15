@@ -142,7 +142,8 @@ runs diagonally. The Go2 keeps the plain cost (weight 0).
 ## Results (2026-11-01, RTX 5080)
 
 **Custom quadruped, Isaac Sim PhysX, dressed site seed 0**, robots starting on the landing pad, 32 at once (small
-spawn jitter), no second tries:
+spawn jitter). A robot that falls respawns where it fell, up to `--retries` times (default 2), but no robot here
+fell before reaching the person:
 
 | Map and pins | Route | Robots reached | Time | Planned / walked | Falls |
 |---|---|---|---|---|---|
@@ -185,9 +186,10 @@ reads that same collision mesh.
 
 * *slope*: a least-squares plane over a disk of `footprint_radius_m` around the cell, in degrees;
 * *roughness*: the RMS residual of that plane fit;
-* *step*: the largest height jump to a cell within `step_radius_m` (0.25 m) after removing the local slope. The
-  local slope is the *minmod* of the one-sided differences, so a smooth incline has no step while the flat side of
-  a ledge sees the full ledge height.
+* *step*: the largest height jump to a cell of a square window around it, after removing the local slope. The
+  window reaches `step_radius_m` (0.25 m) along each axis, rounded to whole cells and at least one cell: on the
+  finale's 0.25 m maps it is the 8 neighbours. The local slope is the *minmod* of the one-sided differences, so a
+  smooth incline has no step while the flat side of a ledge sees the full ledge height.
 
 A cell is no-go when the slope, the step or the roughness exceeds the robot's limit, when nothing is known there
 (never seen by the drone), when it lies inside a known object footprint (circles per class, or the exact outline
@@ -205,10 +207,10 @@ their cross-slope cost in the move's direction), with an octile heuristic scaled
 so the path is optimal on the grid; tests check it against Dijkstra, with and without direction costs). Diagonal
 moves may not cut the corner of a no-go cell. The start snaps to the nearest free cell; the goal (a person, whose own
 cells are no-go) snaps to the nearest free cell *reachable from the start*, so the robot stops next to the person.
-The grid path is then shortcut by line of sight (never through a no-go cell, never more expensive than the stretch
-it replaces, by the same direction-dependent cost), its corners are rounded where that stays safe, and it is resampled
-every 0.1 m. Without `--goal` / `--goal_pin` the script tries the people 15-25 m from the start first, lying ones
-first, nearest to 20 m first, and takes the first one it can reach.
+The grid path is then shortcut by line of sight (never through a no-go cell, and at most 2 % more expensive than the
+stretch it replaces, by the same direction-dependent cost), its corners are rounded where that stays safe, and it is
+resampled every 0.1 m. Without `--goal` / `--goal_pin` the script tries the people 15-25 m from the start first,
+lying ones first, nearest to 20 m first, and takes the first one it can reach.
 
 **Tour** (`tour.py`, `--tour [N]`). One route from the start past the N reachable people nearest to it in a straight
 line (all of them without N, or with 0); a person is reachable when the robot can get within `--max_goal_snap`
@@ -232,9 +234,10 @@ length, cost), and `plots.plot_tour` draws it.
 **Follower** (`follower.py`). Pure pursuit: the closest point on the route is searched only around the previous
 progress (so a route that folds back is never skipped), the target is 0.8 m further along, and the robot steers on
 the arc through it (`kappa = 2 sin(alpha) / L`). Speed drops on tight arcs, when the target is off to the side and
-over the last metre; above 1 rad of heading error the robot turns on the spot. A small sideways velocity pulls it
-back onto the route. Every command is clipped to the policy's training ranges (`vx, vy, yaw rate` in [-1, 1]); the
-minimum driving speed is 0.3 m/s because the policies stand still for much smaller commands.
+over the last 1.2 m before the goal (a linear ramp). Above 1 rad of heading error the robot turns on the spot, and
+it drives on once the error is down to 0.5 rad, so it does not switch back and forth around 1 rad. A small sideways
+velocity pulls it back onto the route. Every command is clipped to the policy's training ranges (`vx, vy, yaw rate`
+in [-1, 1]); the minimum driving speed is 0.3 m/s because the policies stand still for much smaller commands.
 
 **Tasks** (`drone_lab/tasks/rescue/`). `apply_rescue_task` (robot-agnostic) turns a velocity-tracking config into the
 rescue task: the survey terrain (`SURVEY_TERRAIN_CFG`, same seed: the same mesh the drone mapped), optionally dressed
@@ -247,7 +250,7 @@ height scan) are those of the training task, so the checkpoints drive the robots
 * `DroneLab-Rescue-CustomQuad-v0`: `quadruped_lab`'s `CustomQuadRoughEnvCfg` (same robot, actuators, actions,
   observations, command ranges, falls = trunk or thigh contact as in training) on the dressed site of seed 0
   (`env.scene.sar_site.spawn.seed=<n>`). Isaac Sim PhysX only, with the two execution settings under which the
-  converted 2.x checkpoint walks as it did in Isaac Lab 2.3.2 (`quadruped_lab/PORT_NOTES.md`, section 14.2):
+  converted 2.x checkpoint walks as it did in Isaac Lab 2.3.2 (`quadruped/PORT_NOTES.md`, section 5):
   `sim.use_newton_actuators = False` and `enable_external_forces_every_iteration = False`. The robot respawns
   0.719 m above the ground, its training reset height.
 * `DroneLab-Rescue-Go2-v0`: Isaac Lab's `Isaac-Velocity-Rough-UnitreeGo2` on Newton by default (its checkpoint flips

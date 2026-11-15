@@ -9,12 +9,12 @@ f = 480 px) is h = 7.4 m above the flat ground: its footprint is W h / f = 9.9 m
 along track, 1.54 cm per pixel.
 
 * **Line spacing 5 m** (8 lines over 40 m): neighbouring camera swaths overlap by 4.9 m (49 %) over flat ground,
-  and over the highest hilltop (camera 4.0 m above it) the swath is still 5.3 m wide, so the photo map has no
+  and over the highest hilltop (camera 3.9 m above it) the swath is still 5.2 m wide, so the photo map has no
   gaps. The 5 m wide ray grid of the mapping scanner tiles the area exactly (the outer rays of neighbouring lines
   meet), and every ray row lies on the 0.25 m map lattice.
 * **Speed 1.5 m/s** for the carrot; the policy flies about 1.25 m/s. At 10 frames/s consecutive frames are 0.13 m
   apart (98 % forward overlap), so every point stays in view for about 6 s per pass.
-* **Length** 8 x 40 m of lines + 7 half-circle turns (r = 2.5 m) = 375 m, plus about 55 m of take-off, transit,
+* **Length** 8 x 40 m of lines + 7 half-circle turns (r = 2.5 m) = 375 m, plus about 53 m of take-off, transit,
   return and landing: about 6 minutes of flight.
 """
 

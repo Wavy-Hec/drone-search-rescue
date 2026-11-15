@@ -10,15 +10,15 @@ Why (the math, for the default survey of ``DroneLab-Survey-ARL-Robot-1-v0``):
   plus its U-turn band is z_max = 3.515 m and the default clearance is 4 m, so z_flight = 7.515 m. Most of the site
   (block-cluster ground, border, landing pad) is at z = 0, so the camera (0.1 m below the body) is h = 7.4 m above
   the ground there. The extremes inside the area are the pit floor (z = -1.43 m, h = 8.85 m) and the top of the
-  highest hill (z = 3.41 m, h = 4.0 m).
+  highest hill, the z_max point (z = 3.515 m, h = 3.9 m).
 * Ground sample distance GSD = h / f: 7.4 / 480 = 1.54 cm/px over flat ground, 1.84 cm/px over the pit floor.
 * A lying adult of the asset set is 1.61-1.80 m long with shoulders about 0.40-0.45 m wide (the T-pose arms span
   1.56-1.87 m). At h = 7.4 m: length 104-117 px, shoulder width 26-29 px. Worst case (pit floor, h = 8.85 m):
   length 87-98 px, shoulders 22-24 px. So the narrowest part of a lying person is >= 20 px everywhere in the default
   site; even the front-to-back depth of the thinnest character (0.35 m) is 22.7 px over flat ground.
 * Footprint = (W, H) * h / f: 9.9 m (across track, image width) x 7.4 m (along track) at h = 7.4 m, and
-  5.3 m x 4.0 m at the minimum height of 4.0 m. The lawnmower lines are 4 m apart, so the camera swaths overlap
-  (by >= 1.3 m even over the highest hill) and every point is seen from at least two lines over flat ground.
+  5.2 m x 3.9 m at the minimum height of 3.9 m. The lawnmower lines are 4 m apart, so the camera swaths overlap
+  (by >= 1.2 m even over the highest hill) and every point is seen from at least two lines over flat ground.
 * f = 400 px (77 deg) would widen the swath to 11.8 m but give 18.6 px for the thinnest character at h = 7.4 m;
   f = 480 px keeps every person comfortably above 20 px while still covering the area without gaps.
 

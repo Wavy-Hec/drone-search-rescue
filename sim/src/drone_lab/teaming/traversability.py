@@ -8,7 +8,8 @@ IROS 2016):
 * **slope** -- inclination of a least-squares plane fitted to the cells within ``footprint_radius_m`` (about the
   size of the robot body). Reported in degrees.
 * **roughness** -- RMS residual of that plane fit [m]: bumps the plane cannot explain.
-* **step** -- the largest height jump to a cell within ``step_radius_m`` once the local slope is taken out [m].
+* **step** -- the largest height jump to a cell up to ``step_radius_m`` away along each axis (a square window)
+  once the local slope is taken out [m].
   The local slope is the *minmod* of the one-sided differences (the smaller one when both have the same sign,
   zero otherwise), so on a smooth incline the step is ~0, while at the edge of a ledge the flat side's zero
   difference wins and the full ledge height is reported.
@@ -77,7 +78,7 @@ class TraversabilityCfg:
     """Radius of the plane-fit window for slope and roughness [m] (about half the body length)."""
 
     step_radius_m: float = 0.25
-    """Radius of the step window [m] (at least one cell)."""
+    """Half-size of the square step window [m] (rounded to whole cells, at least one)."""
 
     robot_radius_m: float = 0.35
     """Clearance the robot centre needs from anything lethal [m]; lethal cells are inflated by it."""
@@ -377,7 +378,7 @@ def plane_fit_gradient(
 
 
 def step_height(z: np.ndarray, resolution: float, radius_m: float) -> np.ndarray:
-    """Largest slope-corrected height jump from each cell to the cells within ``radius_m`` [m].
+    """Largest slope-corrected height jump from each cell to the cells up to ``radius_m`` away along each axis [m].
 
     ``step = max_j |z_j - z_i - g_i . (p_j - p_i)|`` over the square window of half-size
     ``max(1, round(radius_m / resolution))`` cells, where ``g_i`` is the minmod gradient at cell ``i``. A plane

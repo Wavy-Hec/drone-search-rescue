@@ -139,7 +139,7 @@ The survey flies at z = 3.515 m (highest terrain incl. U-turn band) + 4 m = 7.51
 above the flat ground (GSD = 7.4 / 480 = 1.54 cm/px) and 8.85 m above the pit floor (1.84 cm/px). A lying adult
 (1.61-1.80 m long, shoulders ~0.40-0.45 m) is 104-117 px long and 26-29 px wide over flat ground, and still
 22-24 px wide over the pit floor, so every lying person is >= 20 px across. The swath is 9.9 m wide over flat
-ground and 5.3 m at the lowest height (4 m above the highest hill), wider than the 4 m line spacing.
+ground and 5.2 m at the lowest height (3.9 m above the highest hill), wider than the 4 m line spacing.
 
 ## Asset cache
 

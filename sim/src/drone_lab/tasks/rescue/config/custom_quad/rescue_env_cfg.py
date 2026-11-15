@@ -7,7 +7,7 @@ decimation 4 x 5 ms. :func:`~drone_lab.tasks.rescue.rescue_env_cfg.apply_rescue_
 dressed as the SAR site (seed 0, the mission's demo site), the path-following command and deterministic events.
 
 Physics is Isaac Sim PhysX only, the backend of the drone mission, with the two execution settings under which the
-converted 2.x checkpoint walks as it did in Isaac Lab 2.3.2 (``quadruped_lab/PORT_NOTES.md``, section 14.2):
+converted 2.x checkpoint walks as it did in Isaac Lab 2.3.2 (``quadruped/PORT_NOTES.md``, section 5):
 
 * ``sim.use_newton_actuators = False``: the legacy actuator path feeds the DC-motor PD fresh joint positions;
 * ``enable_external_forces_every_iteration = False``: the 2.3.2 TGS setting.

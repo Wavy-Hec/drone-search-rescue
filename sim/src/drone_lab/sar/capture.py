@@ -177,7 +177,8 @@ def sample_views(
         yaw = float(rng.uniform(-math.pi, math.pi))
         if objs and rng.uniform() < object_fraction:
             target = objs[int(rng.choice(len(objs), p=weights))]
-            # where the target lands in the image: (u, v) in [-0.6, 0.6] of the half footprint, then into the world
+            # where the target lands in the image: (u, v) in [-0.6, 0.6] of the whole footprint (the image spans
+            # [-0.5, 0.5], so up to 10 % past its edges), then into the world
             gsd = h / spec.focal_px
             du = float(rng.uniform(-0.6, 0.6)) * spec.width * gsd
             dv = float(rng.uniform(-0.6, 0.6)) * spec.height * gsd

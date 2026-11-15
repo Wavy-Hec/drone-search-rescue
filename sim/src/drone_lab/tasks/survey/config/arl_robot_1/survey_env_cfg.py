@@ -7,7 +7,7 @@ and changes only what the mission needs:
 * Policy observations keep the same five terms, order, sizes and (absence of) scaling:
   ``base_link_position`` (3), ``base_orientation`` (4, quaternion x,y,z,w), ``base_lin_vel`` (3, body frame),
   ``base_ang_vel`` (3, body frame), ``last_action`` (4) -> 17 values. Only ``base_link_position`` changes: it is
-  the drone position relative to a moving carrot (clamped to +-1 m) instead of relative to the env origin, which
+  the drone position relative to a moving carrot (clamped to at most 1 m) instead of relative to the env origin, which
   was the training goal. Observation noise stays off (training also ran with ``enable_corruption=False``).
 * Actions (``ThrustActionCfg``: scale 3, offset 3, clip 0..6 per rotor) and the thruster model are unchanged.
 * Scene: a procedural 40 m x 40 m survey area (:data:`drone_lab.terrain.SURVEY_TERRAIN_CFG`) replaces the empty
