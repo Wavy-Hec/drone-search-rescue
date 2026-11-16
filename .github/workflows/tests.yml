@@ -51,3 +51,7 @@ jobs:
       - name: Quadruped tests (quadruped/)
         if: ${{ !cancelled() }}
         run: scripts/check.sh quadruped
+
+      - name: Indoor tests (indoor/)
+        if: ${{ !cancelled() }}
+        run: scripts/check.sh indoor

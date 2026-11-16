@@ -135,7 +135,7 @@ python gcs/scripts/gcs.py --detector blob --name first_look &
 python gcs/scripts/fake_drone.py --speedup 4
 ```
 
-**Tests.** The same checks as CI: ruff and the CPU test suites of the three projects (tests that need Isaac Lab,
+**Tests.** The same checks as CI: ruff and the CPU test suites of the four projects (tests that need Isaac Lab,
 PyTorch or Ultralytics skip without them):
 
 ```bash
@@ -202,14 +202,16 @@ gcs/          drone_gcs: the ground-control station. Link and wire protocol, liv
               dashboard, mission report, stand-in drone, dataset and training tools; link recording and replay,
               sensor noise, benchmark table, detector robustness and real-image scoring
 quadruped/    quadruped_lab: the custom quadruped's walking tasks, ported to Isaac Lab 3.0
+indoor/       indoor_sar: indoor search and rescue with SLAM, in progress. So far: frontier exploration on an
+              occupancy grid, and a 2-D stand-in to test it (no ROS 2 or Isaac Sim needed)
 scripts/      check.sh (lint and CPU tests), download_assets.sh, run_demo.sh (one mission, optionally the finale),
               run_benchmark.sh (the mission over many site and terrain seeds, then the benchmark table),
               make_gif.sh (the README GIFs from the mission videos)
 docs/media/   the GIFs of this README
 ```
 
-The three projects started as separate repositories; their histories are kept here commit by commit. Each has its
-own README with the details.
+`sim/`, `gcs/` and `quadruped/` started as separate repositories; their histories are kept here commit by commit.
+Each project has its own README with the details.
 
 ## Licensing
 
