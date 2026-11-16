@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Lint and CPU tests of the three projects: the same checks as CI (.github/workflows/tests.yml).
+# Lint and CPU tests of the four projects: the same checks as CI (.github/workflows/tests.yml).
 #
 #   python -m pip install -r .github/requirements-ci.txt   # Python 3.12
 #   scripts/check.sh                                       # every step
-#   scripts/check.sh lint gcs                              # selected steps: lint, sim, gcs, quadruped
+#   scripts/check.sh lint gcs                              # selected steps: lint, sim, gcs, quadruped, indoor
 #
 # Isaac Lab, PyTorch and Ultralytics are optional: the tests that need them skip when they cannot be imported,
 # and run in the full environments of the README.
@@ -32,13 +32,16 @@ run_quadruped() {
   return "$rc"
 }
 
+# indoor/ finds drone_lab (the A*) in ../sim/src by itself (indoor/tests/conftest.py).
+run_indoor() { (cd indoor && "$PYTHON" -m pytest -q -rs -p no:cacheprovider tests); }
+
 steps=("$@")
-((${#steps[@]})) || steps=(lint sim gcs quadruped)
+((${#steps[@]})) || steps=(lint sim gcs quadruped indoor)
 failed=()
 for step in "${steps[@]}"; do
   case $step in
-    lint | sim | gcs | quadruped) ;;
-    *) echo "unknown step '$step' (choose from: lint sim gcs quadruped)" >&2 && exit 2 ;;
+    lint | sim | gcs | quadruped | indoor) ;;
+    *) echo "unknown step '$step' (choose from: lint sim gcs quadruped indoor)" >&2 && exit 2 ;;
   esac
   printf '\n== %s\n' "$step"
   if "run_$step"; then
